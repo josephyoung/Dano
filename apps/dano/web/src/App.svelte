@@ -8,6 +8,7 @@
   } from "@dano/types/protocol";
   import { onMount } from "svelte";
   import ExtensionDialog from "./components/ExtensionDialog.svelte";
+  import MarkdownTablePrototype from "./components/MarkdownTablePrototype.svelte";
   import ReconnectBanner from "./components/ReconnectBanner.svelte";
   import ThemeSettingsDialog from "./components/ThemeSettingsDialog.svelte";
   import { hasActiveCenterFocusStage } from "./layout/centerFocusStage";
@@ -135,6 +136,10 @@
     (typeof window !== "undefined" &&
       window.__PI_WEB_CONFIG__?.debugModeAvailable === true) ||
     (import.meta.env.DEV && __PI_WEB_DEV_DEBUG__);
+  const tablePrototypeActive =
+    import.meta.env.DEV &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("tablePrototype");
   const slashCommandsAndMentionsEnabled =
     getRuntimeSlashCommandsAndMentionsEnabled();
 
@@ -1289,7 +1294,10 @@
     />
 
     <div class="app-body">
-      <AppMainContent
+      {#if tablePrototypeActive}
+        <MarkdownTablePrototype />
+      {:else}
+        <AppMainContent
         bind:this={mainContentRef}
         {compatWarningVisible}
         statusEntries={bridge.statusEntries}
@@ -1343,7 +1351,8 @@
         onOpenFileReference={handleOpenFileReference}
         readWorkspaceFile={readDisplayedWorkspaceFile}
         onFieldAssist={(payload) => bridge.fieldAssist(payload)}
-      />
+        />
+      {/if}
 
     </div>
   </div>
