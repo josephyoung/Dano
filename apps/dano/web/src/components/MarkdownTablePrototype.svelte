@@ -245,7 +245,7 @@
   }
 
   .variant-b thead th {
-    background: color-mix(in srgb, var(--panel-2) 64%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   }
 
   .variant-c table {
