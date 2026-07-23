@@ -104,8 +104,8 @@ prototypeStyles.textContent = `
   }
 
   body[data-confirmation-variant="A"] .confirmation-form .submitted-field-value {
-    border-color: color-mix(in srgb, var(--border) 65%, transparent);
-    background: color-mix(in srgb, var(--control-bg) 72%, var(--bg));
+    border-color: var(--border);
+    background: var(--panel-2);
     color: var(--text-muted);
   }
 
