@@ -107,6 +107,9 @@ PATH=/Users/joseph/.cache/codex-runtimes/codex-primary-runtime/dependencies/node
 - Run every `gh` command outside the sandbox with escalated permissions, using
   `/opt/homebrew/bin/gh` explicitly. Do not first retry `gh` through the sandbox
   or rely on the shell `PATH` to find it.
+- Before creating any Dano worktree, use the primary checkout to run
+  `git sync-upstream` and verify that `main`, `origin/main`, and `upstream/main`
+  point to the same commit.
 - Each time an issue is solved and verified, create a pull request to `upstream`.
 - After a pull request merges successfully, delete the remote PR branch by default.
 - Before updating the server deployment, switch to `main` and run `git sync-upstream`.
