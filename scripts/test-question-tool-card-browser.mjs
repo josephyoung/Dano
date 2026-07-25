@@ -94,7 +94,7 @@ async function visibleForegrounds(page) {
     token: getComputedStyle(document.documentElement)
       .getPropertyValue("--on-accent").trim(),
     primaryButtons: [...document.querySelectorAll(
-      ".question-actions .question-button:not(.secondary)",
+      "main > section .question-actions .question-button:not(.secondary)",
     )].map(button => getComputedStyle(button).color),
     submittedIcon: getComputedStyle(
       document.querySelector(".submitted-status-icon"),
@@ -124,6 +124,25 @@ async function accentSurfaceForegrounds(page) {
   });
 }
 
+async function inlineFormOverflowMetrics(page) {
+  return page.evaluate(() => {
+    const ancestor = document.querySelector(
+      '[data-testid="inline-form-overflow-ancestor"]',
+    );
+    const transcript = ancestor?.querySelector(".chat-transcript");
+    const scrollRegion = ancestor?.querySelector(".question-form-scroll-region");
+    if (!ancestor || !transcript || !scrollRegion) {
+      throw new Error("inline form overflow harness is missing");
+    }
+    return {
+      transcriptClientHeight: transcript.clientHeight,
+      transcriptScrollHeight: transcript.scrollHeight,
+      scrollRegionClientHeight: scrollRegion.clientHeight,
+      scrollRegionScrollHeight: scrollRegion.scrollHeight,
+    };
+  });
+}
+
 async function run() {
   const executablePath = findChromeExecutable();
   assert.ok(executablePath, "No system Chrome/Chromium found");
@@ -147,6 +166,14 @@ async function run() {
   assert.equal(desktop.viewportWidth, 641);
   assertActionMetrics(desktop, 36);
   assert.equal(desktop.submittedGridColumns.split(" ").length, 2);
+  const inlineOverflow = await inlineFormOverflowMetrics(page);
+  assert.ok(
+    inlineOverflow.scrollRegionScrollHeight > inlineOverflow.scrollRegionClientHeight,
+  );
+  assert.equal(
+    inlineOverflow.transcriptScrollHeight,
+    inlineOverflow.transcriptClientHeight,
+  );
 
   const gray = await visibleForegrounds(page);
   assert.equal(gray.token, "#ffffff");

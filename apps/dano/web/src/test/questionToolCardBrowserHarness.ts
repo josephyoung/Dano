@@ -1,4 +1,5 @@
 import { mount } from "svelte";
+import ChatTranscript from "../components/ChatTranscript.svelte";
 import QuestionToolCard from "../components/QuestionToolCard.svelte";
 import { ACCENT_COLOR_PRESETS, resolveAppThemeVars } from "../themes";
 import { PI_BASE46_LIGHT_THEME } from "../themes/light";
@@ -102,6 +103,36 @@ const confirmation: ToolContentBlock = {
   },
 };
 
+const longSubmittedFormQuestions = Array.from({ length: 12 }, (_, index) => ({
+  id: `field-${index + 1}`,
+  kind: "text" as const,
+  question: `字段 ${index + 1}`,
+  fieldAssist: false,
+}));
+const longSubmittedForm: ToolContentBlock = {
+  kind: "tool",
+  toolName: "ask_user_question",
+  toolCallId: "question-browser-long-submitted-form",
+  toolArgs: {},
+  argumentsText: "",
+  toolStatus: "success",
+  questionRequest: {
+    batch: true,
+    title: "长表单",
+    questions: longSubmittedFormQuestions,
+  },
+  resultDetails: {
+    status: "answered",
+    formId: "question-browser-long-submitted-form",
+    answer: Object.fromEntries(
+      longSubmittedFormQuestions.map((question, index) => [
+        question.id,
+        `回答 ${index + 1}`,
+      ]),
+    ),
+  },
+};
+
 const respond = async () => ({ success: true } as never);
 const app = document.getElementById("app")!;
 for (const block of [groupedForm, confirmation]) {
@@ -119,3 +150,38 @@ for (const block of [groupedForm, confirmation]) {
     },
   });
 }
+
+const transcriptOverflowHarness = document.createElement("div");
+transcriptOverflowHarness.dataset.testid = "inline-form-overflow-ancestor";
+transcriptOverflowHarness.style.height = "800px";
+transcriptOverflowHarness.style.display = "flex";
+transcriptOverflowHarness.style.flexDirection = "column";
+app.append(transcriptOverflowHarness);
+mount(ChatTranscript, {
+  target: transcriptOverflowHarness,
+  props: {
+    messages: [
+      { id: "overflow-user", role: "user", content: "填写长表单" },
+      {
+        id: "overflow-form",
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: longSubmittedForm.toolCallId,
+            name: "ask_user_question",
+            arguments: {},
+            questionRequest: longSubmittedForm.questionRequest,
+          },
+          {
+            type: "toolResult",
+            text: "submitted",
+            details: longSubmittedForm.resultDetails,
+            sourceMessageId: "overflow-form-result",
+          },
+        ],
+      },
+      { id: "overflow-final", role: "assistant", content: "表单已收到。" },
+    ] as never,
+  },
+});

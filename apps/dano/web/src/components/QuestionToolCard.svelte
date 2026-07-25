@@ -1298,6 +1298,7 @@
     max-height: 420px;
     overflow-y: auto;
     scrollbar-gutter: stable;
+    contain: paint;
   }
 
   .single-options {

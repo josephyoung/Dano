@@ -946,6 +946,7 @@ describe("QuestionToolCard", () => {
 
     expect(rule).toContain("max-height: 420px;");
     expect(rule).toContain("overflow-y: auto;");
+    expect(rule).toContain("contain: paint;");
     expect(rule).not.toContain("overscroll-behavior: contain;");
   });
 
