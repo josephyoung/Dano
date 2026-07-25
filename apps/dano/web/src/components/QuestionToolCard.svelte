@@ -330,6 +330,13 @@
     const toolCallId = focusedToolCallId;
     focusedToolCallId = "";
     onFocusChange?.({ toolCallId, element: null });
+    void tick().then(() => {
+      if (!componentAlive || focusActionable) return;
+      const scrollRegion = cardElement?.querySelector<HTMLElement>(
+        ".question-form-scroll-region",
+      );
+      if (scrollRegion) scrollRegion.scrollTop = 0;
+    });
   });
 
   onDestroy(() => {

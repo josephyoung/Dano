@@ -1,6 +1,7 @@
 /** @vitest-environment happy-dom */
 
 import { mount, tick, unmount } from "svelte";
+import { createClassComponent } from "svelte/legacy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolContentBlock } from "../utils/transcript";
 import QuestionToolCard from "./QuestionToolCard.svelte";
@@ -348,6 +349,64 @@ describe("QuestionToolCard", () => {
       expect(focusChange).toHaveBeenLastCalledWith({
         toolCallId: "grouped-form-1",
         element: card,
+      });
+    } finally {
+      unmount(component);
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets a submitted grouped form to the top before returning it inline", async () => {
+    vi.useFakeTimers();
+    const response = vi.fn(async () => ({ success: true } as never));
+    const focusChange = vi.fn();
+    const block = pendingGroupedFormBlock();
+    const target = document.createElement("div");
+    const component = createClassComponent({
+      component: QuestionToolCard,
+      target,
+      props: {
+        block,
+        active: true,
+        onPresent: response,
+        onRespond: response,
+        onRevise: response,
+        onSubmitRevision: response,
+        onFocusChange: focusChange,
+      },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(400);
+      await tick();
+      await tick();
+
+      const scrollRegion = target.querySelector<HTMLElement>(
+        ".question-form-scroll-region",
+      );
+      if (!scrollRegion) throw new Error("expected form scroll region");
+      scrollRegion.scrollTop = 180;
+
+      component.$set({
+        block: {
+          ...block,
+          toolStatus: "success",
+          resultDetails: {
+            status: "answered",
+            formId: "grouped-form-1",
+            answer: { destination: "上海", people: "8" },
+          },
+        },
+      });
+      await tick();
+      await tick();
+
+      expect(target.querySelector("article")?.classList).toContain(
+        "inline-readonly-card",
+      );
+      expect(scrollRegion.scrollTop).toBe(0);
+      expect(focusChange).toHaveBeenLastCalledWith({
+        toolCallId: "grouped-form-1",
+        element: null,
       });
     } finally {
       unmount(component);
