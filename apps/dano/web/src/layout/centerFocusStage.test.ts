@@ -146,7 +146,11 @@ describe("Center Focus Stage", () => {
 
     stage.show({ sessionKey: "session-a", toolCallId: "form-a", element: card });
     transcript.scrollTop = 720;
-    stage.hide("form-a");
+    expect(stage.hide("form-a")).toEqual({
+      sessionKey: "session-a",
+      toolCallId: "form-a",
+      element: card,
+    });
 
     expect(transcript.scrollTop).toBe(720);
     stage.destroy();
@@ -196,7 +200,7 @@ describe("Center Focus Stage", () => {
     stage.show({ sessionKey: "session-a", toolCallId: cards[0]!.id, element: cards[0]!.card });
     stage.show({ sessionKey: "session-a", toolCallId: cards[1]!.id, element: cards[1]!.card });
 
-    stage.hide("form-a");
+    expect(stage.hide("form-a")).toBeNull();
 
     expect(root.dataset.centerFocusActive).toBe("true");
     expect(cards[1]!.card.classList.contains("center-focused-card")).toBe(true);
@@ -274,6 +278,52 @@ describe("Center Focus Stage", () => {
 
     expect(startViewTransition).toHaveBeenCalledTimes(2);
     expect(root.dataset.centerFocusActive).toBeUndefined();
+    stage.destroy();
+  });
+
+  it("hands off only after an asynchronous View Transition restores the card inline", () => {
+    const root = document.createElement("main");
+    const transcript = document.createElement("div");
+    const anchor = document.createElement("div");
+    const card = document.createElement("article");
+    transcript.dataset.centerFocusTranscript = "";
+    anchor.className = "question-card-anchor";
+    anchor.append(card);
+    transcript.append(anchor);
+    root.append(transcript);
+    document.body.append(root);
+    vi.spyOn(window, "matchMedia").mockImplementation(() => ({
+      matches: false,
+    } as MediaQueryList));
+    let transitionCount = 0;
+    let applyHide: (() => void) | undefined;
+    Object.defineProperty(document, "startViewTransition", {
+      configurable: true,
+      value: vi.fn((update: () => void) => {
+        transitionCount += 1;
+        if (transitionCount === 1) update();
+        else applyHide = update;
+        return { finished: new Promise(() => {}) };
+      }),
+    });
+    const stage = createCenterFocusStage(root);
+    const restored = vi.fn();
+    const target = {
+      sessionKey: "session-a",
+      toolCallId: "form-a",
+      element: card,
+    };
+
+    stage.show(target);
+    stage.hide("form-a", restored);
+
+    expect(restored).not.toHaveBeenCalled();
+    expect(card.classList.contains("center-focused-card")).toBe(true);
+
+    applyHide?.();
+
+    expect(card.classList.contains("center-focused-card")).toBe(false);
+    expect(restored).toHaveBeenCalledExactlyOnceWith(target);
     stage.destroy();
   });
 

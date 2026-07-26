@@ -110,6 +110,7 @@
     onRevise = (_: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => {},
     onOpenFileReference = (_: { path: string; lineNumber: number }) => {},
     readWorkspaceFile,
+    presentQuestionAction = presentQuestion,
     onFieldAssist = undefined as
       | ((payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>)
       | undefined,
@@ -135,6 +136,7 @@
     onRevise?: (payload: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => void;
     onOpenFileReference?: (payload: { path: string; lineNumber: number }) => void;
     readWorkspaceFile?: (path: string) => Promise<{ content: string }>;
+    presentQuestionAction?: typeof presentQuestion;
     onFieldAssist?: (payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>;
     onQuestionFocusChange?: (target: QuestionFocusChange) => void;
   } = $props();
@@ -175,6 +177,7 @@
   const BOTTOM_LOCK_THRESHOLD = 24;
   const TOP_LOAD_THRESHOLD = 80;
   let shouldStickToBottom = $state(true);
+  let centerFocusPreservedScrollTop = $state<number | null>(null);
   let showTranscriptEndNotice = $state(false);
   let olderLoadRequestPending = $state(false);
   let topLoadArmed = $state(true);
@@ -1096,6 +1099,8 @@
 
   export function scrollTranscriptToBottom(options: { smooth?: boolean } = {}) {
     if (!container || scrollLocked) return;
+    centerFocusPreservedScrollTop = null;
+    shouldStickToBottom = true;
     container.scrollTo({
       top: container.scrollHeight,
       behavior: options.smooth ? "smooth" : "auto",
@@ -1104,16 +1109,42 @@
   }
 
   function scheduleStickToBottom() {
-    if (scrollLocked) return;
+    if (
+      scrollLocked ||
+      centerFocusPreservedScrollTop !== null ||
+      !shouldStickToBottom
+    ) return;
     if (stickToBottomFrame) cancelAnimationFrame(stickToBottomFrame);
     stickToBottomFrame = requestAnimationFrame(() => {
       stickToBottomFrame = 0;
+      if (centerFocusPreservedScrollTop !== null || !shouldStickToBottom) return;
       scrollTranscriptToBottom();
     });
   }
 
+  export function preserveCenterFocusReturnPosition(): boolean {
+    if (!container) return false;
+    if (stickToBottomFrame) {
+      cancelAnimationFrame(stickToBottomFrame);
+      stickToBottomFrame = 0;
+    }
+    centerFocusPreservedScrollTop ??= container.scrollTop;
+    shouldStickToBottom = false;
+    return true;
+  }
+
   function handleTranscriptScroll() {
     if (scrollLocked) return;
+    if (centerFocusPreservedScrollTop !== null) {
+      if (
+        container &&
+        Math.abs(container.scrollTop - centerFocusPreservedScrollTop) > 0.5
+      ) {
+        container.scrollTop = centerFocusPreservedScrollTop;
+      }
+      shouldStickToBottom = false;
+      return;
+    }
     updateBottomLock();
     if (container) {
       const nearTop = isNearTop(container);
@@ -1140,6 +1171,27 @@
     void requestOlderTranscript();
   }
 
+  function handleTranscriptUserScrollIntent(): void {
+    if (!container || centerFocusPreservedScrollTop === null) return;
+    centerFocusPreservedScrollTop = null;
+    updateBottomLock();
+  }
+
+  $effect(() => {
+    const el = container;
+    if (!el) return;
+    el.addEventListener("wheel", handleTranscriptUserScrollIntent, {
+      passive: true,
+    });
+    el.addEventListener("touchmove", handleTranscriptUserScrollIntent, {
+      passive: true,
+    });
+    return () => {
+      el.removeEventListener("wheel", handleTranscriptUserScrollIntent);
+      el.removeEventListener("touchmove", handleTranscriptUserScrollIntent);
+    };
+  });
+
   function shouldShowScrollToBottom(): boolean {
     return !initialLoading && messages.length > 0 && !shouldStickToBottom;
   }
@@ -1152,6 +1204,7 @@
       updateBottomLock();
       return false;
     }
+    centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     tick().then(() => {
       if (container !== el || !shouldStickToBottom) return;
@@ -1180,6 +1233,7 @@
     const target = transcriptEntryElement(entryId);
     if (!target) return expandProcessGroupForEntry(entryId);
 
+    centerFocusPreservedScrollTop = null;
     target.scrollIntoView({ block: "center" });
     updateBottomLock();
     return true;
@@ -1210,6 +1264,15 @@
       ) return;
       lastClientHeight = nextClientHeight;
       lastScrollHeight = nextScrollHeight;
+      if (centerFocusPreservedScrollTop !== null) {
+        shouldStickToBottom = false;
+        if (
+          Math.abs(transcriptEl.scrollTop - centerFocusPreservedScrollTop) > 0.5
+        ) {
+          transcriptEl.scrollTop = centerFocusPreservedScrollTop;
+        }
+        return;
+      }
       if (keepBottomLocked) scheduleStickToBottom();
       else updateBottomLock();
     }
@@ -1250,6 +1313,7 @@
     if (!el || lastSessionPath === path) return;
 
     lastSessionPath = path;
+    centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     topLoadArmed = true;
     showTranscriptEndNotice = false;
@@ -1271,7 +1335,12 @@
     void transcriptStreams;
     void pendingTranscriptConfigEvent;
     void showBusyIndicator;
-    if (!el || !shouldStickToBottom || scrollLocked) return;
+    if (
+      !el ||
+      !shouldStickToBottom ||
+      scrollLocked ||
+      centerFocusPreservedScrollTop !== null
+    ) return;
 
     tick().then(() => {
       if (container !== el || !shouldStickToBottom) return;
@@ -1508,7 +1577,7 @@
                 </div>
               {:else if block.kind === "tool"}
                 {#if askUserQuestionRequest(block) && !isAskUserQuestionToolError(block)}
-                  <QuestionToolCard {block} active={isStreaming && !initialLoading && shouldDeferMessageMarkdownErrors(item.message, item.messageIndex)} onPresent={presentQuestion} onRespond={answerQuestion} onRevise={reviseQuestion} onCancelRevision={cancelQuestionRevision} onSubmitRevision={submitQuestionRevision} onFocusChange={onQuestionFocusChange} {onFieldAssist} />
+                  <QuestionToolCard {block} active={isStreaming && !initialLoading && shouldDeferMessageMarkdownErrors(item.message, item.messageIndex)} onPresent={presentQuestionAction} onRespond={answerQuestion} onRevise={reviseQuestion} onCancelRevision={cancelQuestionRevision} onSubmitRevision={submitQuestionRevision} onFocusChange={onQuestionFocusChange} {onFieldAssist} />
                 {:else}
                   {#if projected.activity}
                     <ToolActivityRow
