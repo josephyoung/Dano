@@ -329,13 +329,21 @@
     if (!focusedToolCallId || focusActionable) return;
     const toolCallId = focusedToolCallId;
     focusedToolCallId = "";
-    onFocusChange?.({ toolCallId, element: null });
+    onFocusChange?.({
+      toolCallId,
+      element: null,
+      restoreInlinePosition: true,
+    });
   });
 
   onDestroy(() => {
     componentAlive = false;
     if (focusedToolCallId) {
-      onFocusChange?.({ toolCallId: focusedToolCallId, element: null });
+      onFocusChange?.({
+        toolCallId: focusedToolCallId,
+        element: null,
+        restoreInlinePosition: false,
+      });
     }
   });
 

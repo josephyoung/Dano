@@ -3,6 +3,7 @@
     RpcGitRepoState,
     RpcImageContent,
     RpcQueuedMessage,
+    RpcResponse,
     RpcSessionState,
     RpcSlashCommand,
     RpcThinkingLevel,
@@ -106,6 +107,9 @@
     onEditQueued = (_: number) => {},
     onOpenFileReference = (_: { path: string; lineNumber: number }) => {},
     readWorkspaceFile = (_: string) => Promise.reject(new Error("Workspace file reader unavailable")),
+    presentQuestionAction = undefined as
+      | ((toolCallId: string) => Promise<RpcResponse>)
+      | undefined,
     onFieldAssist = undefined as
       | ((payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>)
       | undefined,
@@ -182,6 +186,7 @@
     onEditQueued?: (index: number) => void;
     onOpenFileReference?: (payload: { path: string; lineNumber: number }) => void;
     readWorkspaceFile?: (path: string) => Promise<RpcWorkspaceFile>;
+    presentQuestionAction?: (toolCallId: string) => Promise<RpcResponse>;
     onFieldAssist?: (payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>;
   } = $props();
 
@@ -199,7 +204,14 @@
       active => centerFocusActive = active,
     );
     if (!target.element) {
-      centerFocusStage.hide(target.toolCallId);
+      centerFocusStage.hide(target.toolCallId, restored => {
+        if (
+          target.restoreInlinePosition &&
+          restored.sessionKey === (activeSessionPath ?? "")
+        ) {
+          transcriptRef?.preserveCenterFocusReturnPosition();
+        }
+      });
       return;
     }
     centerFocusStage.show({
@@ -245,6 +257,7 @@
     onRevise={onReviseMessage}
     onOpenFileReference={onOpenFileReference}
     {readWorkspaceFile}
+    {presentQuestionAction}
     {onFieldAssist}
     onQuestionFocusChange={handleQuestionFocusChange}
   />

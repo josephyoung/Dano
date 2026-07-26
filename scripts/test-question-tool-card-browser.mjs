@@ -143,6 +143,96 @@ async function inlineFormOverflowMetrics(page) {
   });
 }
 
+async function transcriptPositionMetrics(page) {
+  return page.evaluate(() => {
+    const transcript = document.querySelector(".chat-transcript");
+    const card = document.querySelector(".question-card");
+    if (!transcript || !card) {
+      throw new Error("center focus scroll harness is missing");
+    }
+    const transcriptRect = transcript.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    return {
+      scrollTop: transcript.scrollTop,
+      maxScrollTop: transcript.scrollHeight - transcript.clientHeight,
+      transcriptTop: transcriptRect.top,
+      transcriptBottom: transcriptRect.bottom,
+      cardTop: cardRect.top,
+      cardBottom: cardRect.bottom,
+    };
+  });
+}
+
+async function assertFocusReturnKeepsPosition(
+  browser,
+  origin,
+  {
+    terminalState = "answered",
+    viewport = { width: 1280, height: 720 },
+    resumeMode = "button",
+  } = {},
+) {
+  const page = await browser.newPage({
+    viewport,
+  });
+  try {
+    await page.goto(
+      `${origin}/center-focus-scroll-test.html?state=${terminalState}`,
+      {
+        waitUntil: "domcontentloaded",
+      },
+    );
+    await page.locator(".center-focused-card").waitFor();
+    await page.getByTestId("resolve-focus-card").click();
+    await page.locator(".center-focused-card").waitFor({ state: "detached" });
+    const restored = await transcriptPositionMetrics(page);
+    await page.locator(".chat-transcript").dispatchEvent("scroll");
+
+    await page.getByTestId("grow-final-response").click();
+    await page.getByText("用于验证居中卡片返回聊天流后长内容增长不会改变阅读位置的详细说明 28", {
+      exact: true,
+    }).waitFor();
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const grown = await transcriptPositionMetrics(page);
+
+    assert.ok(
+      Math.abs(grown.scrollTop - restored.scrollTop) <= 1,
+      `${terminalState}: expected scrollTop to stay at ${restored.scrollTop}, got ${grown.scrollTop}`,
+    );
+    assert.ok(grown.cardBottom > grown.transcriptTop);
+    assert.ok(grown.cardTop < grown.transcriptBottom);
+    assert.ok(grown.scrollTop < grown.maxScrollTop);
+
+    if (resumeMode === "manual") {
+      const transcript = page.locator(".chat-transcript");
+      await transcript.hover();
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await page.mouse.wheel(0, 1_000);
+        if (await transcript.evaluate(element =>
+          element.scrollHeight - element.clientHeight - element.scrollTop <= 1
+        )) break;
+      }
+    } else {
+      await page.getByRole("button", { name: "滚动到底部", exact: true }).click();
+    }
+    await page.waitForFunction(() => {
+      const transcript = document.querySelector(".chat-transcript");
+      return transcript &&
+        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 1;
+    });
+    await page.getByTestId("continue-final-response").click();
+    await page.getByText("回复继续增长。", { exact: true }).waitFor();
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const continued = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(continued.maxScrollTop - continued.scrollTop) <= 1,
+      `${terminalState}: expected explicit bottom navigation to resume automatic following`,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 async function run() {
   const executablePath = findChromeExecutable();
   assert.ok(executablePath, "No system Chrome/Chromium found");
@@ -156,6 +246,25 @@ async function run() {
   await waitForHttp(`${origin}/question-tool-card-test.html`, { services: [vite] });
 
   browser = await chromium.launch({ executablePath, headless: true });
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 390, height: 844 },
+  ]) {
+    for (const terminalState of [
+      "answered",
+      "cancelled",
+      "confirmed",
+      "interrupted",
+    ]) {
+      await assertFocusReturnKeepsPosition(browser, origin, {
+        terminalState,
+        viewport,
+        resumeMode: terminalState === "answered" && viewport.width === 1280
+          ? "manual"
+          : "button",
+      });
+    }
+  }
   const page = await browser.newPage({ viewport: { width: 641, height: 900 } });
   await page.goto(`${origin}/question-tool-card-test.html?accent=gray`, {
     waitUntil: "domcontentloaded",

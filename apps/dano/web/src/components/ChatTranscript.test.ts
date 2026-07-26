@@ -99,6 +99,122 @@ describe("ChatTranscript assistant pending indicator", () => {
   });
 });
 
+describe("ChatTranscript center focus scroll handoff", () => {
+  it("keeps the returned card position until the user explicitly resumes bottom following", async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    let scrollHeight = 600;
+    let nextFrameId = 1;
+    const frames = new Map<number, FrameRequestCallback>();
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+      disconnect() {}
+      observe() {}
+      unobserve() {}
+    } as typeof ResizeObserver;
+    globalThis.requestAnimationFrame = callback => {
+      const id = nextFrameId++;
+      frames.set(id, callback);
+      return id;
+    };
+    globalThis.cancelAnimationFrame = id => {
+      frames.delete(id);
+    };
+
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = createClassComponent({
+      component: ChatTranscript,
+      target,
+      props: {
+        sessionPath: "session-a",
+        messages: [
+          { id: "user-1", role: "user", content: "填写表单" },
+          { id: "assistant-1", role: "assistant", content: "表单已返回" },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const transcript = target.querySelector<HTMLElement>(".chat-transcript");
+      expect(transcript).not.toBeNull();
+      Object.defineProperties(transcript!, {
+        clientHeight: { configurable: true, get: () => 400 },
+        scrollHeight: { configurable: true, get: () => scrollHeight },
+      });
+      transcript!.scrollTop = 200;
+      transcript!.scrollTo = vi.fn(options => {
+        if (typeof options === "object") transcript!.scrollTop = options.top ?? 0;
+      });
+
+      scrollHeight = 620;
+      resizeCallback?.([], {} as ResizeObserver);
+
+      expect(component.preserveCenterFocusReturnPosition()).toBe(true);
+      expect(component.preserveCenterFocusReturnPosition()).toBe(true);
+      transcript!.scrollTop = 205;
+      transcript!.dispatchEvent(new Event("scroll"));
+      expect(transcript!.scrollTop).toBe(200);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(200);
+
+      scrollHeight = 1000;
+      resizeCallback?.([], {} as ResizeObserver);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(200);
+
+      component.scrollTranscriptToBottom();
+      expect(transcript!.scrollTop).toBe(1000);
+
+      scrollHeight = 1200;
+      resizeCallback?.([], {} as ResizeObserver);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(1200);
+
+      transcript!.scrollTop = 500;
+      expect(component.preserveCenterFocusReturnPosition()).toBe(true);
+      transcript!.dispatchEvent(new WheelEvent("wheel"));
+      transcript!.dispatchEvent(new Event("scroll"));
+      scrollHeight = 1400;
+      resizeCallback?.([], {} as ResizeObserver);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(500);
+
+      transcript!.scrollTop = 1000;
+      transcript!.dispatchEvent(new Event("scroll"));
+      scrollHeight = 1600;
+      resizeCallback?.([], {} as ResizeObserver);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(1600);
+
+      expect(component.preserveCenterFocusReturnPosition()).toBe(true);
+      component.$set({ sessionPath: "session-b" });
+      await tick();
+      scrollHeight = 1800;
+      resizeCallback?.([], {} as ResizeObserver);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(1800);
+    } finally {
+      component.$destroy();
+      target.remove();
+      globalThis.ResizeObserver = OriginalResizeObserver;
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+    }
+  });
+});
+
 describe("ChatTranscript Activity Trail", () => {
   it("shows a sanitized activity summary and controlled inline details", async () => {
     const target = document.createElement("div");

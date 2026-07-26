@@ -1288,6 +1288,7 @@ describe("QuestionToolCard", () => {
         expect(focusChange).toHaveBeenLastCalledWith({
           toolCallId: "confirm-two",
           element: null,
+          restoreInlinePosition: true,
         });
       } finally {
         unmount(component);
@@ -1295,6 +1296,45 @@ describe("QuestionToolCard", () => {
       }
     },
   );
+
+  it("marks focused-card teardown as cleanup instead of an inline return", async () => {
+    vi.useFakeTimers();
+    const success = vi.fn(async () => ({ success: true } as never));
+    const focusChange = vi.fn();
+    const target = document.createElement("div");
+    const component = mount(QuestionToolCard, {
+      target,
+      props: {
+        block: multiFormConfirmationBlock(),
+        active: true,
+        onPresent: success,
+        onRespond: success,
+        onRevise: success,
+        onSubmitRevision: success,
+        onFocusChange: focusChange,
+      },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(400);
+      await tick();
+      await tick();
+      expect(focusChange).toHaveBeenCalledWith({
+        toolCallId: "confirm-two",
+        element: target.querySelector("article"),
+      });
+
+      focusChange.mockClear();
+      unmount(component);
+
+      expect(focusChange).toHaveBeenCalledExactlyOnceWith({
+        toolCallId: "confirm-two",
+        element: null,
+        restoreInlinePosition: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("omits old Submitted Forms while their interaction is revising", async () => {
     const response = vi.fn(async () => ({ success: true } as never));

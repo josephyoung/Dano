@@ -110,6 +110,7 @@
     onRevise = (_: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => {},
     onOpenFileReference = (_: { path: string; lineNumber: number }) => {},
     readWorkspaceFile,
+    presentQuestionAction = presentQuestion,
     onFieldAssist = undefined as
       | ((payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>)
       | undefined,
@@ -135,6 +136,7 @@
     onRevise?: (payload: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => void;
     onOpenFileReference?: (payload: { path: string; lineNumber: number }) => void;
     readWorkspaceFile?: (path: string) => Promise<{ content: string }>;
+    presentQuestionAction?: typeof presentQuestion;
     onFieldAssist?: (payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>;
     onQuestionFocusChange?: (target: QuestionFocusChange) => void;
   } = $props();
@@ -173,8 +175,11 @@
   let container = $state<HTMLDivElement | null>(null);
 
   const BOTTOM_LOCK_THRESHOLD = 24;
+  const SCROLL_POSITION_TOLERANCE = 0.5;
   const TOP_LOAD_THRESHOLD = 80;
   let shouldStickToBottom = $state(true);
+  let centerFocusScrollSuppressed = $state(false);
+  let centerFocusPreservedScrollTop = $state<number | null>(null);
   let showTranscriptEndNotice = $state(false);
   let olderLoadRequestPending = $state(false);
   let topLoadArmed = $state(true);
@@ -1096,6 +1101,9 @@
 
   export function scrollTranscriptToBottom(options: { smooth?: boolean } = {}) {
     if (!container || scrollLocked) return;
+    centerFocusScrollSuppressed = false;
+    centerFocusPreservedScrollTop = null;
+    shouldStickToBottom = true;
     container.scrollTo({
       top: container.scrollHeight,
       behavior: options.smooth ? "smooth" : "auto",
@@ -1104,17 +1112,57 @@
   }
 
   function scheduleStickToBottom() {
-    if (scrollLocked) return;
+    if (
+      scrollLocked ||
+      centerFocusScrollSuppressed ||
+      !shouldStickToBottom
+    ) return;
     if (stickToBottomFrame) cancelAnimationFrame(stickToBottomFrame);
     stickToBottomFrame = requestAnimationFrame(() => {
       stickToBottomFrame = 0;
+      if (centerFocusScrollSuppressed || !shouldStickToBottom) return;
       scrollTranscriptToBottom();
     });
   }
 
+  export function preserveCenterFocusReturnPosition(): boolean {
+    if (!container) return false;
+    if (stickToBottomFrame) {
+      cancelAnimationFrame(stickToBottomFrame);
+      stickToBottomFrame = 0;
+    }
+    centerFocusScrollSuppressed = true;
+    centerFocusPreservedScrollTop ??= container.scrollTop;
+    shouldStickToBottom = false;
+    return true;
+  }
+
+  function restoreCenterFocusScrollPosition(el: HTMLElement): void {
+    if (
+      centerFocusPreservedScrollTop === null ||
+      Math.abs(el.scrollTop - centerFocusPreservedScrollTop) <=
+        SCROLL_POSITION_TOLERANCE
+    ) return;
+    el.scrollTop = centerFocusPreservedScrollTop;
+  }
+
   function handleTranscriptScroll() {
     if (scrollLocked) return;
-    updateBottomLock();
+    if (centerFocusScrollSuppressed) {
+      if (centerFocusPreservedScrollTop !== null) {
+        if (container) restoreCenterFocusScrollPosition(container);
+        shouldStickToBottom = false;
+        return;
+      }
+      if (container && isNearBottom(container)) {
+        centerFocusScrollSuppressed = false;
+        updateBottomLock();
+      } else {
+        shouldStickToBottom = false;
+      }
+    } else {
+      updateBottomLock();
+    }
     if (container) {
       const nearTop = isNearTop(container);
       const topLoadTriggered = nearTop && topLoadArmed;
@@ -1140,6 +1188,27 @@
     void requestOlderTranscript();
   }
 
+  function handleTranscriptUserScrollIntent(): void {
+    if (!container || !centerFocusScrollSuppressed) return;
+    centerFocusPreservedScrollTop = null;
+    shouldStickToBottom = false;
+  }
+
+  $effect(() => {
+    const el = container;
+    if (!el) return;
+    el.addEventListener("wheel", handleTranscriptUserScrollIntent, {
+      passive: true,
+    });
+    el.addEventListener("touchmove", handleTranscriptUserScrollIntent, {
+      passive: true,
+    });
+    return () => {
+      el.removeEventListener("wheel", handleTranscriptUserScrollIntent);
+      el.removeEventListener("touchmove", handleTranscriptUserScrollIntent);
+    };
+  });
+
   function shouldShowScrollToBottom(): boolean {
     return !initialLoading && messages.length > 0 && !shouldStickToBottom;
   }
@@ -1152,6 +1221,8 @@
       updateBottomLock();
       return false;
     }
+    centerFocusScrollSuppressed = false;
+    centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     tick().then(() => {
       if (container !== el || !shouldStickToBottom) return;
@@ -1180,6 +1251,9 @@
     const target = transcriptEntryElement(entryId);
     if (!target) return expandProcessGroupForEntry(entryId);
 
+    if (centerFocusScrollSuppressed) {
+      centerFocusPreservedScrollTop = null;
+    }
     target.scrollIntoView({ block: "center" });
     updateBottomLock();
     return true;
@@ -1210,6 +1284,13 @@
       ) return;
       lastClientHeight = nextClientHeight;
       lastScrollHeight = nextScrollHeight;
+      if (centerFocusScrollSuppressed) {
+        shouldStickToBottom = false;
+        if (centerFocusPreservedScrollTop !== null) {
+          restoreCenterFocusScrollPosition(transcriptEl);
+        }
+        return;
+      }
       if (keepBottomLocked) scheduleStickToBottom();
       else updateBottomLock();
     }
@@ -1250,6 +1331,8 @@
     if (!el || lastSessionPath === path) return;
 
     lastSessionPath = path;
+    centerFocusScrollSuppressed = false;
+    centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     topLoadArmed = true;
     showTranscriptEndNotice = false;
@@ -1271,7 +1354,12 @@
     void transcriptStreams;
     void pendingTranscriptConfigEvent;
     void showBusyIndicator;
-    if (!el || !shouldStickToBottom || scrollLocked) return;
+    if (
+      !el ||
+      !shouldStickToBottom ||
+      scrollLocked ||
+      centerFocusScrollSuppressed
+    ) return;
 
     tick().then(() => {
       if (container !== el || !shouldStickToBottom) return;
@@ -1508,7 +1596,7 @@
                 </div>
               {:else if block.kind === "tool"}
                 {#if askUserQuestionRequest(block) && !isAskUserQuestionToolError(block)}
-                  <QuestionToolCard {block} active={isStreaming && !initialLoading && shouldDeferMessageMarkdownErrors(item.message, item.messageIndex)} onPresent={presentQuestion} onRespond={answerQuestion} onRevise={reviseQuestion} onCancelRevision={cancelQuestionRevision} onSubmitRevision={submitQuestionRevision} onFocusChange={onQuestionFocusChange} {onFieldAssist} />
+                  <QuestionToolCard {block} active={isStreaming && !initialLoading && shouldDeferMessageMarkdownErrors(item.message, item.messageIndex)} onPresent={presentQuestionAction} onRespond={answerQuestion} onRevise={reviseQuestion} onCancelRevision={cancelQuestionRevision} onSubmitRevision={submitQuestionRevision} onFocusChange={onQuestionFocusChange} {onFieldAssist} />
                 {:else}
                   {#if projected.activity}
                     <ToolActivityRow
