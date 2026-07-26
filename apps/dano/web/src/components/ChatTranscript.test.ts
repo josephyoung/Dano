@@ -179,7 +179,7 @@ describe("ChatTranscript center focus scroll handoff", () => {
       frames.clear();
       expect(transcript!.scrollTop).toBe(1200);
 
-      transcript!.scrollTop = 800;
+      transcript!.scrollTop = 500;
       expect(component.preserveCenterFocusReturnPosition()).toBe(true);
       transcript!.dispatchEvent(new WheelEvent("wheel"));
       transcript!.dispatchEvent(new Event("scroll"));
@@ -187,16 +187,24 @@ describe("ChatTranscript center focus scroll handoff", () => {
       resizeCallback?.([], {} as ResizeObserver);
       for (const callback of [...frames.values()]) callback(0);
       frames.clear();
-      expect(transcript!.scrollTop).toBe(1400);
+      expect(transcript!.scrollTop).toBe(500);
 
-      expect(component.preserveCenterFocusReturnPosition()).toBe(true);
-      component.$set({ sessionPath: "session-b" });
-      await tick();
+      transcript!.scrollTop = 1000;
+      transcript!.dispatchEvent(new Event("scroll"));
       scrollHeight = 1600;
       resizeCallback?.([], {} as ResizeObserver);
       for (const callback of [...frames.values()]) callback(0);
       frames.clear();
       expect(transcript!.scrollTop).toBe(1600);
+
+      expect(component.preserveCenterFocusReturnPosition()).toBe(true);
+      component.$set({ sessionPath: "session-b" });
+      await tick();
+      scrollHeight = 1800;
+      resizeCallback?.([], {} as ResizeObserver);
+      for (const callback of [...frames.values()]) callback(0);
+      frames.clear();
+      expect(transcript!.scrollTop).toBe(1800);
     } finally {
       component.$destroy();
       target.remove();

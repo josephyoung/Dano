@@ -166,7 +166,11 @@ async function transcriptPositionMetrics(page) {
 async function assertFocusReturnKeepsPosition(
   browser,
   origin,
-  { terminalState = "answered", viewport = { width: 1280, height: 720 } } = {},
+  {
+    terminalState = "answered",
+    viewport = { width: 1280, height: 720 },
+    resumeMode = "button",
+  } = {},
 ) {
   const page = await browser.newPage({
     viewport,
@@ -199,7 +203,18 @@ async function assertFocusReturnKeepsPosition(
     assert.ok(grown.cardTop < grown.transcriptBottom);
     assert.ok(grown.scrollTop < grown.maxScrollTop);
 
-    await page.getByRole("button", { name: "滚动到底部", exact: true }).click();
+    if (resumeMode === "manual") {
+      const transcript = page.locator(".chat-transcript");
+      await transcript.hover();
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await page.mouse.wheel(0, 1_000);
+        if (await transcript.evaluate(element =>
+          element.scrollHeight - element.clientHeight - element.scrollTop <= 1
+        )) break;
+      }
+    } else {
+      await page.getByRole("button", { name: "滚动到底部", exact: true }).click();
+    }
     await page.waitForFunction(() => {
       const transcript = document.querySelector(".chat-transcript");
       return transcript &&
@@ -244,6 +259,9 @@ async function run() {
       await assertFocusReturnKeepsPosition(browser, origin, {
         terminalState,
         viewport,
+        resumeMode: terminalState === "answered" && viewport.width === 1280
+          ? "manual"
+          : "button",
       });
     }
   }

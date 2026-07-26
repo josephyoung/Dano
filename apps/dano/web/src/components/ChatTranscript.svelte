@@ -175,8 +175,10 @@
   let container = $state<HTMLDivElement | null>(null);
 
   const BOTTOM_LOCK_THRESHOLD = 24;
+  const SCROLL_POSITION_TOLERANCE = 0.5;
   const TOP_LOAD_THRESHOLD = 80;
   let shouldStickToBottom = $state(true);
+  let centerFocusScrollSuppressed = $state(false);
   let centerFocusPreservedScrollTop = $state<number | null>(null);
   let showTranscriptEndNotice = $state(false);
   let olderLoadRequestPending = $state(false);
@@ -1099,6 +1101,7 @@
 
   export function scrollTranscriptToBottom(options: { smooth?: boolean } = {}) {
     if (!container || scrollLocked) return;
+    centerFocusScrollSuppressed = false;
     centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     container.scrollTo({
@@ -1111,13 +1114,13 @@
   function scheduleStickToBottom() {
     if (
       scrollLocked ||
-      centerFocusPreservedScrollTop !== null ||
+      centerFocusScrollSuppressed ||
       !shouldStickToBottom
     ) return;
     if (stickToBottomFrame) cancelAnimationFrame(stickToBottomFrame);
     stickToBottomFrame = requestAnimationFrame(() => {
       stickToBottomFrame = 0;
-      if (centerFocusPreservedScrollTop !== null || !shouldStickToBottom) return;
+      if (centerFocusScrollSuppressed || !shouldStickToBottom) return;
       scrollTranscriptToBottom();
     });
   }
@@ -1128,24 +1131,38 @@
       cancelAnimationFrame(stickToBottomFrame);
       stickToBottomFrame = 0;
     }
+    centerFocusScrollSuppressed = true;
     centerFocusPreservedScrollTop ??= container.scrollTop;
     shouldStickToBottom = false;
     return true;
   }
 
+  function restoreCenterFocusScrollPosition(el: HTMLElement): void {
+    if (
+      centerFocusPreservedScrollTop === null ||
+      Math.abs(el.scrollTop - centerFocusPreservedScrollTop) <=
+        SCROLL_POSITION_TOLERANCE
+    ) return;
+    el.scrollTop = centerFocusPreservedScrollTop;
+  }
+
   function handleTranscriptScroll() {
     if (scrollLocked) return;
-    if (centerFocusPreservedScrollTop !== null) {
-      if (
-        container &&
-        Math.abs(container.scrollTop - centerFocusPreservedScrollTop) > 0.5
-      ) {
-        container.scrollTop = centerFocusPreservedScrollTop;
+    if (centerFocusScrollSuppressed) {
+      if (centerFocusPreservedScrollTop !== null) {
+        if (container) restoreCenterFocusScrollPosition(container);
+        shouldStickToBottom = false;
+        return;
       }
-      shouldStickToBottom = false;
-      return;
+      if (container && isNearBottom(container)) {
+        centerFocusScrollSuppressed = false;
+        updateBottomLock();
+      } else {
+        shouldStickToBottom = false;
+      }
+    } else {
+      updateBottomLock();
     }
-    updateBottomLock();
     if (container) {
       const nearTop = isNearTop(container);
       const topLoadTriggered = nearTop && topLoadArmed;
@@ -1172,9 +1189,9 @@
   }
 
   function handleTranscriptUserScrollIntent(): void {
-    if (!container || centerFocusPreservedScrollTop === null) return;
+    if (!container || !centerFocusScrollSuppressed) return;
     centerFocusPreservedScrollTop = null;
-    updateBottomLock();
+    shouldStickToBottom = false;
   }
 
   $effect(() => {
@@ -1204,6 +1221,7 @@
       updateBottomLock();
       return false;
     }
+    centerFocusScrollSuppressed = false;
     centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     tick().then(() => {
@@ -1233,7 +1251,9 @@
     const target = transcriptEntryElement(entryId);
     if (!target) return expandProcessGroupForEntry(entryId);
 
-    centerFocusPreservedScrollTop = null;
+    if (centerFocusScrollSuppressed) {
+      centerFocusPreservedScrollTop = null;
+    }
     target.scrollIntoView({ block: "center" });
     updateBottomLock();
     return true;
@@ -1264,12 +1284,10 @@
       ) return;
       lastClientHeight = nextClientHeight;
       lastScrollHeight = nextScrollHeight;
-      if (centerFocusPreservedScrollTop !== null) {
+      if (centerFocusScrollSuppressed) {
         shouldStickToBottom = false;
-        if (
-          Math.abs(transcriptEl.scrollTop - centerFocusPreservedScrollTop) > 0.5
-        ) {
-          transcriptEl.scrollTop = centerFocusPreservedScrollTop;
+        if (centerFocusPreservedScrollTop !== null) {
+          restoreCenterFocusScrollPosition(transcriptEl);
         }
         return;
       }
@@ -1313,6 +1331,7 @@
     if (!el || lastSessionPath === path) return;
 
     lastSessionPath = path;
+    centerFocusScrollSuppressed = false;
     centerFocusPreservedScrollTop = null;
     shouldStickToBottom = true;
     topLoadArmed = true;
@@ -1339,7 +1358,7 @@
       !el ||
       !shouldStickToBottom ||
       scrollLocked ||
-      centerFocusPreservedScrollTop !== null
+      centerFocusScrollSuppressed
     ) return;
 
     tick().then(() => {

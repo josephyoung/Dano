@@ -143,10 +143,12 @@ describe("Center Focus Stage", () => {
       matches: query === "(prefers-reduced-motion: reduce)",
     } as MediaQueryList));
     const stage = createCenterFocusStage(root);
+    const restored = vi.fn();
 
     stage.show({ sessionKey: "session-a", toolCallId: "form-a", element: card });
     transcript.scrollTop = 720;
-    expect(stage.hide("form-a")).toEqual({
+    stage.hide("form-a", restored);
+    expect(restored).toHaveBeenCalledExactlyOnceWith({
       sessionKey: "session-a",
       toolCallId: "form-a",
       element: card,
@@ -197,11 +199,13 @@ describe("Center Focus Stage", () => {
       return { id, card };
     });
     const stage = createCenterFocusStage(root);
+    const restored = vi.fn();
     stage.show({ sessionKey: "session-a", toolCallId: cards[0]!.id, element: cards[0]!.card });
     stage.show({ sessionKey: "session-a", toolCallId: cards[1]!.id, element: cards[1]!.card });
 
-    expect(stage.hide("form-a")).toBeNull();
+    stage.hide("form-a", restored);
 
+    expect(restored).not.toHaveBeenCalled();
     expect(root.dataset.centerFocusActive).toBe("true");
     expect(cards[1]!.card.classList.contains("center-focused-card")).toBe(true);
     stage.destroy();
