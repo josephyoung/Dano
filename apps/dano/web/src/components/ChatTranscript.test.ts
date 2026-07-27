@@ -58,6 +58,436 @@ function assistantToolCall(
   };
 }
 
+describe("ChatTranscript completed Assistant Turn actions", () => {
+  it("shows one copy and Chinese timestamp container below a completed direct answer", async () => {
+    const completedAt = new Date(2026, 6, 27, 14, 32).toISOString();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "请分析配置更新问题",
+            timestamp: "2026-07-27T14:31:00+08:00",
+          },
+          {
+            id: "assistant-final",
+            role: "assistant",
+            content: "配置只在启动时读取。",
+            timestamp: completedAt,
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const actions = target.querySelectorAll(".assistant-turn-actions");
+      expect(actions).toHaveLength(1);
+      expect(actions[0]?.textContent).toContain("7月27日 14:32");
+      expect(
+        actions[0]?.querySelector('button[aria-label="复制消息"]'),
+      ).not.toBeNull();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("includes the year for a completed answer outside the current year", async () => {
+    const previousYear = new Date().getFullYear() - 1;
+    const completedAt = new Date(previousYear, 6, 27, 14, 32).toISOString();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-1", role: "user", content: "历史问题" },
+          {
+            id: "assistant-final",
+            role: "assistant",
+            content: "历史回答",
+            timestamp: completedAt,
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector(".assistant-turn-actions time")?.textContent)
+        .toBe(`${previousYear}年7月27日 14:32`);
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("formats the timestamp with the configured Dano interface locale", async () => {
+    const completedAt = new Date(new Date().getFullYear(), 6, 27, 14, 32);
+    const originalConfig = window.__PI_WEB_CONFIG__;
+    window.__PI_WEB_CONFIG__ = { ...originalConfig, locale: "en-US" };
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-1", role: "user", content: "Historical question" },
+          {
+            id: "assistant-final",
+            role: "assistant",
+            content: "Historical answer",
+            timestamp: completedAt.toISOString(),
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const expected = new Intl.DateTimeFormat("en-US", {
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).format(completedAt);
+      expect(target.querySelector(".assistant-turn-actions time")?.textContent)
+        .toBe(expected);
+    } finally {
+      await unmount(component);
+      target.remove();
+      window.__PI_WEB_CONFIG__ = originalConfig;
+    }
+  });
+
+  it("shows actions when a paginated transcript starts inside a completed turn", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "assistant-progress", role: "assistant", content: "我先检查。" },
+          assistantToolCall("read-1", "read", {}, { text: "done" }),
+          {
+            id: "assistant-final",
+            role: "assistant",
+            content: "检查完成。",
+            timestamp: "2026-07-27T14:32:00+08:00",
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelectorAll(".assistant-turn-actions")).toHaveLength(1);
+      expect(
+        target.querySelector('[data-message-id="assistant-final"] .assistant-turn-actions'),
+      ).not.toBeNull();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("copies only the final answer Markdown from a completed tool-using turn", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-1", role: "user", content: "检查配置" },
+          {
+            id: "assistant-final",
+            role: "assistant",
+            timestamp: "2026-07-27T14:32:00+08:00",
+            content: [
+              { type: "thinking", thinking: "读取内部配置" },
+              { type: "text", text: "我先检查。" },
+              { type: "toolCall", id: "read-1", name: "read", arguments: {} },
+              { type: "toolResult", text: "SECRET=value", sourceMessageId: "result-1" },
+              { type: "text", text: "## 结论\n\n配置只在启动时读取。" },
+            ],
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>(
+        ".assistant-turn-actions button",
+      )?.click();
+      await tick();
+      expect(writeText).toHaveBeenCalledWith(
+        "## 结论\n\n配置只在启动时读取。",
+      );
+      await vi.waitFor(() => {
+        expect(
+          target.querySelector(".assistant-turn-actions")?.classList.contains("copied"),
+        ).toBe(true);
+      });
+    } finally {
+      await unmount(component);
+      target.remove();
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("does not show actions while the final answer is still streaming", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        isStreaming: true,
+        messages: [
+          { id: "user-1", role: "user", content: "继续" },
+          {
+            id: "assistant-streaming",
+            role: "assistant",
+            content: "尚未完成",
+            timestamp: "2026-07-27T14:32:00+08:00",
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector(".assistant-turn-actions")).toBeNull();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("does not expose an earlier partial answer after the turn is aborted", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-1", role: "user", content: "继续" },
+          { id: "assistant-partial", role: "assistant", content: "部分回答" },
+          {
+            id: "assistant-aborted",
+            role: "assistant",
+            content: [],
+            stopReason: "aborted",
+            timestamp: "2026-07-27T14:32:00+08:00",
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector(".assistant-turn-actions")).toBeNull();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("does not show actions for length-truncated or tool-use continuation messages", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-length", role: "user", content: "详细回答" },
+          {
+            id: "assistant-length",
+            role: "assistant",
+            content: "尚未输出完整的回答",
+            stopReason: "length",
+          },
+          { id: "user-tool", role: "user", content: "检查后回答" },
+          {
+            id: "assistant-tool-use",
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "read-1", name: "read", arguments: {} },
+              { type: "toolResult", text: "done", sourceMessageId: "result-1" },
+              { type: "text", text: "仍需继续处理。" },
+            ],
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector(".assistant-turn-actions")).toBeNull();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("keeps copy available when the completed answer timestamp is missing or invalid", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-1", role: "user", content: "第一问" },
+          { id: "assistant-1", role: "assistant", content: "第一答" },
+          { id: "user-2", role: "user", content: "第二问" },
+          {
+            id: "assistant-2",
+            role: "assistant",
+            content: "第二答",
+            timestamp: "not-a-timestamp",
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const actions = target.querySelectorAll(".assistant-turn-actions");
+      expect(actions).toHaveLength(2);
+      expect(target.querySelectorAll(".assistant-turn-actions button")).toHaveLength(2);
+      expect(target.querySelector(".assistant-turn-actions time")).toBeNull();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("clears copied feedback when the displayed session changes", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const messages = [
+      { id: "user-1", role: "user", content: "问题" },
+      { id: "assistant-1", role: "assistant", content: "回答" },
+    ] as never;
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = createClassComponent({
+      component: ChatTranscript,
+      target,
+      props: { sessionPath: "session-1", messages },
+    });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>(
+        ".assistant-turn-actions button",
+      )?.click();
+      await vi.waitFor(() => {
+        expect(target.querySelector(".assistant-turn-actions.copied")).not.toBeNull();
+      });
+
+      component.$set({ sessionPath: "session-2", messages });
+      await tick();
+      expect(target.querySelector(".assistant-turn-actions.copied")).toBeNull();
+    } finally {
+      component.$destroy();
+      target.remove();
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("attaches one action container only to the last textual answer in a multi-message turn", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          { id: "user-1", role: "user", content: "检查后回答" },
+          { id: "assistant-progress", role: "assistant", content: "我先检查。" },
+          assistantToolCall("read-1", "read", {}, { text: "done" }),
+          {
+            id: "assistant-final",
+            role: "assistant",
+            content: "检查完成。",
+            timestamp: "2026-07-27T14:32:00+08:00",
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelectorAll(".assistant-turn-actions")).toHaveLength(1);
+      expect(
+        target.querySelector('[data-message-id="assistant-final"] .assistant-turn-actions'),
+      ).not.toBeNull();
+      expect(
+        target.querySelector('[data-message-id="assistant-progress"] .assistant-turn-actions'),
+      ).toBeNull();
+
+      target.querySelector<HTMLButtonElement>(".process-summary-toggle")?.click();
+      await tick();
+      const progressRow = target.querySelector<HTMLElement>(
+        '[data-message-id="assistant-progress"]',
+      );
+      expect(progressRow).not.toBeNull();
+      progressRow?.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      await tick();
+      expect(
+        target.querySelector(".assistant-turn-actions")?.classList.contains("interaction-active"),
+      ).toBe(true);
+
+      progressRow?.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+      await tick();
+      expect(
+        target.querySelector(".assistant-turn-actions")?.classList.contains("interaction-active"),
+      ).toBe(false);
+
+      const copyButton = target.querySelector<HTMLButtonElement>(
+        ".assistant-turn-actions button",
+      );
+      copyButton?.focus();
+      await tick();
+      expect(
+        target.querySelector(".assistant-turn-actions")?.classList.contains("interaction-active"),
+      ).toBe(true);
+
+      copyButton?.blur();
+      await tick();
+      expect(
+        target.querySelector(".assistant-turn-actions")?.classList.contains("interaction-active"),
+      ).toBe(false);
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+});
+
 describe("ChatTranscript assistant pending indicator", () => {
   it("marks post-tool waiting for delayed presentation", async () => {
     const target = document.createElement("div");

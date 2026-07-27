@@ -171,6 +171,13 @@ export interface TranscriptProcessGroup {
   durationMs?: number;
 }
 
+/** Browser presentation grouping; it is not an authoritative Assistant Turn lifecycle. */
+export interface TranscriptFinalAnswerActionGroup {
+  startItemIndex: number;
+  endItemIndex: number;
+  finalAnswerItemIndex: number;
+}
+
 interface TranscriptToolResultBlockWithSource extends RpcTranscriptToolResultBlock {
   sourceMessageId?: string;
 }
@@ -185,6 +192,10 @@ type TranscriptImageBlock =
 export function isErrorMessage(msg: TranscriptEntryLike): boolean {
   if (msg.role !== "assistant") return false;
   return msg.stopReason === "error" || msg.stopReason === "aborted";
+}
+
+function isIncompleteAssistantMessage(msg: TranscriptEntryLike): boolean {
+  return msg.stopReason === "length" || msg.stopReason === "toolUse";
 }
 
 export function errorMessageText(msg: TranscriptEntryLike): string {
@@ -632,6 +643,76 @@ export function buildTranscriptProcessGroups(
       options,
     );
     if (group) groups.push(group);
+  }
+
+  return groups;
+}
+
+export function transcriptFinalAnswerText(
+  blocks: readonly ContentBlock[],
+): string | null {
+  let answerStartIndex = 0;
+  blocks.forEach((block, blockIndex) => {
+    if (block.kind === "thinking" || block.kind === "tool") {
+      answerStartIndex = blockIndex + 1;
+    }
+  });
+  const text = blocks
+    .slice(answerStartIndex)
+    .filter((block): block is TextContentBlock => block.kind === "text")
+    .map(block => block.text)
+    .filter(block => block.trim())
+    .join("\n");
+  return text || null;
+}
+
+export function buildTranscriptFinalAnswerActionGroups(
+  items: readonly TranscriptDisplayItem[],
+  options: {
+    blocksForMessage?: (
+      message: TranscriptEntryLike,
+      messageIndex: number,
+    ) => readonly ContentBlock[];
+    isMessageActive?: (
+      message: TranscriptEntryLike,
+      messageIndex: number,
+    ) => boolean;
+  } = {},
+): TranscriptFinalAnswerActionGroup[] {
+  const blocksForMessage = options.blocksForMessage ?? contentBlocks;
+  const groups: TranscriptFinalAnswerActionGroup[] = [];
+  let index = 0;
+
+  while (index < items.length) {
+    const startItemIndex = index;
+    const startsWithUser = items[startItemIndex]?.kind === "message" &&
+      items[startItemIndex].message.role === "user";
+    if (startsWithUser) index += 1;
+    while (index < items.length) {
+      const nextItem = items[index];
+      if (nextItem?.kind === "message" && nextItem.message.role === "user") break;
+      index += 1;
+    }
+
+    const endItemIndex = index - 1;
+    let finalAnswerItemIndex = -1;
+    let active = false;
+    const firstCandidateIndex = startsWithUser ? startItemIndex + 1 : startItemIndex;
+    for (let candidateIndex = firstCandidateIndex; candidateIndex <= endItemIndex; candidateIndex++) {
+      const candidate = items[candidateIndex];
+      if (candidate?.kind !== "message") continue;
+      if (options.isMessageActive?.(candidate.message, candidate.messageIndex)) active = true;
+      if (candidate.message.role !== "assistant") continue;
+      finalAnswerItemIndex = !isErrorMessage(candidate.message) &&
+          !isIncompleteAssistantMessage(candidate.message) &&
+          transcriptFinalAnswerText(blocksForMessage(candidate.message, candidate.messageIndex))
+        ? candidateIndex
+        : -1;
+    }
+
+    if (!active && finalAnswerItemIndex !== -1) {
+      groups.push({ startItemIndex, endItemIndex, finalAnswerItemIndex });
+    }
   }
 
   return groups;
