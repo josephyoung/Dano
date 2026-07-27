@@ -163,13 +163,84 @@ async function transcriptPositionMetrics(page) {
   });
 }
 
-async function assertFocusReturnKeepsPosition(
+async function returnedCardMetrics(page) {
+  return page.evaluate(() => {
+    const transcript = document.querySelector(".chat-transcript");
+    const card = document.querySelector(".question-card");
+    if (!transcript || !card) {
+      throw new Error("returned terminal card is missing");
+    }
+    return {
+      inTranscript: transcript.contains(card),
+      position: getComputedStyle(card).position,
+      focused: card.classList.contains("center-focused-card"),
+      answered: card.matches('[data-status="answered"]'),
+      cancelled: Boolean(card.querySelector(".question-result.muted")),
+      confirmation: Boolean(card.querySelector(".desktop-question-result")),
+      terminalAction: Boolean(card.querySelector(".question-actions button:disabled")),
+    };
+  });
+}
+
+async function assertConfirmationRevisionScrollLock(
+  browser,
+  origin,
+  viewport,
+) {
+  const page = await browser.newPage({ viewport });
+  try {
+    await page.goto(`${origin}/center-focus-scroll-test.html?revision=1`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.waitForFunction(() => {
+      const transcript = document.querySelector(".chat-transcript");
+      return transcript &&
+        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 1;
+    });
+    await page.getByTestId("open-focus-card").click();
+    await page.locator(".center-focused-card").waitFor();
+    assert.equal(await page.locator(".question-card").count(), 2);
+
+    const locked = await transcriptPositionMetrics(page);
+    assert.equal(
+      await page.locator(".chat-transcript").getAttribute("data-center-focus-locked"),
+      "true",
+    );
+
+    await page.getByTestId("return-to-revision").click();
+    await page.getByRole("heading", { name: "修改", exact: true }).waitFor();
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    assert.equal(await page.locator(".question-card").count(), 1);
+    const revising = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(revising.scrollTop - locked.scrollTop) <= 1,
+      `revision ${viewport.width}x${viewport.height}: expected the locked transcript position to survive confirmation -> revision; scrollTop=${revising.scrollTop}, locked=${locked.scrollTop}`,
+    );
+
+    await page.getByTestId("save-revision").click();
+    await page.getByRole("heading", { name: "长表单确认", exact: true }).waitFor();
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    assert.equal(await page.locator(".question-card").count(), 2);
+    const confirmedAgain = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(confirmedAgain.scrollTop - locked.scrollTop) <= 1,
+      `revision ${viewport.width}x${viewport.height}: expected the locked transcript position to survive revision -> confirmation; scrollTop=${confirmedAgain.scrollTop}, locked=${locked.scrollTop}`,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+async function assertFocusLockAndNormalReturn(
   browser,
   origin,
   {
     terminalState = "answered",
     viewport = { width: 1280, height: 720 },
-    resumeMode = "button",
   } = {},
 ) {
   const page = await browser.newPage({
@@ -182,52 +253,102 @@ async function assertFocusReturnKeepsPosition(
         waitUntil: "domcontentloaded",
       },
     );
+    await page.waitForFunction(() => {
+      const transcript = document.querySelector(".chat-transcript");
+      return transcript &&
+        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 1;
+    });
+    await page.getByTestId("open-focus-card").click();
     await page.locator(".center-focused-card").waitFor();
+
+    const locked = await transcriptPositionMetrics(page);
+    assert.equal(
+      await page.locator(".chat-transcript").getAttribute("data-center-focus-locked"),
+      "true",
+    );
+    await page.mouse.move(2, Math.floor(viewport.height / 2));
+    await page.mouse.wheel(0, -500);
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    const afterWheel = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(afterWheel.scrollTop - locked.scrollTop) <= 1,
+      `${terminalState}: expected the background transcript to stay frozen while focused`,
+    );
+
+    await page.getByTestId("grow-focused-background").click();
+    await page.getByText("弹窗期间后台内容增长 12。", { exact: true }).waitFor();
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    const afterFocusedGrowth = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(afterFocusedGrowth.scrollTop - locked.scrollTop) <= 1,
+      `${terminalState}: expected streamed background growth to stay frozen while focused`,
+    );
+    assert.equal(await page.locator(".center-focused-card").count(), 1);
+
     await page.getByTestId("resolve-focus-card").click();
     await page.locator(".center-focused-card").waitFor({ state: "detached" });
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
     const restored = await transcriptPositionMetrics(page);
-    await page.locator(".chat-transcript").dispatchEvent("scroll");
+    const returnedCard = await returnedCardMetrics(page);
+    assert.equal(returnedCard.inTranscript, true);
+    assert.notEqual(returnedCard.position, "fixed");
+    assert.equal(returnedCard.focused, false);
+    if (terminalState === "answered") assert.equal(returnedCard.answered, true);
+    else if (terminalState === "cancelled") assert.equal(returnedCard.cancelled, true);
+    else {
+      assert.equal(returnedCard.confirmation, true);
+      assert.equal(returnedCard.terminalAction, true);
+    }
+    assert.ok(
+      Math.abs(restored.maxScrollTop - restored.scrollTop) <= 1,
+      `${terminalState}: expected normal bottom following after the terminal card returned; scrollTop=${restored.scrollTop}, maxScrollTop=${restored.maxScrollTop}`,
+    );
 
     await page.getByTestId("grow-final-response").click();
-    await page.getByText("用于验证居中卡片返回聊天流后长内容增长不会改变阅读位置的详细说明 28", {
+    await page.getByText("用于验证弹窗关闭后恢复正常聊天滚动的详细说明 28", {
       exact: true,
     }).waitFor();
     await page.evaluate(() => new Promise(requestAnimationFrame));
     const grown = await transcriptPositionMetrics(page);
 
     assert.ok(
-      Math.abs(grown.scrollTop - restored.scrollTop) <= 1,
-      `${terminalState}: expected scrollTop to stay at ${restored.scrollTop}, got ${grown.scrollTop}`,
+      Math.abs(grown.maxScrollTop - grown.scrollTop) <= 1,
+      `${terminalState}: expected streamed content to keep following the bottom`,
     );
-    assert.ok(grown.cardBottom > grown.transcriptTop);
-    assert.ok(grown.cardTop < grown.transcriptBottom);
-    assert.ok(grown.scrollTop < grown.maxScrollTop);
+    assert.ok(grown.scrollTop > restored.scrollTop);
 
-    if (resumeMode === "manual") {
-      const transcript = page.locator(".chat-transcript");
-      await transcript.hover();
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await page.mouse.wheel(0, 1_000);
-        if (await transcript.evaluate(element =>
-          element.scrollHeight - element.clientHeight - element.scrollTop <= 1
-        )) break;
-      }
-    } else {
-      await page.getByRole("button", { name: "滚动到底部", exact: true }).click();
-    }
+    const transcript = page.locator(".chat-transcript");
+    await transcript.hover();
+    await page.mouse.wheel(0, -500);
     await page.waitForFunction(() => {
       const transcript = document.querySelector(".chat-transcript");
       return transcript &&
-        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 1;
+        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop > 24;
     });
+    const userPosition = await transcriptPositionMetrics(page);
+
     await page.getByTestId("continue-final-response").click();
     await page.getByText("回复继续增长。", { exact: true }).waitFor();
     await page.evaluate(() => new Promise(requestAnimationFrame));
     const continued = await transcriptPositionMetrics(page);
     assert.ok(
-      Math.abs(continued.maxScrollTop - continued.scrollTop) <= 1,
-      `${terminalState}: expected explicit bottom navigation to resume automatic following`,
+      Math.abs(continued.scrollTop - userPosition.scrollTop) <= 1,
+      `${terminalState}: expected user scrolling away from the bottom to stop following`,
     );
+    assert.ok(continued.scrollTop < continued.maxScrollTop);
+
+    await page.getByRole("button", { name: "滚动到底部", exact: true }).click();
+    await page.waitForFunction(() => {
+      const transcript = document.querySelector(".chat-transcript");
+      return transcript &&
+        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 1;
+    });
   } finally {
     await page.close();
   }
@@ -250,18 +371,16 @@ async function run() {
     { width: 1280, height: 720 },
     { width: 390, height: 844 },
   ]) {
+    await assertConfirmationRevisionScrollLock(browser, origin, viewport);
     for (const terminalState of [
       "answered",
       "cancelled",
       "confirmed",
       "interrupted",
     ]) {
-      await assertFocusReturnKeepsPosition(browser, origin, {
+      await assertFocusLockAndNormalReturn(browser, origin, {
         terminalState,
         viewport,
-        resumeMode: terminalState === "answered" && viewport.width === 1280
-          ? "manual"
-          : "button",
       });
     }
   }

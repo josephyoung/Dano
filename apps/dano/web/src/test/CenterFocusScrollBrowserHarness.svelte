@@ -1,21 +1,20 @@
 <script lang="ts">
   import AppMainContent from "../layout/AppMainContent.svelte";
 
-  type Phase = "pending" | "terminal" | "grown" | "continued";
+  type Phase = "idle" | "pending" | "revising" | "terminal" | "grown" | "continued";
   type TerminalState = "answered" | "cancelled" | "confirmed" | "interrupted";
 
   const searchParams = new URLSearchParams(window.location.search);
-  const initialPhase = searchParams.get("phase");
   const requestedState = searchParams.get("state");
+  const revisionMode = searchParams.get("revision") === "1";
   const terminalState: TerminalState =
     requestedState === "cancelled" ||
       requestedState === "confirmed" ||
       requestedState === "interrupted"
       ? requestedState
       : "answered";
-  let phase = $state<Phase>(
-    initialPhase === "terminal" ? "terminal" : "pending",
-  );
+  let phase = $state<Phase>("idle");
+  let backgroundGrown = $state(false);
 
   const questions = Array.from({ length: 12 }, (_, index) => ({
     id: `field-${index + 1}`,
@@ -26,9 +25,17 @@
   const answer = Object.fromEntries(
     questions.map((question, index) => [question.id, `回答 ${index + 1}`]),
   );
+  const baselineRows = Array.from(
+    { length: 48 },
+    (_, index) => `正常聊天历史内容 ${index + 1}。`,
+  ).join("\n\n");
+  const focusedGrowthRows = Array.from(
+    { length: 12 },
+    (_, index) => `弹窗期间后台内容增长 ${index + 1}。`,
+  ).join("\n\n");
   const longRows = Array.from(
     { length: 28 },
-    (_, index) => `| ${index + 1} | 用于验证居中卡片返回聊天流后长内容增长不会改变阅读位置的详细说明 ${index + 1} |`,
+    (_, index) => `| ${index + 1} | 用于验证弹窗关闭后恢复正常聊天滚动的详细说明 ${index + 1} |`,
   ).join("\n");
   const longResponse = [
     "以下是提交后的长回复：",
@@ -53,7 +60,7 @@
   }
 
   function confirmationToolCall(
-    state: "awaiting_confirmation" | "confirmed" | "interrupted",
+    state: "awaiting_confirmation" | "revising" | "confirmed" | "interrupted",
   ) {
     return {
       type: "toolCall",
@@ -81,14 +88,79 @@
         state,
         revision: state === "awaiting_confirmation" ? 1 : 2,
         allowedActions: state === "awaiting_confirmation"
-          ? ["cancel", "confirm"]
+          ? revisionMode
+            ? ["cancel", "return_modify", "confirm"]
+            : ["cancel", "confirm"]
+          : state === "revising"
+            ? ["cancel_revision", "submit_revision"]
+            : [],
+        forms: state === "revising"
+          ? [{
+              formId: "focus-scroll-source",
+              title: "长表单",
+              revision: 2,
+              questions,
+              answer,
+            }]
           : [],
-        forms: [],
       },
     };
   }
 
+  function submittedFormContent(
+    state: "awaiting_confirmation" | "revising",
+  ) {
+    return [
+      {
+        type: "toolCall",
+        id: "focus-scroll-source",
+        name: "ask_user_question",
+        arguments: {},
+        questionRequest: {
+          batch: true,
+          title: "长表单",
+          questions,
+        },
+        formInteraction: {
+          interactionId: "focus-scroll-card",
+          state,
+          revision: state === "awaiting_confirmation" ? 1 : 2,
+          allowedActions: state === "awaiting_confirmation"
+            ? ["cancel", "return_modify", "confirm"]
+            : ["cancel_revision", "submit_revision"],
+          forms: state === "revising"
+            ? [{
+                formId: "focus-scroll-source",
+                title: "长表单",
+                revision: 2,
+                questions,
+                answer,
+              }]
+            : [],
+        },
+      },
+      {
+        type: "toolResult",
+        text: "answered",
+        details: {
+          status: "answered",
+          formId: "focus-scroll-source",
+          answer,
+        },
+        sourceMessageId: "focus-scroll-source-result",
+      },
+    ];
+  }
+
+  function revisionContent(state: "awaiting_confirmation" | "revising") {
+    return [
+      ...submittedFormContent(state),
+      confirmationToolCall(state),
+    ];
+  }
+
   function pendingContent() {
+    if (revisionMode) return revisionContent("awaiting_confirmation");
     return terminalState === "confirmed" || terminalState === "interrupted"
       ? [confirmationToolCall("awaiting_confirmation")]
       : [groupedToolCall()];
@@ -115,6 +187,32 @@
     ];
   }
 
+  const assistantContent = $derived.by(() => {
+    const content: Array<Record<string, unknown>> = [{
+      type: "text",
+      text: backgroundGrown
+        ? `${baselineRows}\n\n${focusedGrowthRows}`
+        : baselineRows,
+    }];
+    if (phase === "idle") return content;
+    if (phase === "pending") return [...content, ...pendingContent()];
+    if (phase === "revising") {
+      return [...content, ...revisionContent("revising")];
+    }
+    return [
+      ...content,
+      ...terminalContent(),
+      {
+        type: "text",
+        text: phase === "terminal"
+          ? "表单已结束。"
+          : phase === "grown"
+            ? longResponse
+            : `${longResponse}\n\n回复继续增长。`,
+      },
+    ];
+  });
+
   const transcript = $derived([
     {
       id: "focus-scroll-user",
@@ -124,26 +222,26 @@
     {
       id: "focus-scroll-assistant",
       role: "assistant",
-      content: phase === "pending"
-        ? pendingContent()
-        : [
-            ...terminalContent(),
-            {
-              type: "text",
-              text: phase === "terminal"
-                ? "表单已提交。"
-                : phase === "grown"
-                  ? longResponse
-                  : `${longResponse}\n\n回复继续增长。`,
-            },
-          ],
+      content: assistantContent,
     },
   ]);
 </script>
 
 <div class="harness-controls" aria-label="浏览器测试控制">
+  <button data-testid="open-focus-card" onclick={() => phase = "pending"}>
+    打开卡片
+  </button>
+  <button data-testid="grow-focused-background" onclick={() => backgroundGrown = true}>
+    增长背景内容
+  </button>
   <button data-testid="resolve-focus-card" onclick={() => phase = "terminal"}>
     恢复卡片
+  </button>
+  <button data-testid="return-to-revision" onclick={() => phase = "revising"}>
+    返回修改
+  </button>
+  <button data-testid="save-revision" onclick={() => phase = "pending"}>
+    保存并返回确认
   </button>
   <button data-testid="grow-final-response" onclick={() => phase = "grown"}>
     增长回复
