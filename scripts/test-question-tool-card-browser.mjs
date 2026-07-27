@@ -182,6 +182,59 @@ async function returnedCardMetrics(page) {
   });
 }
 
+async function assertConfirmationRevisionScrollLock(
+  browser,
+  origin,
+  viewport,
+) {
+  const page = await browser.newPage({ viewport });
+  try {
+    await page.goto(`${origin}/center-focus-scroll-test.html?revision=1`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.waitForFunction(() => {
+      const transcript = document.querySelector(".chat-transcript");
+      return transcript &&
+        transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 1;
+    });
+    await page.getByTestId("open-focus-card").click();
+    await page.locator(".center-focused-card").waitFor();
+    assert.equal(await page.locator(".question-card").count(), 2);
+
+    const locked = await transcriptPositionMetrics(page);
+    assert.equal(
+      await page.locator(".chat-transcript").getAttribute("data-center-focus-locked"),
+      "true",
+    );
+
+    await page.getByTestId("return-to-revision").click();
+    await page.getByRole("heading", { name: "修改", exact: true }).waitFor();
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    assert.equal(await page.locator(".question-card").count(), 1);
+    const revising = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(revising.scrollTop - locked.scrollTop) <= 1,
+      `revision ${viewport.width}x${viewport.height}: expected the locked transcript position to survive confirmation -> revision; scrollTop=${revising.scrollTop}, locked=${locked.scrollTop}`,
+    );
+
+    await page.getByTestId("save-revision").click();
+    await page.getByRole("heading", { name: "长表单确认", exact: true }).waitFor();
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    assert.equal(await page.locator(".question-card").count(), 2);
+    const confirmedAgain = await transcriptPositionMetrics(page);
+    assert.ok(
+      Math.abs(confirmedAgain.scrollTop - locked.scrollTop) <= 1,
+      `revision ${viewport.width}x${viewport.height}: expected the locked transcript position to survive revision -> confirmation; scrollTop=${confirmedAgain.scrollTop}, locked=${locked.scrollTop}`,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 async function assertFocusLockAndNormalReturn(
   browser,
   origin,
@@ -318,6 +371,7 @@ async function run() {
     { width: 1280, height: 720 },
     { width: 390, height: 844 },
   ]) {
+    await assertConfirmationRevisionScrollLock(browser, origin, viewport);
     for (const terminalState of [
       "answered",
       "cancelled",

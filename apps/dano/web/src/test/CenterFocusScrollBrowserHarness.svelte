@@ -1,11 +1,12 @@
 <script lang="ts">
   import AppMainContent from "../layout/AppMainContent.svelte";
 
-  type Phase = "idle" | "pending" | "terminal" | "grown" | "continued";
+  type Phase = "idle" | "pending" | "revising" | "terminal" | "grown" | "continued";
   type TerminalState = "answered" | "cancelled" | "confirmed" | "interrupted";
 
   const searchParams = new URLSearchParams(window.location.search);
   const requestedState = searchParams.get("state");
+  const revisionMode = searchParams.get("revision") === "1";
   const terminalState: TerminalState =
     requestedState === "cancelled" ||
       requestedState === "confirmed" ||
@@ -59,7 +60,7 @@
   }
 
   function confirmationToolCall(
-    state: "awaiting_confirmation" | "confirmed" | "interrupted",
+    state: "awaiting_confirmation" | "revising" | "confirmed" | "interrupted",
   ) {
     return {
       type: "toolCall",
@@ -87,14 +88,79 @@
         state,
         revision: state === "awaiting_confirmation" ? 1 : 2,
         allowedActions: state === "awaiting_confirmation"
-          ? ["cancel", "confirm"]
+          ? revisionMode
+            ? ["cancel", "return_modify", "confirm"]
+            : ["cancel", "confirm"]
+          : state === "revising"
+            ? ["cancel_revision", "submit_revision"]
+            : [],
+        forms: state === "revising"
+          ? [{
+              formId: "focus-scroll-source",
+              title: "长表单",
+              revision: 2,
+              questions,
+              answer,
+            }]
           : [],
-        forms: [],
       },
     };
   }
 
+  function submittedFormContent(
+    state: "awaiting_confirmation" | "revising",
+  ) {
+    return [
+      {
+        type: "toolCall",
+        id: "focus-scroll-source",
+        name: "ask_user_question",
+        arguments: {},
+        questionRequest: {
+          batch: true,
+          title: "长表单",
+          questions,
+        },
+        formInteraction: {
+          interactionId: "focus-scroll-card",
+          state,
+          revision: state === "awaiting_confirmation" ? 1 : 2,
+          allowedActions: state === "awaiting_confirmation"
+            ? ["cancel", "return_modify", "confirm"]
+            : ["cancel_revision", "submit_revision"],
+          forms: state === "revising"
+            ? [{
+                formId: "focus-scroll-source",
+                title: "长表单",
+                revision: 2,
+                questions,
+                answer,
+              }]
+            : [],
+        },
+      },
+      {
+        type: "toolResult",
+        text: "answered",
+        details: {
+          status: "answered",
+          formId: "focus-scroll-source",
+          answer,
+        },
+        sourceMessageId: "focus-scroll-source-result",
+      },
+    ];
+  }
+
+  function revisionContent(state: "awaiting_confirmation" | "revising") {
+    return [
+      ...submittedFormContent(state),
+      confirmationToolCall(state),
+    ];
+  }
+
   function pendingContent() {
+    if (revisionMode) return revisionContent("awaiting_confirmation");
     return terminalState === "confirmed" || terminalState === "interrupted"
       ? [confirmationToolCall("awaiting_confirmation")]
       : [groupedToolCall()];
@@ -130,6 +196,9 @@
     }];
     if (phase === "idle") return content;
     if (phase === "pending") return [...content, ...pendingContent()];
+    if (phase === "revising") {
+      return [...content, ...revisionContent("revising")];
+    }
     return [
       ...content,
       ...terminalContent(),
@@ -167,6 +236,12 @@
   </button>
   <button data-testid="resolve-focus-card" onclick={() => phase = "terminal"}>
     恢复卡片
+  </button>
+  <button data-testid="return-to-revision" onclick={() => phase = "revising"}>
+    返回修改
+  </button>
+  <button data-testid="save-revision" onclick={() => phase = "pending"}>
+    保存并返回确认
   </button>
   <button data-testid="grow-final-response" onclick={() => phase = "grown"}>
     增长回复
