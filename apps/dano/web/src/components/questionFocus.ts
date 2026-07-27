@@ -1,10 +1,4 @@
-export type QuestionFocusChange =
-  | {
-      toolCallId: string;
-      element: HTMLElement;
-    }
-  | {
-      toolCallId: string;
-      element: null;
-      restoreInlinePosition: boolean;
-    };
+export interface QuestionFocusChange {
+  toolCallId: string;
+  element: HTMLElement | null;
+}

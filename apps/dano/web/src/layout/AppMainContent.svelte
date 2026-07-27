@@ -204,14 +204,7 @@
       active => centerFocusActive = active,
     );
     if (!target.element) {
-      centerFocusStage.hide(target.toolCallId, restored => {
-        if (
-          target.restoreInlinePosition &&
-          restored.sessionKey === (activeSessionPath ?? "")
-        ) {
-          transcriptRef?.preserveCenterFocusReturnPosition();
-        }
-      });
+      centerFocusStage.hide(target.toolCallId);
       return;
     }
     centerFocusStage.show({

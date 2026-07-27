@@ -6,10 +6,7 @@ export interface CenterFocusTarget {
 
 export interface CenterFocusStage {
   show(target: CenterFocusTarget): void;
-  hide(
-    toolCallId?: string,
-    onRestored?: (target: CenterFocusTarget) => void,
-  ): void;
+  hide(toolCallId?: string): void;
   setSession(sessionKey: string | null): void;
   destroy(): void;
 }
@@ -89,10 +86,7 @@ export function createCenterFocusStage(
     });
   }
 
-  function hide(
-    toolCallId?: string,
-    onRestored?: (target: CenterFocusTarget) => void,
-  ): void {
+  function hide(toolCallId?: string): void {
     if (!active) return;
     if (toolCallId && active.target.toolCallId !== toolCallId) return;
     const presentation = active;
@@ -110,7 +104,6 @@ export function createCenterFocusStage(
         branch.element.inert = branch.wasInert;
       }
       onActiveChange(false);
-      onRestored?.(presentation.target);
     }, () => presentation.target.element.classList.remove("center-focus-transition-card"));
   }
 
