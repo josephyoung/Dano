@@ -42,6 +42,7 @@
   } from "../utils/messageCopy";
   import {
     assistantPendingState,
+    buildTranscriptFinalAnswerActionGroups,
     buildTranscriptDisplayItems,
     buildTranscriptProcessGroups,
     contentBlocks,
@@ -54,6 +55,7 @@
     isToolResultMessage,
     latestThinkingLine,
     messageContent,
+    transcriptFinalAnswerText,
     type FileContentBlock,
     type ImageContentBlock,
     type PendingTranscriptSessionEvent,
@@ -87,9 +89,30 @@
   import type { QuestionFocusChange } from "./questionFocus";
   import {
     getRuntimeEmptyStateConfig,
+    getRuntimeLocale,
     getRuntimeTranscriptProcessSummaryEnabled,
   } from "../utils/runtimeConfig";
   import { t } from "../i18n";
+
+  const assistantTurnTimestampFormatters = new Map<string, Intl.DateTimeFormat>();
+
+  function assistantTurnTimestampFormatter(includeYear: boolean): Intl.DateTimeFormat {
+    const locale = getRuntimeLocale();
+    const key = `${locale}:${includeYear ? "year" : "month"}`;
+    const cached = assistantTurnTimestampFormatters.get(key);
+    if (cached) return cached;
+    const options: Intl.DateTimeFormatOptions = {
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    };
+    if (includeYear) options.year = "numeric";
+    const formatter = new Intl.DateTimeFormat(locale, options);
+    assistantTurnTimestampFormatters.set(key, formatter);
+    return formatter;
+  }
 
   let {
     sessionPath = null as string | null,
@@ -231,6 +254,33 @@
         })
       : [],
   );
+  let finalAnswerActionGroups = $derived(
+    buildTranscriptFinalAnswerActionGroups(displayItems, {
+      blocksForMessage: displayContentBlocks,
+      isMessageActive: shouldDeferMessageMarkdownErrors,
+    }),
+  );
+  let finalAnswerActionProjection = $derived.by(() => {
+    const byItemIndex = new Map<number, string>();
+    const byStartItemIndex = new Map<number, string>();
+    const byFinalItemIndex = new Map<number, string>();
+    for (const group of finalAnswerActionGroups) {
+      const finalItem = displayItems[group.finalAnswerItemIndex];
+      if (finalItem?.kind !== "message") continue;
+      const key = `${messageStableKey(finalItem.message, finalItem.messageIndex)}:assistant-turn`;
+      byStartItemIndex.set(group.startItemIndex, key);
+      byFinalItemIndex.set(group.finalAnswerItemIndex, key);
+      const startItem = displayItems[group.startItemIndex];
+      const firstActionItemIndex = startItem?.kind === "message" &&
+          startItem.message.role === "user"
+        ? group.startItemIndex + 1
+        : group.startItemIndex;
+      for (let index = firstActionItemIndex; index <= group.endItemIndex; index++) {
+        byItemIndex.set(index, key);
+      }
+    }
+    return { byItemIndex, byStartItemIndex, byFinalItemIndex };
+  });
   let hasVisibleStreaming = $derived(
     isStreaming || transcriptStreams.length > 0 || transcriptDeltas.length > 0,
   );
@@ -247,6 +297,8 @@
     ),
   );
   let copiedMessageKey = $state<string | null>(null);
+  let hoveredFinalAnswerActionKey = $state<string | null>(null);
+  let focusedFinalAnswerActionKey = $state<string | null>(null);
   let copiedMessageResetTimer: number | undefined;
   let filePreview = $state<{
     block: FileContentBlock;
@@ -648,6 +700,26 @@
     );
   }
 
+  function finalAnswerActionKeyForItem(itemIndex: number): string | undefined {
+    return finalAnswerActionProjection.byItemIndex.get(itemIndex);
+  }
+
+  function finalAnswerActionKeyForStartItem(itemIndex: number): string | undefined {
+    return finalAnswerActionProjection.byStartItemIndex.get(itemIndex);
+  }
+
+  function finalAnswerActionKeyForFinalItem(itemIndex: number): string | undefined {
+    return finalAnswerActionProjection.byFinalItemIndex.get(itemIndex);
+  }
+
+  function assistantTurnTimestamp(message: TranscriptEntry): string | null {
+    if (!message.timestamp) return null;
+    const timestamp = new Date(message.timestamp);
+    if (!Number.isFinite(timestamp.getTime())) return null;
+    const includeYear = timestamp.getFullYear() !== new Date().getFullYear();
+    return assistantTurnTimestampFormatter(includeYear).format(timestamp);
+  }
+
   function processGroupForUserItemIndex(itemIndex: number): TranscriptProcessGroup | undefined {
     return processGroups.find(group => group.startItemIndex === itemIndex);
   }
@@ -1000,11 +1072,70 @@
     }, 1200);
   }
 
-  async function handleCopyMessage(msg: TranscriptEntry, key: string) {
-    const text = userMessagePlainText(msg);
+  async function copyMessageText(text: string | null, key: string) {
     if (!text) return;
     const copied = await copyTextToClipboard(text);
     if (copied) showCopiedMessageState(key);
+  }
+
+  async function handleCopyMessage(msg: TranscriptEntry, key: string) {
+    await copyMessageText(userMessagePlainText(msg), key);
+  }
+
+  function assistantTurnAnswerText(
+    item: TranscriptMessageDisplayItem,
+  ): string | null {
+    return transcriptFinalAnswerText(displayContentBlocks(item.message, item.messageIndex));
+  }
+
+  async function handleCopyAssistantTurn(
+    item: TranscriptMessageDisplayItem,
+    key: string,
+  ) {
+    await copyMessageText(assistantTurnAnswerText(item), key);
+  }
+
+  function finalAnswerActionKeyFromTarget(target: EventTarget | null): string | null {
+    if (!(target instanceof Element)) return null;
+    return target.closest<HTMLElement>("[data-final-answer-action-key]")
+      ?.dataset.finalAnswerActionKey ?? null;
+  }
+
+  function handleFinalAnswerPointerOver(event: PointerEvent) {
+    const key = finalAnswerActionKeyFromTarget(event.target);
+    if (key) hoveredFinalAnswerActionKey = key;
+  }
+
+  function handleFinalAnswerPointerOut(event: PointerEvent) {
+    const key = finalAnswerActionKeyFromTarget(event.target);
+    if (!key || finalAnswerActionKeyFromTarget(event.relatedTarget) === key) return;
+    if (hoveredFinalAnswerActionKey === key) hoveredFinalAnswerActionKey = null;
+  }
+
+  function handleFinalAnswerFocusIn(event: FocusEvent) {
+    const key = finalAnswerActionKeyFromTarget(event.target);
+    if (key) focusedFinalAnswerActionKey = key;
+  }
+
+  function handleFinalAnswerFocusOut(event: FocusEvent) {
+    const key = finalAnswerActionKeyFromTarget(event.target);
+    if (!key || finalAnswerActionKeyFromTarget(event.relatedTarget) === key) return;
+    if (focusedFinalAnswerActionKey === key) focusedFinalAnswerActionKey = null;
+  }
+
+  function trackFinalAnswerActionInteractions(node: HTMLElement) {
+    node.addEventListener("pointerover", handleFinalAnswerPointerOver);
+    node.addEventListener("pointerout", handleFinalAnswerPointerOut);
+    node.addEventListener("focusin", handleFinalAnswerFocusIn);
+    node.addEventListener("focusout", handleFinalAnswerFocusOut);
+    return {
+      destroy() {
+        node.removeEventListener("pointerover", handleFinalAnswerPointerOver);
+        node.removeEventListener("pointerout", handleFinalAnswerPointerOut);
+        node.removeEventListener("focusin", handleFinalAnswerFocusIn);
+        node.removeEventListener("focusout", handleFinalAnswerFocusOut);
+      },
+    };
   }
 
   function handleRevise(msg: TranscriptEntry) {
@@ -1255,6 +1386,13 @@
     shouldStickToBottom = true;
     topLoadArmed = true;
     showTranscriptEndNotice = false;
+    copiedMessageKey = null;
+    hoveredFinalAnswerActionKey = null;
+    focusedFinalAnswerActionKey = null;
+    if (copiedMessageResetTimer !== undefined) {
+      window.clearTimeout(copiedMessageResetTimer);
+      copiedMessageResetTimer = undefined;
+    }
     if (transcriptEndNoticeTimer !== undefined) {
       window.clearTimeout(transcriptEndNoticeTimer);
       transcriptEndNoticeTimer = undefined;
@@ -1352,6 +1490,7 @@
 
 <div
   bind:this={container}
+  use:trackFinalAnswerActionInteractions
   class="chat-transcript"
   data-center-focus-transcript
   onscroll={handleTranscriptScroll}
@@ -1402,12 +1541,15 @@
   {/if}
 
   {#each displayItems as item, index (displayItemKey(item, index))}
+    {@const finalAnswerActionKey = finalAnswerActionKeyForItem(index)}
+    {@const finalAnswerCopyKey = finalAnswerActionKeyForFinalItem(index)}
     {#if shouldRenderDisplayItemAt(index) && isToolResultMessage(item.message)}
       {@const activity = orphanToolActivity(item.message, item.messageIndex)}
       <div
         class="message-row tool"
         data-message-id={item.message.id ?? undefined}
         data-tree-entry-id={item.message.id ?? undefined}
+        data-final-answer-action-key={finalAnswerActionKey}
         transition:slide={transcriptRevealTransition}
       >
         <div class="message-content tool">
@@ -1425,6 +1567,7 @@
         class="message-row {roleClass(item.message.role)}"
         data-message-id={item.message.id ?? undefined}
         data-tree-entry-id={item.message.id ?? undefined}
+        data-final-answer-action-key={finalAnswerActionKey}
         transition:slide={transcriptRevealTransition}
       >
         <div class="message-content {roleClass(item.message.role)}">
@@ -1466,8 +1609,10 @@
         <div
           class="message-row {roleClass(item.message.role)}"
           class:activity-trail-row={isActivityTrailOnly(projectedBlocks)}
+          class:assistant-turn-final={Boolean(finalAnswerCopyKey)}
           data-message-id={item.message.id ?? undefined}
           data-tree-entry-id={item.message.id ?? undefined}
+          data-final-answer-action-key={finalAnswerActionKey}
           transition:slide={transcriptRevealTransition}
         >
         <div class="message-stack {roleClass(item.message.role)}">
@@ -1610,6 +1755,31 @@
               {/if}
             </div>
           {/if}
+
+          {#if finalAnswerCopyKey}
+            <div
+              class="assistant-turn-actions"
+              class:copied={copiedMessageKey === finalAnswerCopyKey}
+              class:interaction-active={hoveredFinalAnswerActionKey === finalAnswerCopyKey ||
+                focusedFinalAnswerActionKey === finalAnswerCopyKey ||
+                copiedMessageKey === finalAnswerCopyKey}
+            >
+              <button
+                type="button"
+                class="message-action-button"
+                data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
+                data-tooltip={messageCopyLabel(finalAnswerCopyKey)}
+                aria-label={messageCopyLabel(finalAnswerCopyKey)}
+                title={messageCopyLabel(finalAnswerCopyKey)}
+                onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
+              >
+                <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+              </button>
+              {#if assistantTurnTimestamp(item.message)}
+                <time datetime={item.message.timestamp}>{assistantTurnTimestamp(item.message)}</time>
+              {/if}
+            </div>
+          {/if}
         </div>
         </div>
       {/if}
@@ -1617,7 +1787,11 @@
     {#if processGroupForUserItemIndex(index)}
       {@const group = processGroupForUserItemIndex(index)}
       {#if group}
-        <div class="message-row assistant process-summary-row" transition:slide={transcriptRevealTransition}>
+        <div
+          class="message-row assistant process-summary-row"
+          data-final-answer-action-key={finalAnswerActionKeyForStartItem(index)}
+          transition:slide={transcriptRevealTransition}
+        >
           <button
             type="button"
             class="process-summary-toggle"
@@ -2068,6 +2242,34 @@
     width: fit-content;
     max-width: min(720px, 100%);
     margin: 2px 0px 0 0;
+  }
+
+  .assistant-turn-actions {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: fit-content;
+    min-height: 28px;
+    margin: 2px 0 0 2px;
+    color: var(--text-subtle);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition:
+      opacity 0.14s ease,
+      transform 0.14s ease;
+  }
+
+  .assistant-turn-actions.interaction-active,
+  .assistant-turn-actions.copied {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .assistant-turn-actions .message-action-button {
+    opacity: 1;
+    transform: none;
   }
 
   .message-action-button {
