@@ -213,8 +213,10 @@
     scrollLocked={centerFocusActive}
     showMessageIds={isDebugMode}
     {allowRevision}
+    revisionEntryId={pendingRevision?.entryId ?? null}
     onLoadOlder={onLoadOlderTranscript}
     onRevise={onReviseMessage}
+    onCancelRevision={onCancelRevision}
     onOpenFileReference={onOpenFileReference}
     {readWorkspaceFile}
     {presentQuestionAction}

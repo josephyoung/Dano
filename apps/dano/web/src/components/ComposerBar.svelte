@@ -412,13 +412,14 @@
         <div class="revision-header" role="status">
           <div class="revision-header-label">
             <Pencil aria-hidden="true" size={15} />
-            <span>{t("composer.revision.label")}</span>
+            <span class="revision-header-preview">
+              {revision.text.replace(/\s+/g, " ").trim()}
+            </span>
           </div>
           <button
             type="button"
             class="revision-cancel-button"
             aria-label={t("composer.revision.cancel")}
-            title={t("composer.revision.cancel")}
             onclick={handleCancelRevision}
           >
             <X aria-hidden="true" size={14} />
@@ -640,11 +641,15 @@
     --composer-input-line-height: var(--composer-control-size);
     --composer-max-visible-lines: 5;
     --composer-single-line-gap: 10px;
+    --composer-radius: 30px;
+    --revision-header-inset: 6px;
+    --revision-header-offset: 12px;
+    --revision-header-extra-width: 24px;
     display: flex;
     align-items: center;
     gap: var(--composer-single-line-gap);
     padding: 12px 18px;
-    border-radius: 30px;
+    border-radius: var(--composer-radius);
     border: none;
     background: var(--panel);
     box-shadow:
@@ -670,9 +675,10 @@
   }
 
   .composer-dock.has-attachments:not(.multiline) {
+    --composer-radius: 24px;
     flex-wrap: wrap;
     row-gap: 10px;
-    border-radius: 24px;
+    border-radius: var(--composer-radius);
   }
 
   .composer-dock.revising:not(.multiline) {
@@ -686,33 +692,50 @@
   }
 
   .composer-dock:has(.attachment-strip):not(.multiline) {
+    --composer-radius: 24px;
     flex-wrap: wrap;
     row-gap: 10px;
-    border-radius: 24px;
+    border-radius: var(--composer-radius);
   }
 
   .revision-header {
     order: -2;
-    flex: 0 0 100%;
+    flex: 0 0 calc(100% + var(--revision-header-extra-width));
     display: flex;
     align-items: center;
     justify-content: space-between;
     min-width: 0;
+    width: calc(100% + var(--revision-header-extra-width));
     min-height: 44px;
+    margin-inline: calc(-1 * var(--revision-header-offset));
     padding: 2px 2px 2px 14px;
-    border-radius: 24px;
-    background: color-mix(in srgb, var(--success) 10%, var(--panel));
+    border-radius: calc(var(--composer-radius) - var(--revision-header-inset));
+    background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   }
 
   .revision-header-label {
-    display: inline-flex;
+    display: flex;
+    flex: 1 1 auto;
     align-items: center;
     gap: 8px;
     min-width: 0;
-    color: var(--success);
+    overflow: hidden;
+    color: var(--accent);
     font-size: 0.82rem;
     font-weight: 650;
     line-height: 1;
+  }
+
+  .revision-header-label :global(svg) {
+    flex: 0 0 auto;
+  }
+
+  .revision-header-preview {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .revision-cancel-button {
@@ -727,18 +750,25 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition:
-      color 0.12s ease,
-      background 0.12s ease,
-      transform 0.12s ease;
+    flex: 0 0 40px;
   }
 
-  .revision-cancel-button:hover {
-    background: var(--surface-hover);
-    color: var(--text);
-  }
-
+  .revision-cancel-button:hover,
+  .revision-cancel-button:focus-visible,
   .revision-cancel-button:active {
+    background: transparent;
+  }
+
+  .revision-cancel-button :global(svg) {
+    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .revision-cancel-button:hover :global(svg),
+  .revision-cancel-button:focus-visible :global(svg) {
+    transform: scale(1.06);
+  }
+
+  .revision-cancel-button:active :global(svg) {
     transform: scale(0.96);
   }
 
@@ -1095,7 +1125,13 @@
     .composer-inner-wrap { width: 100%; }
     .prompt-input { font-size: 16px; }
 
-    .composer-dock { padding: 10px 14px; border-radius: 24px; }
+    .composer-dock {
+      --composer-radius: 24px;
+      --revision-header-offset: 8px;
+      --revision-header-extra-width: 16px;
+      padding: 10px 14px;
+      border-radius: var(--composer-radius);
+    }
   }
 
   @media (max-width: 640px) {
@@ -1104,7 +1140,7 @@
       margin: 0 auto max(10px, env(safe-area-inset-bottom));
     }
 
-    .composer-dock { gap: 8px; padding: 10px 14px; border-radius: 24px; }
+    .composer-dock { gap: 8px; padding: 10px 14px; border-radius: var(--composer-radius); }
     .composer-dock.multiline { padding: 14px 14px 12px; }
 
     .prompt-input { font-size: 16px; }

@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ComposerBar from "./ComposerBar.svelte";
+import composerBarSource from "./ComposerBar.svelte?raw";
 
 const bridgeClient = vi.hoisted(() => ({ id: null as string | null }));
 
@@ -214,7 +215,9 @@ describe("ComposerBar prompt submission", () => {
         steer: false,
       });
       expect(textarea.value).toBe("edited historical message");
-      expect(target.textContent).toContain("编辑消息");
+      expect(
+        target.querySelector(".revision-header-preview")?.textContent,
+      ).toBe("historical message");
       expect(
         target.querySelector('button[aria-label="查看 image-1.jpg"]'),
       ).not.toBeNull();
@@ -298,7 +301,9 @@ describe("ComposerBar prompt submission", () => {
           steer: false,
         });
       });
-      expect(target.textContent).toContain("编辑消息");
+      expect(
+        target.querySelector(".revision-header-preview")?.textContent,
+      ).toBe("historical message");
     } finally {
       await unmount(component);
     }
@@ -338,8 +343,12 @@ describe("ComposerBar prompt submission", () => {
 
       const textarea = target.querySelector<HTMLTextAreaElement>("textarea");
       expect(textarea?.value).toBe("historical message");
-      expect(target.textContent).toContain("编辑消息");
-      expect(target.textContent).not.toContain("historical message");
+      const revisionHeader = target.querySelector<HTMLElement>(".revision-header");
+      const revisionPreview = target.querySelector<HTMLElement>(
+        ".revision-header-preview",
+      );
+      expect(revisionHeader).not.toBeNull();
+      expect(revisionPreview?.textContent).toBe("historical message");
       expect(
         target.querySelectorAll('button[aria-label^="查看 "]'),
       ).toHaveLength(1);
@@ -383,5 +392,53 @@ describe("ComposerBar prompt submission", () => {
       component.$destroy();
       target.remove();
     }
+  });
+
+  it("renders a bounded single-line original-message preview with an icon-only cancel action", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ComposerBar, {
+      target,
+      props: {
+        connectionStatus: "connected",
+        revision: {
+          entryId: "historical-user-message",
+          text: "first line\n\nsecond line with more detail",
+          images: [],
+        },
+      },
+    });
+
+    try {
+      await tick();
+      expect(
+        target.querySelector(".revision-header-preview")?.textContent,
+      ).toBe("first line second line with more detail");
+      const cancel = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="取消编辑"]',
+      );
+      expect(cancel).not.toBeNull();
+      expect(cancel?.hasAttribute("title")).toBe(false);
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("keeps the revision header concentric and limits cancel feedback to icon scaling", () => {
+    expect(composerBarSource).toContain(
+      "border-radius: calc(var(--composer-radius) - var(--revision-header-inset));",
+    );
+    expect(composerBarSource).toMatch(
+      /\.revision-header-preview\s*\{[\s\S]*?overflow: hidden;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+    );
+    expect(composerBarSource).toMatch(
+      /\.revision-cancel-button:hover,[\s\S]*?\.revision-cancel-button:active\s*\{[\s\S]*?background: transparent;/,
+    );
+    expect(composerBarSource).toContain("transform: scale(1.06);");
+    expect(composerBarSource).toContain("transform: scale(0.96);");
+    expect(composerBarSource).not.toMatch(
+      /\.revision-cancel-button[^}]*rotate\(/,
+    );
   });
 });

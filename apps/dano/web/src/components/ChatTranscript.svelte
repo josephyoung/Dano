@@ -94,6 +94,7 @@
     getRuntimeTranscriptProcessSummaryEnabled,
   } from "../utils/runtimeConfig";
   import { t } from "../i18n";
+  import * as Tooltip from "./ui/tooltip";
 
   const assistantTurnTimestampFormatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -130,8 +131,10 @@
     scrollLocked = false,
     showMessageIds = false,
     allowRevision = false,
+    revisionEntryId = null as string | null,
     onLoadOlder = () => false,
     onRevise = (_: HistoricalMessageRevisionPayload) => {},
+    onCancelRevision = () => {},
     onOpenFileReference = (_: { path: string; lineNumber: number }) => {},
     readWorkspaceFile,
     presentQuestionAction = presentQuestion,
@@ -156,8 +159,10 @@
     scrollLocked?: boolean;
     showMessageIds?: boolean;
     allowRevision?: boolean;
+    revisionEntryId?: string | null;
     onLoadOlder?: () => boolean | Promise<boolean>;
     onRevise?: (payload: HistoricalMessageRevisionPayload) => void;
+    onCancelRevision?: () => void;
     onOpenFileReference?: (payload: { path: string; lineNumber: number }) => void;
     readWorkspaceFile?: (path: string) => Promise<{ content: string }>;
     presentQuestionAction?: typeof presentQuestion;
@@ -1048,12 +1053,20 @@
     );
   }
 
+  function isRevisionTarget(msg: TranscriptEntry): boolean {
+    return typeof msg.id === "string" && msg.id === revisionEntryId;
+  }
+
   function canCopyMessage(msg: TranscriptEntry): boolean {
     return Boolean(userMessagePlainText(msg));
   }
 
   function messageCopyLabel(key: string): string {
     return copiedMessageKey === key ? t("common.copied") : t("chatTranscript.copyMessage");
+  }
+
+  function messageCopyTooltipLabel(key: string): string {
+    return copiedMessageKey === key ? t("common.copied") : t("common.copy");
   }
 
   function showCopiedMessageState(key: string) {
@@ -1135,6 +1148,10 @@
 
   function handleRevise(msg: TranscriptEntry) {
     if (!canReviseMessage(msg)) return;
+    if (isRevisionTarget(msg)) {
+      onCancelRevision();
+      return;
+    }
     const text = userMessageText(msg);
     const images = messageImages(msg);
     onRevise({
@@ -1611,6 +1628,7 @@
         <div class="message-stack {roleClass(item.message.role)}">
           <div
             class="message-content {roleClass(item.message.role)}"
+            class:revision-target={isRevisionTarget(item.message)}
             data-user-message-index={item.message.role === "user" ? item.messageIndex : undefined}
           >
             {#if showMessageIds}
@@ -1721,30 +1739,53 @@
           {#if canCopyMessage(item.message) || canReviseMessage(item.message)}
             <div class="message-actions">
               {#if canReviseMessage(item.message)}
-                <button
-                  type="button"
-                  class="message-action-button"
-                  aria-label={t("chatTranscript.editMessage")}
-                  title={t("chatTranscript.editMessage")}
-                  onclick={() => handleRevise(item.message)}
-                >
-                  <Pencil class="message-action-icon" aria-hidden="true" size={14} />
-                </button>
+                {@const revisionActive = isRevisionTarget(item.message)}
+                <span class="message-action-tooltip">
+                  <Tooltip.Provider delayDuration={300}>
+                    <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                      <Tooltip.Trigger>
+                        {#snippet child({ props })}
+                          <button
+                            {...props}
+                            type="button"
+                            class="message-action-button"
+                            data-revision-active={revisionActive ? "true" : undefined}
+                            aria-label={revisionActive ? t("composer.revision.cancel") : t("chatTranscript.editMessage")}
+                            onclick={() => handleRevise(item.message)}
+                          >
+                            <Pencil class="message-action-icon" aria-hidden="true" size={14} />
+                          </button>
+                        {/snippet}
+                      </Tooltip.Trigger>
+                      <Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
+                    </Tooltip.Root>
+                  </Tooltip.Provider>
+                </span>
               {/if}
 
               {#if canCopyMessage(item.message)}
                 {@const copyKey = messageStableKey(item.message, item.messageIndex)}
-                <button
-                  type="button"
-                  class="message-action-button"
-                  data-copy-state={copiedMessageKey === copyKey ? "copied" : undefined}
-                  data-tooltip={messageCopyLabel(copyKey)}
-                  aria-label={messageCopyLabel(copyKey)}
-                  title={messageCopyLabel(copyKey)}
-                  onclick={() => handleCopyMessage(item.message, copyKey)}
-                >
-                  <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
-                </button>
+                <span class="message-action-tooltip">
+                  <Tooltip.Provider delayDuration={300}>
+                    <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                      <Tooltip.Trigger>
+                        {#snippet child({ props })}
+                          <button
+                            {...props}
+                            type="button"
+                            class="message-action-button"
+                            data-copy-state={copiedMessageKey === copyKey ? "copied" : undefined}
+                            aria-label={messageCopyLabel(copyKey)}
+                            onclick={() => handleCopyMessage(item.message, copyKey)}
+                          >
+                            <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+                          </button>
+                        {/snippet}
+                      </Tooltip.Trigger>
+                      <Tooltip.Content>{messageCopyTooltipLabel(copyKey)}</Tooltip.Content>
+                    </Tooltip.Root>
+                  </Tooltip.Provider>
+                </span>
               {/if}
             </div>
           {/if}
@@ -1757,17 +1798,27 @@
                 focusedFinalAnswerActionKey === finalAnswerCopyKey ||
                 copiedMessageKey === finalAnswerCopyKey}
             >
-              <button
-                type="button"
-                class="message-action-button"
-                data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
-                data-tooltip={messageCopyLabel(finalAnswerCopyKey)}
-                aria-label={messageCopyLabel(finalAnswerCopyKey)}
-                title={messageCopyLabel(finalAnswerCopyKey)}
-                onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
-              >
-                <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
-              </button>
+              <span class="message-action-tooltip">
+                <Tooltip.Provider delayDuration={300}>
+                  <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                    <Tooltip.Trigger>
+                      {#snippet child({ props })}
+                        <button
+                          {...props}
+                          type="button"
+                          class="message-action-button"
+                          data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
+                          aria-label={messageCopyLabel(finalAnswerCopyKey)}
+                          onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
+                        >
+                          <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+                        </button>
+                      {/snippet}
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{messageCopyTooltipLabel(finalAnswerCopyKey)}</Tooltip.Content>
+                  </Tooltip.Root>
+                </Tooltip.Provider>
+              </span>
               {#if assistantTurnTimestamp(item.message)}
                 <time datetime={item.message.timestamp}>{assistantTurnTimestamp(item.message)}</time>
               {/if}
@@ -2237,6 +2288,10 @@
     margin: 2px 0px 0 0;
   }
 
+  .message-action-tooltip {
+    display: inline-flex;
+  }
+
   .assistant-turn-actions {
     display: flex;
     align-items: center;
@@ -2288,6 +2343,7 @@
 
   .message-stack.user:hover .message-action-button,
   .message-stack.user:focus-within .message-action-button,
+  .message-action-button[data-revision-active="true"],
   .message-action-button[data-copy-state="copied"] {
     opacity: 1;
     transform: translateY(0);
@@ -2303,24 +2359,8 @@
     color: var(--success);
   }
 
-  .message-action-button[data-copy-state="copied"]::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 7px);
-    z-index: 2;
-    padding: 5px 8px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--panel);
-    box-shadow: var(--shadow-raised);
-    color: var(--text);
-    font-size: 0.68rem;
-    line-height: 1;
-    white-space: nowrap;
-    pointer-events: none;
-    opacity: 1;
-    transform: translateX(-50%);
+  .message-action-button[data-revision-active="true"] {
+    color: var(--accent);
   }
 
   .message-content.user {
@@ -2331,6 +2371,12 @@
     border: none;
     border-radius: 18px 18px 18px 18px;
     background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+  }
+
+  .message-content.user.revision-target {
+    outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+    outline-offset: 2px;
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg));
   }
 
   :global(.app-shell[data-theme-mode="dark"]) .message-content.user {

@@ -20,6 +20,7 @@ vi.mock("../composables/bridgeStore.svelte", () => ({
 const originalAnimate = Element.prototype.animate;
 
 beforeAll(() => {
+  document.body.classList.add("app-shell");
   Element.prototype.animate = vi.fn(() => ({
     cancel: vi.fn(),
     finished: Promise.resolve(),
@@ -27,6 +28,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  document.body.classList.remove("app-shell");
   Element.prototype.animate = originalAnimate;
 });
 
@@ -1149,6 +1151,86 @@ describe("ChatTranscript Activity Trail", () => {
         text: "text only",
         images: [],
       });
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("keeps the active edit target visible and cancels it from the same edit action", async () => {
+    const onRevise = vi.fn();
+    const onCancelRevision = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        revisionEntryId: "active-user-message",
+        onRevise,
+        onCancelRevision,
+        messages: [{
+          id: "active-user-message",
+          role: "user",
+          content: "message being edited",
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const message = target.querySelector<HTMLElement>(
+        '[data-message-id="active-user-message"] .message-content.user',
+      );
+      const edit = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="取消编辑"]',
+      );
+      expect(message?.classList.contains("revision-target")).toBe(true);
+      expect(edit?.dataset.revisionActive).toBe("true");
+      expect(edit?.hasAttribute("title")).toBe(false);
+      expect(chatTranscriptSource).toContain(
+        '<Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>',
+      );
+
+      edit?.click();
+      await tick();
+
+      expect(onCancelRevision).toHaveBeenCalledTimes(1);
+      expect(onRevise).not.toHaveBeenCalled();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("uses the shared short tooltips for edit and copy actions", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        messages: [{
+          id: "user-actions",
+          role: "user",
+          content: "message actions",
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const edit = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="编辑消息"]',
+      );
+      const copy = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="复制消息"]',
+      );
+      expect(edit?.hasAttribute("title")).toBe(false);
+      expect(copy?.hasAttribute("title")).toBe(false);
+      expect(chatTranscriptSource).toContain(
+        "<Tooltip.Content>{messageCopyTooltipLabel(copyKey)}</Tooltip.Content>",
+      );
     } finally {
       await unmount(component);
       target.remove();
