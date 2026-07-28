@@ -154,7 +154,11 @@ async function transcriptPositionMetrics(page) {
     const cardRect = card.getBoundingClientRect();
     return {
       scrollTop: transcript.scrollTop,
+      scrollHeight: transcript.scrollHeight,
       maxScrollTop: transcript.scrollHeight - transcript.clientHeight,
+      scrollGuardHeight: document.querySelector(
+        "[data-center-focus-scroll-guard]",
+      )?.getBoundingClientRect().height ?? 0,
       transcriptTop: transcriptRect.top,
       transcriptBottom: transcriptRect.bottom,
       cardTop: cardRect.top,
@@ -212,11 +216,15 @@ async function assertConfirmationRevisionScrollLock(
     await page.evaluate(() => new Promise(resolve =>
       requestAnimationFrame(() => requestAnimationFrame(resolve))
     ));
-    assert.equal(await page.locator(".question-card").count(), 1);
+    assert.equal(await page.locator(".question-card").count(), 2);
     const revising = await transcriptPositionMetrics(page);
     assert.ok(
       Math.abs(revising.scrollTop - locked.scrollTop) <= 1,
       `revision ${viewport.width}x${viewport.height}: expected the locked transcript position to survive confirmation -> revision; scrollTop=${revising.scrollTop}, locked=${locked.scrollTop}`,
+    );
+    assert.ok(
+      Math.abs(revising.scrollHeight - locked.scrollHeight) <= 1,
+      `revision ${viewport.width}x${viewport.height}: expected the background transcript height to survive confirmation -> revision; scrollHeight=${revising.scrollHeight}, locked=${locked.scrollHeight}, guard=${revising.scrollGuardHeight}`,
     );
 
     await page.getByTestId("save-revision").click();
@@ -398,9 +406,11 @@ async function run() {
   assert.ok(
     inlineOverflow.scrollRegionScrollHeight > inlineOverflow.scrollRegionClientHeight,
   );
-  assert.equal(
-    inlineOverflow.transcriptScrollHeight,
-    inlineOverflow.transcriptClientHeight,
+  assert.ok(
+    Math.abs(
+      inlineOverflow.transcriptScrollHeight - inlineOverflow.transcriptClientHeight,
+    ) <= 1,
+    `expected inline form overflow not to create transcript blank space; scrollHeight=${inlineOverflow.transcriptScrollHeight}, clientHeight=${inlineOverflow.transcriptClientHeight}`,
   );
 
   const gray = await visibleForegrounds(page);

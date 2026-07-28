@@ -48,6 +48,7 @@
   let {
     block,
     active = true,
+    preserveSubmittedRevisionCard = false,
     onPresent,
     onRespond,
     onRevise,
@@ -64,6 +65,7 @@
   }: {
     block: ToolContentBlock;
     active?: boolean;
+    preserveSubmittedRevisionCard?: boolean;
     onPresent: (toolCallId: string) => Promise<RpcResponse>;
     onRespond: (
       toolCallId: string,
@@ -212,7 +214,12 @@
   const showCard = $derived(
     Boolean(request) &&
       (!pending || pendingReady || Boolean(interaction)) &&
-      !(request?.batch && result?.status === "answered" && interaction?.state === "revising"),
+      !(
+        request?.batch &&
+        result?.status === "answered" &&
+        interaction?.state === "revising" &&
+        !preserveSubmittedRevisionCard
+      ),
   );
 
   $effect(() => {
