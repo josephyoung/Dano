@@ -1324,6 +1324,37 @@ describe("QuestionToolCard", () => {
     unmount(component);
   });
 
+  it("keeps the Submitted Form behind an active centered revision", async () => {
+    const response = vi.fn(async () => ({ success: true } as never));
+    const block = submittedFormBlock();
+    block.formInteraction = {
+      interactionId: "confirm-form-1",
+      state: "revising",
+      revision: 2,
+      allowedActions: ["cancel_revision", "submit_revision"],
+      forms: [],
+    };
+    const target = document.createElement("div");
+    const component = mount(QuestionToolCard, {
+      target,
+      props: {
+        block,
+        active: true,
+        preserveSubmittedRevisionCard: true,
+        onPresent: response,
+        onRespond: response,
+        onRevise: response,
+        onSubmitRevision: response,
+      },
+    });
+    await tick();
+
+    expect(target.querySelector("article")).not.toBeNull();
+    expect(target.querySelector<HTMLInputElement>("input")?.value).toBe("个人事务");
+    expect(target.querySelector<HTMLInputElement>("input")?.disabled).toBe(true);
+    unmount(component);
+  });
+
   it("renders the latest revised answer when the Submitted Form returns", async () => {
     const response = vi.fn(async () => ({ success: true } as never));
     const block = submittedFormBlock("awaiting_confirmation");
