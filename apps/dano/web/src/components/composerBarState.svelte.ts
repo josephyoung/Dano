@@ -2,7 +2,6 @@ import type {
   RpcImageContent,
   RpcSlashCommand,
   RpcThinkingLevel,
-  RpcUploadedFileRef,
   RpcWorkspaceEntry,
 } from "@dano/types/protocol";
 import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
@@ -18,6 +17,8 @@ import {
   type ComposerAttachment,
 } from "../utils/attachments";
 import type { RpcModelInfo } from "../utils/models";
+import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
+import type { ComposerSubmissionPayload } from "../utils/composerSubmission";
 import {
   applySlashCommandCompletion,
   debugSlashCommandOptions,
@@ -63,19 +64,15 @@ export interface ComposerBarProps {
   readonly thinkingLevel: RpcThinkingLevel | null;
   readonly autoCompactionEnabled: boolean;
   readonly prefillText: string | null;
-  readonly revision: RevisionPayload | null;
+  readonly revision: HistoricalMessageRevisionPayload | null;
   readonly pendingMessageCount: number;
   readonly editQueuedPayload: EditQueuedPayload | null;
 }
 
 export interface ComposerBarCallbacks {
-  readonly onSubmit: (payload: {
-    message: string;
-    images: RpcImageContent[];
-    files: RpcUploadedFileRef[];
-    revisionEntryId?: string;
-    steer?: boolean;
-  }) => boolean | Promise<boolean>;
+  readonly onSubmit: (
+    payload: ComposerSubmissionPayload
+  ) => boolean | Promise<boolean>;
   readonly onAbort: () => void;
   readonly onCancelRevision: () => void;
   readonly onSelectModel: (model: RpcModelInfo) => void;
@@ -87,14 +84,6 @@ export interface ComposerBarCallbacks {
 export interface ComposerBarReactive {
   inputText: string;
   cursorOffset: number;
-}
-
-export interface RevisionPayload {
-  entryId: string;
-  text: string;
-  preview: string;
-  hasImages: boolean;
-  images: RpcImageContent[];
 }
 
 export interface EditQueuedPayload {
@@ -688,11 +677,7 @@ export function createComposerBarState(
 
   // ---- revision ----
 
-  function handleCancelRevision(
-    fileInputEl?: HTMLInputElement | null,
-    textareaEl?: HTMLTextAreaElement | null,
-    rootEl?: HTMLDivElement | null,
-  ) {
+  function cancelRevision(fileInputEl?: HTMLInputElement | null) {
     const backup = revisionBackup;
     $rx.inputText = backup?.text ?? "";
     attachments = backup ? [...backup.attachments] : [];
@@ -702,6 +687,14 @@ export function createComposerBarState(
     dismissedCommandKey = null;
     dismissedMentionKey = null;
     callbacks.onCancelRevision();
+  }
+
+  function handleCancelRevision(
+    fileInputEl?: HTMLInputElement | null,
+    textareaEl?: HTMLTextAreaElement | null,
+    rootEl?: HTMLDivElement | null,
+  ) {
+    cancelRevision(fileInputEl);
     focusComposer({ textareaEl, rootEl });
   }
 
@@ -892,7 +885,7 @@ export function createComposerBarState(
     );
   });
 
-  let previousRevision: RevisionPayload | null = null;
+  let previousRevision: HistoricalMessageRevisionPayload | null = null;
   $effect(() => {
     const rev = props.revision;
     if (!rev) {
@@ -1007,6 +1000,7 @@ export function createComposerBarState(
     handleMentionClose,
     handleCycleThinkingLevel,
     handleAutoCompactionToggle,
+    cancelRevision,
     handleCancelRevision,
     handleFilePickerOpen,
     handleFileInputChange,

@@ -6,16 +6,18 @@
     RpcImageContent,
     RpcSlashCommand,
     RpcThinkingLevel,
-    RpcUploadedFileRef,
     RpcWorkspaceEntry,
   } from "@dano/types/protocol";
   import FileIcon from "lucide-svelte/icons/file";
+  import Pencil from "lucide-svelte/icons/pencil";
   import X from "lucide-svelte/icons/x";
   import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
   import { t } from "../i18n";
   import { COMPOSER_ATTACHMENT_ACCEPT, MAX_COMPOSER_ATTACHMENT_BYTES, MAX_COMPOSER_ATTACHMENTS, formatAttachmentSize } from "../utils/attachments";
   import type { ComposerAttachment } from "../utils/attachments";
   import type { RpcModelInfo } from "../utils/models";
+  import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
+  import type { ComposerSubmissionPayload } from "../utils/composerSubmission";
   import CommandPalette from "./CommandPalette.svelte";
   import FilePreviewDialog from "./FilePreviewDialog.svelte";
   import WorkspaceMentionPalette from "./WorkspaceMentionPalette.svelte";
@@ -40,11 +42,13 @@
     thinkingLevel = null as RpcThinkingLevel | null,
     autoCompactionEnabled = false,
     prefillText = null as string | null,
-    revision = null as { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] } | null,
+    revision = null as HistoricalMessageRevisionPayload | null,
     pendingMessageCount = 0,
     editQueuedPayload = null as { text: string; images: RpcImageContent[] } | null,
     onInteraction = (() => {}) as () => void,
-    onSubmit = ((_: { message: string; images: RpcImageContent[]; files: RpcUploadedFileRef[]; revisionEntryId?: string; steer?: boolean }) => true) as (payload: { message: string; images: RpcImageContent[]; files: RpcUploadedFileRef[]; revisionEntryId?: string; steer?: boolean }) => boolean | Promise<boolean>,
+    onSubmit = ((_: ComposerSubmissionPayload) => true) as (
+      payload: ComposerSubmissionPayload
+    ) => boolean | Promise<boolean>,
     onAbort = (() => {}) as () => void,
     onCancelRevision = (() => {}) as () => void,
     onSelectModel = ((_: RpcModelInfo) => {}) as (model: RpcModelInfo) => void,
@@ -171,6 +175,10 @@
 
   function handleCancelRevision() {
     composer.handleCancelRevision(fileInputRef, textareaRef, composerRootRef);
+  }
+
+  export function cancelRevision() {
+    composer.cancelRevision(fileInputRef);
   }
 
   function handlePrimaryAction() {
@@ -380,15 +388,17 @@
     {/if}
 
     {#if revision}
-      <div class="revision-banner">
+      <div class="revision-banner" role="status">
         <div class="revision-banner-copy">
-          <p class="revision-preview">{revision.preview}</p>
+          <Pencil aria-hidden="true" size={15} />
+          <span class="revision-preview">
+            {revision.text.replace(/\s+/g, " ").trim()}
+          </span>
         </div>
         <button
           type="button"
           class="revision-cancel-button"
           aria-label={t("composer.revision.cancel")}
-          title={t("composer.revision.cancel")}
           onclick={handleCancelRevision}
         >
           <X aria-hidden="true" size={14} />
@@ -679,51 +689,77 @@
     position: relative;
     display: flex;
     align-items: center;
-    justify-content: center;
-    margin: 0 0 8px;
     min-height: 48px;
+    margin: 0 0 8px;
     padding: 10px 46px 10px 12px;
     border-radius: 14px;
-    border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
-    background: color-mix(in srgb, var(--panel-2) 88%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   }
 
-  .revision-banner-copy { min-width: 0; }
+  .revision-banner-copy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  }
+
+  .revision-banner-copy :global(svg) {
+    flex: 0 0 auto;
+  }
 
   .revision-preview {
+    display: block;
+    min-width: 0;
     margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 0.82rem;
+    font-weight: 650;
     line-height: 1.45;
-    color: var(--text);
-    text-align: center;
   }
 
   .revision-cancel-button {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 4px;
+    right: 4px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 40px;
+    height: 40px;
     padding: 0;
     border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--control-bg);
+    border: none;
+    background: transparent;
     color: var(--text-muted);
-    font-size: 0.7rem;
     cursor: pointer;
-    transition:
-      border-color 0.12s ease,
-      color 0.12s ease,
-      background 0.12s ease;
+    flex: 0 0 40px;
   }
 
-  .revision-cancel-button:hover {
-    border-color: var(--border-strong);
-    background: var(--control-bg);
-    color: var(--text);
+  .revision-cancel-button:hover,
+  .revision-cancel-button:focus-visible,
+  .revision-cancel-button:active {
+    background: transparent;
+  }
+
+  .revision-cancel-button :global(svg) {
+    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .revision-cancel-button:hover :global(svg),
+  .revision-cancel-button:focus-visible :global(svg) {
+    transform: scale(1.06);
+  }
+
+  .revision-cancel-button:active :global(svg) {
+    transform: scale(0.96);
+  }
+
+  .revision-cancel-button:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   .composer-dock.drag-active {
@@ -1074,7 +1110,10 @@
     .composer-inner-wrap { width: 100%; }
     .prompt-input { font-size: 16px; }
 
-    .composer-dock { padding: 10px 14px; border-radius: 24px; }
+    .composer-dock {
+      padding: 10px 14px;
+      border-radius: 24px;
+    }
   }
 
   @media (max-width: 640px) {

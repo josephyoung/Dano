@@ -2,7 +2,6 @@
   import type {
     RpcImageContent,
     RpcThinkingLevel,
-    RpcUploadedFileRef,
     RpcWorkspaceEntry,
     RpcWorkspaceFile,
   } from "@dano/types/protocol";
@@ -47,7 +46,10 @@
     type DebugStreamPlan,
   } from "./utils/debugSession";
   import { parseCompactSlashCommand } from "./utils/slashCommands";
+  import { submitConversationPrompt } from "./utils/promptSubmission";
   import { getRuntimeSlashCommandsAndMentionsEnabled } from "./utils/runtimeConfig";
+  import type { HistoricalMessageRevisionPayload } from "./utils/messageRevision";
+  import type { ComposerSubmissionPayload } from "./utils/composerSubmission";
 
   type RightSidebarTabId = string;
 
@@ -69,13 +71,7 @@
   let activeRightSidebarTabId = $state<RightSidebarTabId>(TREE_TAB_ID);
   let fileViewerTabs = $state<FileViewerTab[]>([]);
   let mainContentRef: AppMainContent | null = $state(null);
-  let pendingRevision = $state<{
-    entryId: string;
-    text: string;
-    preview: string;
-    hasImages: boolean;
-    images: RpcImageContent[];
-  } | null>(null);
+  let pendingRevision = $state<HistoricalMessageRevisionPayload | null>(null);
   let editQueuedPayload = $state<{
     text: string;
     images: RpcImageContent[];
@@ -916,13 +912,7 @@
     }
   }
 
-  async function handlePrompt(payload: {
-    message: string;
-    images: RpcImageContent[];
-    files: RpcUploadedFileRef[];
-    revisionEntryId?: string;
-    steer?: boolean;
-  }): Promise<boolean> {
+  async function handlePrompt(payload: ComposerSubmissionPayload): Promise<boolean> {
     if (activeDebugSessionPath) {
       pendingRevision = null;
       editQueuedPayload = null;
@@ -947,36 +937,27 @@
       return true;
     }
 
-    if (payload.revisionEntryId) {
-      try {
+    const submitted = await submitConversationPrompt(payload, {
+      navigateTree: async entryId => {
         const response = await bridge.sendCommand({
           type: "navigate_tree",
-          entryId: payload.revisionEntryId,
+          entryId,
         });
-        if (!response.success) return false;
-        const result = response.data as { cancelled?: boolean } | undefined;
-        if (result?.cancelled) return false;
-      } catch {
-        return false;
-      }
-    }
-
-    pendingRevision = null;
-    return bridge.sendPrompt(
-      payload.message,
-      payload.images,
-      payload.files,
-      payload.steer ? "steer" : "followUp",
-    );
+        return {
+          success: response.success,
+          cancelled: (response.data as { cancelled?: boolean } | undefined)?.cancelled,
+        };
+      },
+      sendPrompt: (message, images, files, mode) =>
+        bridge.sendPrompt(message, images, files, mode),
+      onAccepted: () => {
+        pendingRevision = null;
+      },
+    });
+    return submitted;
   }
 
-  function handleReviseMessage(payload: {
-    entryId: string;
-    text: string;
-    preview: string;
-    hasImages: boolean;
-    images: RpcImageContent[];
-  }) {
+  function handleReviseMessage(payload: HistoricalMessageRevisionPayload) {
     pendingRevision = payload;
   }
 

@@ -7,7 +7,6 @@
     RpcSessionState,
     RpcSlashCommand,
     RpcThinkingLevel,
-    RpcUploadedFileRef,
     RpcWorkspaceEntry,
     RpcWorkspaceFile,
     FieldAssistCommandPayload,
@@ -22,6 +21,8 @@
   import { t } from "../i18n";
   import { isDebugSessionPath } from "../utils/debugSession";
   import type { RpcModelInfo } from "../utils/models";
+  import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
+  import type { ComposerSubmissionPayload } from "../utils/composerSubmission";
   import { getRuntimeQuickActions } from "../utils/runtimeConfig";
   import type { PendingTranscriptSessionEvent } from "../utils/transcript";
   import {
@@ -30,6 +31,7 @@
   } from "./centerFocusStage";
 
   let transcriptRef: ChatTranscript | null = $state(null);
+  let composerRef: ComposerBar | null = $state(null);
   let centerColumn = $state<HTMLElement | null>(null);
   let centerFocusStage: CenterFocusStage | null = null;
   let centerFocusActive = $state(false);
@@ -69,13 +71,7 @@
     switchGitBranch = (_: string) => Promise.resolve(null as RpcGitRepoState | null),
     createGitBranch = (_: string) => Promise.resolve(null as RpcGitRepoState | null),
     prefillText = null as string | null,
-    pendingRevision = null as {
-      entryId: string;
-      text: string;
-      preview: string;
-      hasImages: boolean;
-      images: RpcImageContent[];
-    } | null,
+    pendingRevision = null as HistoricalMessageRevisionPayload | null,
     allowRevision = false,
     pendingMessageCount = 0,
     queuedUserMessages = [] as readonly RpcQueuedMessage[],
@@ -83,25 +79,13 @@
       text: string;
       images: RpcImageContent[];
     } | null,
-    onSubmit = (_: {
-      message: string;
-      images: RpcImageContent[];
-      files: RpcUploadedFileRef[];
-      revisionEntryId?: string;
-      steer?: boolean;
-    }) => true,
+    onSubmit = (_: ComposerSubmissionPayload) => true,
     onAbort = () => {},
     onLoadOlderTranscript = () => false,
     onSelectModel = (_: RpcModelInfo) => {},
     onSelectThinkingLevel = (_: RpcThinkingLevel) => {},
     onToggleAutoCompaction = (_: boolean) => {},
-    onReviseMessage = (_: {
-      entryId: string;
-      text: string;
-      preview: string;
-      hasImages: boolean;
-      images: RpcImageContent[];
-    }) => {},
+    onReviseMessage = (_: HistoricalMessageRevisionPayload) => {},
     onCancelRevision = () => {},
     onCancelQueued = (_: number) => {},
     onEditQueued = (_: number) => {},
@@ -148,13 +132,7 @@
     switchGitBranch?: (branchName: string) => Promise<RpcGitRepoState | null>;
     createGitBranch?: (branchName: string) => Promise<RpcGitRepoState | null>;
     prefillText?: string | null;
-    pendingRevision?: {
-      entryId: string;
-      text: string;
-      preview: string;
-      hasImages: boolean;
-      images: RpcImageContent[];
-    } | null;
+    pendingRevision?: HistoricalMessageRevisionPayload | null;
     allowRevision?: boolean;
     pendingMessageCount?: number;
     queuedUserMessages?: readonly RpcQueuedMessage[];
@@ -162,25 +140,15 @@
       text: string;
       images: RpcImageContent[];
     } | null;
-    onSubmit?: (payload: {
-      message: string;
-      images: RpcImageContent[];
-      files: RpcUploadedFileRef[];
-      revisionEntryId?: string;
-      steer?: boolean;
-    }) => boolean | Promise<boolean>;
+    onSubmit?: (
+      payload: ComposerSubmissionPayload
+    ) => boolean | Promise<boolean>;
     onAbort?: () => void;
     onLoadOlderTranscript?: () => boolean | Promise<boolean>;
     onSelectModel?: (model: RpcModelInfo) => void;
     onSelectThinkingLevel?: (level: RpcThinkingLevel) => void;
     onToggleAutoCompaction?: (enabled: boolean) => void;
-    onReviseMessage?: (payload: {
-      entryId: string;
-      text: string;
-      preview: string;
-      hasImages: boolean;
-      images: RpcImageContent[];
-    }) => void;
+    onReviseMessage?: (payload: HistoricalMessageRevisionPayload) => void;
     onCancelRevision?: () => void;
     onCancelQueued?: (index: number) => void;
     onEditQueued?: (index: number) => void;
@@ -212,6 +180,10 @@
       toolCallId: target.toolCallId,
       element: target.element,
     });
+  }
+
+  function handleTranscriptCancelRevision(): void {
+    composerRef?.cancelRevision();
   }
 
   $effect(() => {
@@ -246,8 +218,10 @@
     scrollLocked={centerFocusActive}
     showMessageIds={isDebugMode}
     {allowRevision}
+    revisionEntryId={pendingRevision?.entryId ?? null}
     onLoadOlder={onLoadOlderTranscript}
     onRevise={onReviseMessage}
+    onCancelRevision={handleTranscriptCancelRevision}
     onOpenFileReference={onOpenFileReference}
     {readWorkspaceFile}
     {presentQuestionAction}
@@ -295,6 +269,7 @@
   {/if}
 
   <ComposerBar
+    bind:this={composerRef}
     {connectionStatus}
     {isStreaming}
     {isDebugMode}

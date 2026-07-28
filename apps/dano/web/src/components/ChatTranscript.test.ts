@@ -20,6 +20,7 @@ vi.mock("../composables/bridgeStore.svelte", () => ({
 const originalAnimate = Element.prototype.animate;
 
 beforeAll(() => {
+  document.body.classList.add("app-shell");
   Element.prototype.animate = vi.fn(() => ({
     cancel: vi.fn(),
     finished: Promise.resolve(),
@@ -27,6 +28,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  document.body.classList.remove("app-shell");
   Element.prototype.animate = originalAnimate;
 });
 
@@ -1073,6 +1075,239 @@ describe("ChatTranscript Activity Trail", () => {
       expect(target.textContent).toContain("已执行命令");
       expect(target.textContent).not.toContain("/private/company");
       expect(target.textContent).not.toContain("API_TOKEN");
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("starts historical-message editing with the exact supported payload", async () => {
+    const onRevise = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        onRevise,
+        messages: [{
+          id: "user-with-image",
+          role: "user",
+          content: [
+            { type: "text", text: "  当前有哪些能力  " },
+            { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+          ],
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const edit = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="编辑消息"]',
+      );
+      expect(edit).not.toBeNull();
+
+      edit?.click();
+      await tick();
+
+      expect(onRevise).toHaveBeenCalledWith({
+        entryId: "user-with-image",
+        text: "当前有哪些能力",
+        images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      });
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("starts historical-message editing for a text-only user message", async () => {
+    const onRevise = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        onRevise,
+        messages: [{
+          id: "text-only-user",
+          role: "user",
+          content: "  text only  ",
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>(
+        'button[aria-label="编辑消息"]',
+      )?.click();
+      await tick();
+
+      expect(onRevise).toHaveBeenCalledWith({
+        entryId: "text-only-user",
+        text: "text only",
+        images: [],
+      });
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("keeps the active edit target visible and cancels it from the same edit action", async () => {
+    const onRevise = vi.fn();
+    const onCancelRevision = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        isStreaming: true,
+        revisionEntryId: "active-user-message",
+        onRevise,
+        onCancelRevision,
+        messages: [{
+          id: "active-user-message",
+          role: "user",
+          content: "message being edited",
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const message = target.querySelector<HTMLElement>(
+        '[data-message-id="active-user-message"] [aria-current="true"]',
+      );
+      const edit = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="取消编辑"]',
+      );
+      expect(message).not.toBeNull();
+      expect(edit?.hasAttribute("title")).toBe(false);
+
+      edit?.click();
+      await tick();
+
+      expect(onCancelRevision).toHaveBeenCalledTimes(1);
+      expect(onRevise).not.toHaveBeenCalled();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("preserves historical node projection while entering and cancelling editing", async () => {
+    const onRevise = vi.fn();
+    const onCancelRevision = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = createClassComponent({
+      component: ChatTranscript,
+      target,
+      props: {
+        allowRevision: true,
+        revisionEntryId: null as string | null,
+        onRevise,
+        onCancelRevision,
+        messages: [
+          { id: "history-a", role: "user", content: "first historical node" },
+          { id: "history-b", role: "user", content: "second historical node" },
+        ] as never,
+      },
+    });
+
+    const projectedNodeIds = () =>
+      [...target.querySelectorAll<HTMLElement>("[data-tree-entry-id]")]
+        .map(element => element.dataset.treeEntryId);
+
+    try {
+      await tick();
+      const initialNodeIds = projectedNodeIds();
+      target.querySelector<HTMLButtonElement>(
+        '[data-message-id="history-a"] button[aria-label="编辑消息"]',
+      )?.click();
+      await tick();
+      expect(onRevise).toHaveBeenCalledWith({
+        entryId: "history-a",
+        text: "first historical node",
+        images: [],
+      });
+
+      component.$set({ revisionEntryId: "history-a" });
+      await tick();
+      expect(projectedNodeIds()).toEqual(initialNodeIds);
+
+      target.querySelector<HTMLButtonElement>(
+        'button[aria-label="取消编辑"]',
+      )?.click();
+      await tick();
+      expect(onCancelRevision).toHaveBeenCalledTimes(1);
+
+      component.$set({ revisionEntryId: null });
+      await tick();
+      expect(projectedNodeIds()).toEqual(initialNodeIds);
+    } finally {
+      component.$destroy();
+      target.remove();
+    }
+  });
+
+  it("removes native title tooltips from edit and copy actions", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        messages: [{
+          id: "user-actions",
+          role: "user",
+          content: "message actions",
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const edit = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="编辑消息"]',
+      );
+      const copy = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="复制消息"]',
+      );
+      expect(edit?.hasAttribute("title")).toBe(false);
+      expect(copy?.hasAttribute("title")).toBe(false);
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it.each([
+    ["revision is disabled", { allowRevision: false, messages: [{ id: "user-1", role: "user", content: "message" }] }],
+    ["the transcript is busy", { allowRevision: true, isStreaming: true, messages: [{ id: "user-1", role: "user", content: "message" }] }],
+    ["the message is not from the user", { allowRevision: true, messages: [{ id: "assistant-1", role: "assistant", content: "answer" }] }],
+    ["the user message has no identity", { allowRevision: true, messages: [{ role: "user", content: "message" }] }],
+    ["the user message is blank", { allowRevision: true, messages: [{ id: "user-1", role: "user", content: "   " }] }],
+  ])("does not expose historical editing when %s", async (_case, props) => {
+    const onRevise = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: { ...props, onRevise } as never,
+    });
+
+    try {
+      await tick();
+      expect(
+        target.querySelector('button[aria-label="编辑消息"]'),
+      ).toBeNull();
+      expect(onRevise).not.toHaveBeenCalled();
     } finally {
       await unmount(component);
       target.remove();

@@ -27,6 +27,7 @@
     type TranscriptEntry,
     type TranscriptStream,
   } from "../composables/bridgeStore.svelte";
+  import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
   import {
     askUserQuestionReturnedConfirmationFormIds,
     askUserQuestionRequest,
@@ -93,6 +94,7 @@
     getRuntimeTranscriptProcessSummaryEnabled,
   } from "../utils/runtimeConfig";
   import { t } from "../i18n";
+  import * as Tooltip from "./ui/tooltip";
 
   const assistantTurnTimestampFormatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -129,8 +131,10 @@
     scrollLocked = false,
     showMessageIds = false,
     allowRevision = false,
+    revisionEntryId = null as string | null,
     onLoadOlder = () => false,
-    onRevise = (_: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => {},
+    onRevise = (_: HistoricalMessageRevisionPayload) => {},
+    onCancelRevision = () => {},
     onOpenFileReference = (_: { path: string; lineNumber: number }) => {},
     readWorkspaceFile,
     presentQuestionAction = presentQuestion,
@@ -155,8 +159,10 @@
     scrollLocked?: boolean;
     showMessageIds?: boolean;
     allowRevision?: boolean;
+    revisionEntryId?: string | null;
     onLoadOlder?: () => boolean | Promise<boolean>;
-    onRevise?: (payload: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => void;
+    onRevise?: (payload: HistoricalMessageRevisionPayload) => void;
+    onCancelRevision?: () => void;
     onOpenFileReference?: (payload: { path: string; lineNumber: number }) => void;
     readWorkspaceFile?: (path: string) => Promise<{ content: string }>;
     presentQuestionAction?: typeof presentQuestion;
@@ -1037,20 +1043,17 @@
     });
   }
 
-  function revisionPreview(text: string, maxLength: number = 96): string {
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (collapsed.length <= maxLength) return collapsed;
-    return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
-  }
-
   function canReviseMessage(msg: TranscriptEntry): msg is TranscriptEntry & { id: string } {
     return Boolean(
-      allowRevision &&
-        !showBusyIndicator &&
+      (isRevisionTarget(msg) || (allowRevision && !showBusyIndicator)) &&
         msg.role === "user" &&
         typeof msg.id === "string" &&
         userMessageText(msg),
     );
+  }
+
+  function isRevisionTarget(msg: TranscriptEntry): boolean {
+    return typeof msg.id === "string" && msg.id === revisionEntryId;
   }
 
   function canCopyMessage(msg: TranscriptEntry): boolean {
@@ -1140,13 +1143,15 @@
 
   function handleRevise(msg: TranscriptEntry) {
     if (!canReviseMessage(msg)) return;
+    if (isRevisionTarget(msg)) {
+      onCancelRevision();
+      return;
+    }
     const text = userMessageText(msg);
     const images = messageImages(msg);
     onRevise({
       entryId: msg.id,
       text,
-      preview: revisionPreview(text),
-      hasImages: images.length > 0,
       images,
     });
   }
@@ -1618,6 +1623,8 @@
         <div class="message-stack {roleClass(item.message.role)}">
           <div
             class="message-content {roleClass(item.message.role)}"
+            class:revision-target={isRevisionTarget(item.message)}
+            aria-current={isRevisionTarget(item.message) ? "true" : undefined}
             data-user-message-index={item.message.role === "user" ? item.messageIndex : undefined}
           >
             {#if showMessageIds}
@@ -1726,34 +1733,51 @@
           </div>
 
           {#if canCopyMessage(item.message) || canReviseMessage(item.message)}
-            <div class="message-actions">
-              {#if canReviseMessage(item.message)}
-                <button
-                  type="button"
-                  class="message-action-button"
-                  aria-label={t("chatTranscript.editMessage")}
-                  title={t("chatTranscript.editMessage")}
-                  onclick={() => handleRevise(item.message)}
-                >
-                  <Pencil class="message-action-icon" aria-hidden="true" size={14} />
-                </button>
-              {/if}
+            <Tooltip.Provider delayDuration={300}>
+              <div class="message-actions">
+                {#if canReviseMessage(item.message)}
+                  {@const revisionActive = isRevisionTarget(item.message)}
+                  <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                    <Tooltip.Trigger>
+                      {#snippet child({ props })}
+                        <button
+                          {...props}
+                          type="button"
+                          class="message-action-button"
+                          data-revision-active={revisionActive ? "true" : undefined}
+                          aria-label={revisionActive ? t("composer.revision.cancel") : t("chatTranscript.editMessage")}
+                          onclick={() => handleRevise(item.message)}
+                        >
+                          <Pencil class="message-action-icon" aria-hidden="true" size={14} />
+                        </button>
+                      {/snippet}
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
+                  </Tooltip.Root>
+                {/if}
 
-              {#if canCopyMessage(item.message)}
-                {@const copyKey = messageStableKey(item.message, item.messageIndex)}
-                <button
-                  type="button"
-                  class="message-action-button"
-                  data-copy-state={copiedMessageKey === copyKey ? "copied" : undefined}
-                  data-tooltip={messageCopyLabel(copyKey)}
-                  aria-label={messageCopyLabel(copyKey)}
-                  title={messageCopyLabel(copyKey)}
-                  onclick={() => handleCopyMessage(item.message, copyKey)}
-                >
-                  <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
-                </button>
-              {/if}
-            </div>
+                {#if canCopyMessage(item.message)}
+                  {@const copyKey = messageStableKey(item.message, item.messageIndex)}
+                  <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                    <Tooltip.Trigger>
+                      {#snippet child({ props })}
+                        <button
+                          {...props}
+                          type="button"
+                          class="message-action-button"
+                          data-copy-state={copiedMessageKey === copyKey ? "copied" : undefined}
+                          aria-label={messageCopyLabel(copyKey)}
+                          onclick={() => handleCopyMessage(item.message, copyKey)}
+                        >
+                          <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+                        </button>
+                      {/snippet}
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{t("common.copy")}</Tooltip.Content>
+                  </Tooltip.Root>
+                {/if}
+              </div>
+            </Tooltip.Provider>
           {/if}
 
           {#if finalAnswerCopyKey}
@@ -2294,7 +2318,7 @@
   }
 
   .message-stack.user:hover .message-action-button,
-  .message-stack.user:focus-within .message-action-button,
+  .message-action-button[data-revision-active="true"],
   .message-action-button[data-copy-state="copied"] {
     opacity: 1;
     transform: translateY(0);
@@ -2310,7 +2334,11 @@
     color: var(--success);
   }
 
-  .message-action-button[data-copy-state="copied"]::after {
+  .message-action-button[data-revision-active="true"] {
+    color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  }
+
+  .assistant-turn-actions .message-action-button[data-copy-state="copied"]::after {
     content: attr(data-tooltip);
     position: absolute;
     left: 50%;
@@ -2340,8 +2368,18 @@
     background: color-mix(in srgb, var(--accent) 16%, var(--bg));
   }
 
+  .message-content.user.revision-target {
+    outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+    outline-offset: 2px;
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+  }
+
   :global(.app-shell[data-theme-mode="dark"]) .message-content.user {
     background: color-mix(in srgb, var(--accent) 55%, var(--bg));
+  }
+
+  :global(.app-shell[data-theme-mode="dark"]) .message-content.user.revision-target {
+    background: color-mix(in srgb, var(--accent) 64%, var(--bg));
   }
 
   :global(.markdown-renderer) + :global(.markdown-renderer),
