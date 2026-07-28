@@ -677,11 +677,7 @@ export function createComposerBarState(
 
   // ---- revision ----
 
-  function handleCancelRevision(
-    fileInputEl?: HTMLInputElement | null,
-    textareaEl?: HTMLTextAreaElement | null,
-    rootEl?: HTMLDivElement | null,
-  ) {
+  function cancelRevision(fileInputEl?: HTMLInputElement | null) {
     const backup = revisionBackup;
     $rx.inputText = backup?.text ?? "";
     attachments = backup ? [...backup.attachments] : [];
@@ -691,6 +687,14 @@ export function createComposerBarState(
     dismissedCommandKey = null;
     dismissedMentionKey = null;
     callbacks.onCancelRevision();
+  }
+
+  function handleCancelRevision(
+    fileInputEl?: HTMLInputElement | null,
+    textareaEl?: HTMLTextAreaElement | null,
+    rootEl?: HTMLDivElement | null,
+  ) {
+    cancelRevision(fileInputEl);
     focusComposer({ textareaEl, rootEl });
   }
 
@@ -996,6 +1000,7 @@ export function createComposerBarState(
     handleMentionClose,
     handleCycleThinkingLevel,
     handleAutoCompactionToggle,
+    cancelRevision,
     handleCancelRevision,
     handleFilePickerOpen,
     handleFileInputChange,

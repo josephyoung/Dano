@@ -177,6 +177,10 @@
     composer.handleCancelRevision(fileInputRef, textareaRef, composerRootRef);
   }
 
+  export function cancelRevision() {
+    composer.cancelRevision(fileInputRef);
+  }
+
   function handlePrimaryAction() {
     if (composer.showStopButton) {
       composer.handleAbortAction();
@@ -383,12 +387,30 @@
       />
     {/if}
 
+    {#if revision}
+      <div class="revision-banner" role="status">
+        <div class="revision-banner-copy">
+          <Pencil aria-hidden="true" size={15} />
+          <span class="revision-preview">
+            {revision.text.replace(/\s+/g, " ").trim()}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="revision-cancel-button"
+          aria-label={t("composer.revision.cancel")}
+          onclick={handleCancelRevision}
+        >
+          <X aria-hidden="true" size={14} />
+        </button>
+      </div>
+    {/if}
+
     <div
       bind:this={composerDockRef}
       class="composer-dock composer"
       class:multiline={isComposerMultiline}
       class:has-attachments={composer.hasAttachments}
-      class:revising={Boolean(revision)}
       class:disabled={!composer.canEditPrompt}
       class:drag-active={composer.isDragActive}
       role="region"
@@ -407,25 +429,6 @@
         disabled={!composer.canAddAttachments}
         onchange={handleFileInputChange}
       />
-
-      {#if revision}
-        <div class="revision-header" role="status">
-          <div class="revision-header-label">
-            <Pencil aria-hidden="true" size={15} />
-            <span class="revision-header-preview">
-              {revision.text.replace(/\s+/g, " ").trim()}
-            </span>
-          </div>
-          <button
-            type="button"
-            class="revision-cancel-button"
-            aria-label={t("composer.revision.cancel")}
-            onclick={handleCancelRevision}
-          >
-            <X aria-hidden="true" size={14} />
-          </button>
-        </div>
-      {/if}
 
       {#if composer.attachments.length > 0}
         <div class="attachment-strip">
@@ -641,15 +644,11 @@
     --composer-input-line-height: var(--composer-control-size);
     --composer-max-visible-lines: 5;
     --composer-single-line-gap: 10px;
-    --composer-radius: 30px;
-    --revision-header-inset: 6px;
-    --revision-header-offset: 12px;
-    --revision-header-extra-width: 24px;
     display: flex;
     align-items: center;
     gap: var(--composer-single-line-gap);
     padding: 12px 18px;
-    border-radius: var(--composer-radius);
+    border-radius: 30px;
     border: none;
     background: var(--panel);
     box-shadow:
@@ -675,71 +674,56 @@
   }
 
   .composer-dock.has-attachments:not(.multiline) {
-    --composer-radius: 24px;
     flex-wrap: wrap;
     row-gap: 10px;
-    border-radius: var(--composer-radius);
-  }
-
-  .composer-dock.revising:not(.multiline) {
-    flex-wrap: wrap;
-    row-gap: 10px;
-    padding-top: 6px;
-  }
-
-  .composer-dock.revising.multiline {
-    padding-top: 6px;
+    border-radius: 24px;
   }
 
   .composer-dock:has(.attachment-strip):not(.multiline) {
-    --composer-radius: 24px;
     flex-wrap: wrap;
     row-gap: 10px;
-    border-radius: var(--composer-radius);
+    border-radius: 24px;
   }
 
-  .revision-header {
-    order: -2;
-    flex: 0 0 calc(100% + var(--revision-header-extra-width));
+  .revision-banner {
+    position: relative;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    min-width: 0;
-    width: auto;
-    align-self: stretch;
-    min-height: 44px;
-    margin-inline: calc(-1 * var(--revision-header-offset));
-    padding: 2px 2px 2px 14px;
-    border-radius: calc(var(--composer-radius) - var(--revision-header-inset));
+    min-height: 48px;
+    margin: 0 0 8px;
+    padding: 10px 46px 10px 12px;
+    border-radius: 14px;
     background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   }
 
-  .revision-header-label {
+  .revision-banner-copy {
     display: flex;
-    flex: 1 1 auto;
     align-items: center;
     gap: 8px;
     min-width: 0;
-    overflow: hidden;
     color: color-mix(in srgb, var(--accent) 88%, var(--text));
-    font-size: 0.82rem;
-    font-weight: 650;
-    line-height: 1;
   }
 
-  .revision-header-label :global(svg) {
+  .revision-banner-copy :global(svg) {
     flex: 0 0 auto;
   }
 
-  .revision-header-preview {
+  .revision-preview {
     display: block;
     min-width: 0;
+    margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 0.82rem;
+    font-weight: 650;
+    line-height: 1.45;
   }
 
   .revision-cancel-button {
+    position: absolute;
+    top: 4px;
+    right: 4px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1127,16 +1111,8 @@
     .prompt-input { font-size: 16px; }
 
     .composer-dock {
-      --composer-radius: 24px;
-      --revision-header-offset: 8px;
-      --revision-header-extra-width: 16px;
       padding: 10px 14px;
-      border-radius: var(--composer-radius);
-    }
-
-    .composer-dock.multiline {
-      --revision-header-offset: 12px;
-      --revision-header-extra-width: 24px;
+      border-radius: 24px;
     }
   }
 
@@ -1146,12 +1122,8 @@
       margin: 0 auto max(10px, env(safe-area-inset-bottom));
     }
 
-    .composer-dock { gap: 8px; padding: 10px 14px; border-radius: var(--composer-radius); }
-    .composer-dock.multiline {
-      --revision-header-offset: 8px;
-      --revision-header-extra-width: 16px;
-      padding: 14px 14px 12px;
-    }
+    .composer-dock { gap: 8px; padding: 10px 14px; border-radius: 24px; }
+    .composer-dock.multiline { padding: 14px 14px 12px; }
 
     .prompt-input { font-size: 16px; }
     .composer-dock.multiline .prompt-input { padding: 0; }

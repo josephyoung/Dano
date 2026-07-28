@@ -2318,7 +2318,6 @@
   }
 
   .message-stack.user:hover .message-action-button,
-  .message-stack.user:focus-within .message-action-button,
   .message-action-button[data-revision-active="true"],
   .message-action-button[data-copy-state="copied"] {
     opacity: 1;

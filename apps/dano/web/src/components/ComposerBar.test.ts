@@ -390,6 +390,50 @@ describe("ComposerBar prompt submission", () => {
     }
   });
 
+  it("restores the pre-edit draft through the shared revision cancellation action", async () => {
+    const onCancelRevision = vi.fn();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = createClassComponent({
+      component: ComposerBar,
+      target,
+      props: {
+        connectionStatus: "connected",
+        editQueuedPayload: {
+          text: "draft before editing",
+          images: [],
+        },
+        onCancelRevision,
+      },
+    });
+
+    try {
+      await tick();
+      component.$set({
+        revision: {
+          entryId: "historical-user-message",
+          text: "historical message",
+          images: [],
+        },
+      });
+      await tick();
+
+      expect(target.querySelector<HTMLTextAreaElement>("textarea")?.value)
+        .toBe("historical message");
+
+      (component as typeof component & { cancelRevision: () => void })
+        .cancelRevision();
+      await tick();
+
+      expect(onCancelRevision).toHaveBeenCalledTimes(1);
+      expect(target.querySelector<HTMLTextAreaElement>("textarea")?.value)
+        .toBe("draft before editing");
+    } finally {
+      component.$destroy();
+      target.remove();
+    }
+  });
+
   it("renders a bounded single-line original-message preview with an icon-only cancel action", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -410,6 +454,10 @@ describe("ComposerBar prompt submission", () => {
       expect(
         target.querySelector('[role="status"]')?.textContent,
       ).toContain("first line second line with more detail");
+      const composerRegion = target.querySelector('[role="region"]');
+      expect(composerRegion?.querySelector('[role="status"]')).toBeNull();
+      expect(composerRegion?.previousElementSibling?.getAttribute("role"))
+        .toBe("status");
       const cancel = target.querySelector<HTMLButtonElement>(
         'button[aria-label="取消编辑"]',
       );

@@ -31,6 +31,7 @@
   } from "./centerFocusStage";
 
   let transcriptRef: ChatTranscript | null = $state(null);
+  let composerRef: ComposerBar | null = $state(null);
   let centerColumn = $state<HTMLElement | null>(null);
   let centerFocusStage: CenterFocusStage | null = null;
   let centerFocusActive = $state(false);
@@ -181,6 +182,10 @@
     });
   }
 
+  function handleTranscriptCancelRevision(): void {
+    composerRef?.cancelRevision();
+  }
+
   $effect(() => {
     const sessionKey = activeSessionPath;
     centerFocusStage?.setSession(sessionKey);
@@ -216,7 +221,7 @@
     revisionEntryId={pendingRevision?.entryId ?? null}
     onLoadOlder={onLoadOlderTranscript}
     onRevise={onReviseMessage}
-    onCancelRevision={onCancelRevision}
+    onCancelRevision={handleTranscriptCancelRevision}
     onOpenFileReference={onOpenFileReference}
     {readWorkspaceFile}
     {presentQuestionAction}
@@ -264,6 +269,7 @@
   {/if}
 
   <ComposerBar
+    bind:this={composerRef}
     {connectionStatus}
     {isStreaming}
     {isDebugMode}

@@ -139,7 +139,7 @@ describe("App historical-message editing", () => {
         .toBe("/sessions/history.jsonl");
       expect(selectedEntry()).toBe("history-node-a");
 
-      target.querySelector<HTMLButtonElement>("button")?.click();
+      target.querySelector<HTMLButtonElement>('[data-testid="begin-revision"]')?.click();
       await tick();
       expect(target.querySelector('[data-testid="pending-revision"]')?.textContent)
         .toBe("history-node-a");
@@ -147,14 +147,100 @@ describe("App historical-message editing", () => {
       expect(bridge.activeSessionPath).toBe("/sessions/history.jsonl");
       expect(selectedEntry()).toBe("history-node-a");
 
-      const buttons = target.querySelectorAll<HTMLButtonElement>("button");
-      buttons.item(1).click();
+      target.querySelector<HTMLButtonElement>('[data-testid="cancel-revision"]')?.click();
       await tick();
       expect(target.querySelector('[data-testid="pending-revision"]')?.textContent)
         .toBe("none");
       expect(bridge.sendCommand).not.toHaveBeenCalled();
       expect(bridge.activeSessionPath).toBe("/sessions/history.jsonl");
       expect(selectedEntry()).toBe("history-node-a");
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("navigates to the historical node before sending the edited prompt", async () => {
+    vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
+    const calls: string[] = [];
+    bridge.sendCommand.mockImplementationOnce(async command => {
+      calls.push(`navigate:${command.entryId}`);
+      return { success: true };
+    });
+    bridge.sendPrompt.mockImplementationOnce(async (message: string) => {
+      calls.push(`send:${message}`);
+      return true;
+    });
+    const { default: App } = await import("./App.svelte");
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(App, { target });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>('[data-testid="begin-revision"]')?.click();
+      await tick();
+      target.querySelector<HTMLButtonElement>('[data-testid="submit-revision"]')?.click();
+      await vi.waitFor(() => expect(bridge.sendPrompt).toHaveBeenCalledTimes(1));
+
+      expect(calls).toEqual([
+        "navigate:history-node-a",
+        "send:edited historical message",
+      ]);
+      expect(target.querySelector('[data-testid="pending-revision"]')?.textContent)
+        .toBe("none");
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it.each([
+    ["fails", () => Promise.resolve({ success: false })],
+    ["is cancelled", () => Promise.resolve({ success: true, data: { cancelled: true } })],
+    ["rejects", () => Promise.reject(new Error("navigation failed"))],
+  ])("retains the edit and does not send when history navigation %s", async (_case, navigate) => {
+    vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
+    bridge.sendCommand.mockImplementationOnce(navigate);
+    const { default: App } = await import("./App.svelte");
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(App, { target });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>('[data-testid="begin-revision"]')?.click();
+      await tick();
+      target.querySelector<HTMLButtonElement>('[data-testid="submit-revision"]')?.click();
+      await vi.waitFor(() => expect(bridge.sendCommand).toHaveBeenCalledTimes(1));
+
+      expect(bridge.sendPrompt).not.toHaveBeenCalled();
+      expect(target.querySelector('[data-testid="pending-revision"]')?.textContent)
+        .toBe("history-node-a");
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("retains the edit when prompt dispatch is rejected", async () => {
+    vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
+    bridge.sendCommand.mockResolvedValueOnce({ success: true });
+    bridge.sendPrompt.mockResolvedValueOnce(false);
+    const { default: App } = await import("./App.svelte");
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(App, { target });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>('[data-testid="begin-revision"]')?.click();
+      await tick();
+      target.querySelector<HTMLButtonElement>('[data-testid="submit-revision"]')?.click();
+      await vi.waitFor(() => expect(bridge.sendPrompt).toHaveBeenCalledTimes(1));
+
+      expect(target.querySelector('[data-testid="pending-revision"]')?.textContent)
+        .toBe("history-node-a");
     } finally {
       await unmount(component);
       target.remove();
