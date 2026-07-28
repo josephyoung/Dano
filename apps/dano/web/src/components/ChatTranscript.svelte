@@ -1045,8 +1045,7 @@
 
   function canReviseMessage(msg: TranscriptEntry): msg is TranscriptEntry & { id: string } {
     return Boolean(
-      allowRevision &&
-        !showBusyIndicator &&
+      (isRevisionTarget(msg) || (allowRevision && !showBusyIndicator)) &&
         msg.role === "user" &&
         typeof msg.id === "string" &&
         userMessageText(msg),
@@ -1063,10 +1062,6 @@
 
   function messageCopyLabel(key: string): string {
     return copiedMessageKey === key ? t("common.copied") : t("chatTranscript.copyMessage");
-  }
-
-  function messageCopyTooltipLabel(key: string): string {
-    return copiedMessageKey === key ? t("common.copied") : t("common.copy");
   }
 
   function showCopiedMessageState(key: string) {
@@ -1629,6 +1624,7 @@
           <div
             class="message-content {roleClass(item.message.role)}"
             class:revision-target={isRevisionTarget(item.message)}
+            aria-current={isRevisionTarget(item.message) ? "true" : undefined}
             data-user-message-index={item.message.role === "user" ? item.messageIndex : undefined}
           >
             {#if showMessageIds}
@@ -1737,11 +1733,11 @@
           </div>
 
           {#if canCopyMessage(item.message) || canReviseMessage(item.message)}
-            <div class="message-actions">
-              {#if canReviseMessage(item.message)}
-                {@const revisionActive = isRevisionTarget(item.message)}
-                <span class="message-action-tooltip">
-                  <Tooltip.Provider delayDuration={300}>
+            <Tooltip.Provider delayDuration={300}>
+              <div class="message-actions">
+                {#if canReviseMessage(item.message)}
+                  {@const revisionActive = isRevisionTarget(item.message)}
+                  <span class="message-action-tooltip">
                     <Tooltip.Root ignoreNonKeyboardFocus={false}>
                       <Tooltip.Trigger>
                         {#snippet child({ props })}
@@ -1759,14 +1755,12 @@
                       </Tooltip.Trigger>
                       <Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
                     </Tooltip.Root>
-                  </Tooltip.Provider>
-                </span>
-              {/if}
+                  </span>
+                {/if}
 
-              {#if canCopyMessage(item.message)}
-                {@const copyKey = messageStableKey(item.message, item.messageIndex)}
-                <span class="message-action-tooltip">
-                  <Tooltip.Provider delayDuration={300}>
+                {#if canCopyMessage(item.message)}
+                  {@const copyKey = messageStableKey(item.message, item.messageIndex)}
+                  <span class="message-action-tooltip">
                     <Tooltip.Root ignoreNonKeyboardFocus={false}>
                       <Tooltip.Trigger>
                         {#snippet child({ props })}
@@ -1782,12 +1776,12 @@
                           </button>
                         {/snippet}
                       </Tooltip.Trigger>
-                      <Tooltip.Content>{messageCopyTooltipLabel(copyKey)}</Tooltip.Content>
+                      <Tooltip.Content>{t("common.copy")}</Tooltip.Content>
                     </Tooltip.Root>
-                  </Tooltip.Provider>
-                </span>
-              {/if}
-            </div>
+                  </span>
+                {/if}
+              </div>
+            </Tooltip.Provider>
           {/if}
 
           {#if finalAnswerCopyKey}
@@ -1798,27 +1792,17 @@
                 focusedFinalAnswerActionKey === finalAnswerCopyKey ||
                 copiedMessageKey === finalAnswerCopyKey}
             >
-              <span class="message-action-tooltip">
-                <Tooltip.Provider delayDuration={300}>
-                  <Tooltip.Root ignoreNonKeyboardFocus={false}>
-                    <Tooltip.Trigger>
-                      {#snippet child({ props })}
-                        <button
-                          {...props}
-                          type="button"
-                          class="message-action-button"
-                          data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
-                          aria-label={messageCopyLabel(finalAnswerCopyKey)}
-                          onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
-                        >
-                          <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
-                        </button>
-                      {/snippet}
-                    </Tooltip.Trigger>
-                    <Tooltip.Content>{messageCopyTooltipLabel(finalAnswerCopyKey)}</Tooltip.Content>
-                  </Tooltip.Root>
-                </Tooltip.Provider>
-              </span>
+              <button
+                type="button"
+                class="message-action-button"
+                data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
+                data-tooltip={messageCopyLabel(finalAnswerCopyKey)}
+                aria-label={messageCopyLabel(finalAnswerCopyKey)}
+                title={messageCopyLabel(finalAnswerCopyKey)}
+                onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
+              >
+                <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+              </button>
               {#if assistantTurnTimestamp(item.message)}
                 <time datetime={item.message.timestamp}>{assistantTurnTimestamp(item.message)}</time>
               {/if}
@@ -2360,7 +2344,27 @@
   }
 
   .message-action-button[data-revision-active="true"] {
-    color: var(--accent);
+    color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  }
+
+  .assistant-turn-actions .message-action-button[data-copy-state="copied"]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 7px);
+    z-index: 2;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    box-shadow: var(--shadow-raised);
+    color: var(--text);
+    font-size: 0.68rem;
+    line-height: 1;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 1;
+    transform: translateX(-50%);
   }
 
   .message-content.user {
@@ -2381,6 +2385,10 @@
 
   :global(.app-shell[data-theme-mode="dark"]) .message-content.user {
     background: color-mix(in srgb, var(--accent) 55%, var(--bg));
+  }
+
+  :global(.app-shell[data-theme-mode="dark"]) .message-content.user.revision-target {
+    background: color-mix(in srgb, var(--accent) 64%, var(--bg));
   }
 
   :global(.markdown-renderer) + :global(.markdown-renderer),

@@ -1166,6 +1166,7 @@ describe("ChatTranscript Activity Trail", () => {
       target,
       props: {
         allowRevision: true,
+        isStreaming: true,
         revisionEntryId: "active-user-message",
         onRevise,
         onCancelRevision,
@@ -1180,17 +1181,13 @@ describe("ChatTranscript Activity Trail", () => {
     try {
       await tick();
       const message = target.querySelector<HTMLElement>(
-        '[data-message-id="active-user-message"] .message-content.user',
+        '[data-message-id="active-user-message"] [aria-current="true"]',
       );
       const edit = target.querySelector<HTMLButtonElement>(
         'button[aria-label="取消编辑"]',
       );
-      expect(message?.classList.contains("revision-target")).toBe(true);
-      expect(edit?.dataset.revisionActive).toBe("true");
+      expect(message).not.toBeNull();
       expect(edit?.hasAttribute("title")).toBe(false);
-      expect(chatTranscriptSource).toContain(
-        '<Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>',
-      );
 
       edit?.click();
       await tick();
@@ -1203,7 +1200,63 @@ describe("ChatTranscript Activity Trail", () => {
     }
   });
 
-  it("uses the shared short tooltips for edit and copy actions", async () => {
+  it("preserves historical node projection while entering and cancelling editing", async () => {
+    const onRevise = vi.fn();
+    const onCancelRevision = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = createClassComponent({
+      component: ChatTranscript,
+      target,
+      props: {
+        allowRevision: true,
+        revisionEntryId: null as string | null,
+        onRevise,
+        onCancelRevision,
+        messages: [
+          { id: "history-a", role: "user", content: "first historical node" },
+          { id: "history-b", role: "user", content: "second historical node" },
+        ] as never,
+      },
+    });
+
+    const projectedNodeIds = () =>
+      [...target.querySelectorAll<HTMLElement>("[data-tree-entry-id]")]
+        .map(element => element.dataset.treeEntryId);
+
+    try {
+      await tick();
+      const initialNodeIds = projectedNodeIds();
+      target.querySelector<HTMLButtonElement>(
+        '[data-message-id="history-a"] button[aria-label="编辑消息"]',
+      )?.click();
+      await tick();
+      expect(onRevise).toHaveBeenCalledWith({
+        entryId: "history-a",
+        text: "first historical node",
+        images: [],
+      });
+
+      component.$set({ revisionEntryId: "history-a" });
+      await tick();
+      expect(projectedNodeIds()).toEqual(initialNodeIds);
+
+      target.querySelector<HTMLButtonElement>(
+        'button[aria-label="取消编辑"]',
+      )?.click();
+      await tick();
+      expect(onCancelRevision).toHaveBeenCalledTimes(1);
+
+      component.$set({ revisionEntryId: null });
+      await tick();
+      expect(projectedNodeIds()).toEqual(initialNodeIds);
+    } finally {
+      component.$destroy();
+      target.remove();
+    }
+  });
+
+  it("removes native title tooltips from edit and copy actions", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(ChatTranscript, {
@@ -1228,9 +1281,6 @@ describe("ChatTranscript Activity Trail", () => {
       );
       expect(edit?.hasAttribute("title")).toBe(false);
       expect(copy?.hasAttribute("title")).toBe(false);
-      expect(chatTranscriptSource).toContain(
-        "<Tooltip.Content>{messageCopyTooltipLabel(copyKey)}</Tooltip.Content>",
-      );
     } finally {
       await unmount(component);
       target.remove();

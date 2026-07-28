@@ -705,7 +705,8 @@
     align-items: center;
     justify-content: space-between;
     min-width: 0;
-    width: calc(100% + var(--revision-header-extra-width));
+    width: auto;
+    align-self: stretch;
     min-height: 44px;
     margin-inline: calc(-1 * var(--revision-header-offset));
     padding: 2px 2px 2px 14px;
@@ -720,7 +721,7 @@
     gap: 8px;
     min-width: 0;
     overflow: hidden;
-    color: var(--accent);
+    color: color-mix(in srgb, var(--accent) 88%, var(--text));
     font-size: 0.82rem;
     font-weight: 650;
     line-height: 1;
@@ -1132,6 +1133,11 @@
       padding: 10px 14px;
       border-radius: var(--composer-radius);
     }
+
+    .composer-dock.multiline {
+      --revision-header-offset: 12px;
+      --revision-header-extra-width: 24px;
+    }
   }
 
   @media (max-width: 640px) {
@@ -1141,7 +1147,11 @@
     }
 
     .composer-dock { gap: 8px; padding: 10px 14px; border-radius: var(--composer-radius); }
-    .composer-dock.multiline { padding: 14px 14px 12px; }
+    .composer-dock.multiline {
+      --revision-header-offset: 8px;
+      --revision-header-extra-width: 16px;
+      padding: 14px 14px 12px;
+    }
 
     .prompt-input { font-size: 16px; }
     .composer-dock.multiline .prompt-input { padding: 0; }
