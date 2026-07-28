@@ -1737,48 +1737,44 @@
               <div class="message-actions">
                 {#if canReviseMessage(item.message)}
                   {@const revisionActive = isRevisionTarget(item.message)}
-                  <span class="message-action-tooltip">
-                    <Tooltip.Root ignoreNonKeyboardFocus={false}>
-                      <Tooltip.Trigger>
-                        {#snippet child({ props })}
-                          <button
-                            {...props}
-                            type="button"
-                            class="message-action-button"
-                            data-revision-active={revisionActive ? "true" : undefined}
-                            aria-label={revisionActive ? t("composer.revision.cancel") : t("chatTranscript.editMessage")}
-                            onclick={() => handleRevise(item.message)}
-                          >
-                            <Pencil class="message-action-icon" aria-hidden="true" size={14} />
-                          </button>
-                        {/snippet}
-                      </Tooltip.Trigger>
-                      <Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
-                    </Tooltip.Root>
-                  </span>
+                  <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                    <Tooltip.Trigger>
+                      {#snippet child({ props })}
+                        <button
+                          {...props}
+                          type="button"
+                          class="message-action-button"
+                          data-revision-active={revisionActive ? "true" : undefined}
+                          aria-label={revisionActive ? t("composer.revision.cancel") : t("chatTranscript.editMessage")}
+                          onclick={() => handleRevise(item.message)}
+                        >
+                          <Pencil class="message-action-icon" aria-hidden="true" size={14} />
+                        </button>
+                      {/snippet}
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
+                  </Tooltip.Root>
                 {/if}
 
                 {#if canCopyMessage(item.message)}
                   {@const copyKey = messageStableKey(item.message, item.messageIndex)}
-                  <span class="message-action-tooltip">
-                    <Tooltip.Root ignoreNonKeyboardFocus={false}>
-                      <Tooltip.Trigger>
-                        {#snippet child({ props })}
-                          <button
-                            {...props}
-                            type="button"
-                            class="message-action-button"
-                            data-copy-state={copiedMessageKey === copyKey ? "copied" : undefined}
-                            aria-label={messageCopyLabel(copyKey)}
-                            onclick={() => handleCopyMessage(item.message, copyKey)}
-                          >
-                            <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
-                          </button>
-                        {/snippet}
-                      </Tooltip.Trigger>
-                      <Tooltip.Content>{t("common.copy")}</Tooltip.Content>
-                    </Tooltip.Root>
-                  </span>
+                  <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                    <Tooltip.Trigger>
+                      {#snippet child({ props })}
+                        <button
+                          {...props}
+                          type="button"
+                          class="message-action-button"
+                          data-copy-state={copiedMessageKey === copyKey ? "copied" : undefined}
+                          aria-label={messageCopyLabel(copyKey)}
+                          onclick={() => handleCopyMessage(item.message, copyKey)}
+                        >
+                          <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+                        </button>
+                      {/snippet}
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{t("common.copy")}</Tooltip.Content>
+                  </Tooltip.Root>
                 {/if}
               </div>
             </Tooltip.Provider>
@@ -2270,10 +2266,6 @@
     width: fit-content;
     max-width: min(720px, 100%);
     margin: 2px 0px 0 0;
-  }
-
-  .message-action-tooltip {
-    display: inline-flex;
   }
 
   .assistant-turn-actions {
