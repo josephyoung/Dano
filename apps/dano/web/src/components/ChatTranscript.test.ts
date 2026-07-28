@@ -1079,6 +1079,109 @@ describe("ChatTranscript Activity Trail", () => {
     }
   });
 
+  it("starts historical-message editing with the exact supported payload", async () => {
+    const onRevise = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        onRevise,
+        messages: [{
+          id: "user-with-image",
+          role: "user",
+          content: [
+            { type: "text", text: "  当前有哪些能力  " },
+            { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+          ],
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const edit = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="编辑消息"]',
+      );
+      expect(edit).not.toBeNull();
+
+      edit?.click();
+      await tick();
+
+      expect(onRevise).toHaveBeenCalledWith({
+        entryId: "user-with-image",
+        text: "当前有哪些能力",
+        images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      });
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it("starts historical-message editing for a text-only user message", async () => {
+    const onRevise = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        allowRevision: true,
+        onRevise,
+        messages: [{
+          id: "text-only-user",
+          role: "user",
+          content: "  text only  ",
+        }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      target.querySelector<HTMLButtonElement>(
+        'button[aria-label="编辑消息"]',
+      )?.click();
+      await tick();
+
+      expect(onRevise).toHaveBeenCalledWith({
+        entryId: "text-only-user",
+        text: "text only",
+        images: [],
+      });
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it.each([
+    ["revision is disabled", { allowRevision: false, messages: [{ id: "user-1", role: "user", content: "message" }] }],
+    ["the transcript is busy", { allowRevision: true, isStreaming: true, messages: [{ id: "user-1", role: "user", content: "message" }] }],
+    ["the message is not from the user", { allowRevision: true, messages: [{ id: "assistant-1", role: "assistant", content: "answer" }] }],
+    ["the user message has no identity", { allowRevision: true, messages: [{ role: "user", content: "message" }] }],
+    ["the user message is blank", { allowRevision: true, messages: [{ id: "user-1", role: "user", content: "   " }] }],
+  ])("does not expose historical editing when %s", async (_case, props) => {
+    const onRevise = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: { ...props, onRevise } as never,
+    });
+
+    try {
+      await tick();
+      expect(
+        target.querySelector('button[aria-label="编辑消息"]'),
+      ).toBeNull();
+      expect(onRevise).not.toHaveBeenCalled();
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
   it("removes only adjacent activity row gaps while preserving conversation spacing and hit areas", () => {
     expect(chatTranscriptSource).toContain("--transcript-row-gap: 8px;");
     expect(chatTranscriptSource).toContain("gap: var(--transcript-row-gap);");

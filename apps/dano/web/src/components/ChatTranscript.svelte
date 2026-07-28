@@ -27,6 +27,7 @@
     type TranscriptEntry,
     type TranscriptStream,
   } from "../composables/bridgeStore.svelte";
+  import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
   import {
     askUserQuestionReturnedConfirmationFormIds,
     askUserQuestionRequest,
@@ -130,7 +131,7 @@
     showMessageIds = false,
     allowRevision = false,
     onLoadOlder = () => false,
-    onRevise = (_: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => {},
+    onRevise = (_: HistoricalMessageRevisionPayload) => {},
     onOpenFileReference = (_: { path: string; lineNumber: number }) => {},
     readWorkspaceFile,
     presentQuestionAction = presentQuestion,
@@ -156,7 +157,7 @@
     showMessageIds?: boolean;
     allowRevision?: boolean;
     onLoadOlder?: () => boolean | Promise<boolean>;
-    onRevise?: (payload: { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] }) => void;
+    onRevise?: (payload: HistoricalMessageRevisionPayload) => void;
     onOpenFileReference?: (payload: { path: string; lineNumber: number }) => void;
     readWorkspaceFile?: (path: string) => Promise<{ content: string }>;
     presentQuestionAction?: typeof presentQuestion;
@@ -1037,12 +1038,6 @@
     });
   }
 
-  function revisionPreview(text: string, maxLength: number = 96): string {
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (collapsed.length <= maxLength) return collapsed;
-    return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
-  }
-
   function canReviseMessage(msg: TranscriptEntry): msg is TranscriptEntry & { id: string } {
     return Boolean(
       allowRevision &&
@@ -1145,8 +1140,6 @@
     onRevise({
       entryId: msg.id,
       text,
-      preview: revisionPreview(text),
-      hasImages: images.length > 0,
       images,
     });
   }

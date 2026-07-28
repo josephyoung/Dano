@@ -6,16 +6,18 @@
     RpcImageContent,
     RpcSlashCommand,
     RpcThinkingLevel,
-    RpcUploadedFileRef,
     RpcWorkspaceEntry,
   } from "@dano/types/protocol";
   import FileIcon from "lucide-svelte/icons/file";
+  import Pencil from "lucide-svelte/icons/pencil";
   import X from "lucide-svelte/icons/x";
   import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
   import { t } from "../i18n";
   import { COMPOSER_ATTACHMENT_ACCEPT, MAX_COMPOSER_ATTACHMENT_BYTES, MAX_COMPOSER_ATTACHMENTS, formatAttachmentSize } from "../utils/attachments";
   import type { ComposerAttachment } from "../utils/attachments";
   import type { RpcModelInfo } from "../utils/models";
+  import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
+  import type { ComposerSubmissionPayload } from "../utils/composerSubmission";
   import CommandPalette from "./CommandPalette.svelte";
   import FilePreviewDialog from "./FilePreviewDialog.svelte";
   import WorkspaceMentionPalette from "./WorkspaceMentionPalette.svelte";
@@ -40,11 +42,13 @@
     thinkingLevel = null as RpcThinkingLevel | null,
     autoCompactionEnabled = false,
     prefillText = null as string | null,
-    revision = null as { entryId: string; text: string; preview: string; hasImages: boolean; images: RpcImageContent[] } | null,
+    revision = null as HistoricalMessageRevisionPayload | null,
     pendingMessageCount = 0,
     editQueuedPayload = null as { text: string; images: RpcImageContent[] } | null,
     onInteraction = (() => {}) as () => void,
-    onSubmit = ((_: { message: string; images: RpcImageContent[]; files: RpcUploadedFileRef[]; revisionEntryId?: string; steer?: boolean }) => true) as (payload: { message: string; images: RpcImageContent[]; files: RpcUploadedFileRef[]; revisionEntryId?: string; steer?: boolean }) => boolean | Promise<boolean>,
+    onSubmit = ((_: ComposerSubmissionPayload) => true) as (
+      payload: ComposerSubmissionPayload
+    ) => boolean | Promise<boolean>,
     onAbort = (() => {}) as () => void,
     onCancelRevision = (() => {}) as () => void,
     onSelectModel = ((_: RpcModelInfo) => {}) as (model: RpcModelInfo) => void,
@@ -379,28 +383,12 @@
       />
     {/if}
 
-    {#if revision}
-      <div class="revision-banner">
-        <div class="revision-banner-copy">
-          <p class="revision-preview">{revision.preview}</p>
-        </div>
-        <button
-          type="button"
-          class="revision-cancel-button"
-          aria-label={t("composer.revision.cancel")}
-          title={t("composer.revision.cancel")}
-          onclick={handleCancelRevision}
-        >
-          <X aria-hidden="true" size={14} />
-        </button>
-      </div>
-    {/if}
-
     <div
       bind:this={composerDockRef}
       class="composer-dock composer"
       class:multiline={isComposerMultiline}
       class:has-attachments={composer.hasAttachments}
+      class:revising={Boolean(revision)}
       class:disabled={!composer.canEditPrompt}
       class:drag-active={composer.isDragActive}
       role="region"
@@ -419,6 +407,24 @@
         disabled={!composer.canAddAttachments}
         onchange={handleFileInputChange}
       />
+
+      {#if revision}
+        <div class="revision-header" role="status">
+          <div class="revision-header-label">
+            <Pencil aria-hidden="true" size={15} />
+            <span>{t("composer.revision.label")}</span>
+          </div>
+          <button
+            type="button"
+            class="revision-cancel-button"
+            aria-label={t("composer.revision.cancel")}
+            title={t("composer.revision.cancel")}
+            onclick={handleCancelRevision}
+          >
+            <X aria-hidden="true" size={14} />
+          </button>
+        </div>
+      {/if}
 
       {#if composer.attachments.length > 0}
         <div class="attachment-strip">
@@ -669,61 +675,76 @@
     border-radius: 24px;
   }
 
+  .composer-dock.revising:not(.multiline) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+    padding-top: 6px;
+  }
+
+  .composer-dock.revising.multiline {
+    padding-top: 6px;
+  }
+
   .composer-dock:has(.attachment-strip):not(.multiline) {
     flex-wrap: wrap;
     row-gap: 10px;
     border-radius: 24px;
   }
 
-  .revision-banner {
-    position: relative;
+  .revision-header {
+    order: -2;
+    flex: 0 0 100%;
     display: flex;
     align-items: center;
-    justify-content: center;
-    margin: 0 0 8px;
-    min-height: 48px;
-    padding: 10px 46px 10px 12px;
-    border-radius: 14px;
-    border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
-    background: color-mix(in srgb, var(--panel-2) 88%, transparent);
+    justify-content: space-between;
+    min-width: 0;
+    min-height: 44px;
+    padding: 2px 2px 2px 14px;
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--success) 10%, var(--panel));
   }
 
-  .revision-banner-copy { min-width: 0; }
-
-  .revision-preview {
-    margin: 0;
+  .revision-header-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--success);
     font-size: 0.82rem;
-    line-height: 1.45;
-    color: var(--text);
-    text-align: center;
+    font-weight: 650;
+    line-height: 1;
   }
 
   .revision-cancel-button {
-    position: absolute;
-    top: 8px;
-    right: 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 40px;
+    height: 40px;
     padding: 0;
     border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--control-bg);
+    border: none;
+    background: transparent;
     color: var(--text-muted);
-    font-size: 0.7rem;
     cursor: pointer;
     transition:
-      border-color 0.12s ease,
       color 0.12s ease,
-      background 0.12s ease;
+      background 0.12s ease,
+      transform 0.12s ease;
   }
 
   .revision-cancel-button:hover {
-    border-color: var(--border-strong);
-    background: var(--control-bg);
+    background: var(--surface-hover);
     color: var(--text);
+  }
+
+  .revision-cancel-button:active {
+    transform: scale(0.96);
+  }
+
+  .revision-cancel-button:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   .composer-dock.drag-active {
