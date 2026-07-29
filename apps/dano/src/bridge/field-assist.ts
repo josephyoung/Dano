@@ -168,7 +168,7 @@ export function createPiSdkFieldAssistClient(options: {
             ? M
             : never,
           thinkingLevel: "off",
-          modelRegistry: options.session.modelRegistry,
+          modelRuntime: options.session.modelRuntime,
           settingsManager: SettingsManager.inMemory({
             compaction: { enabled: false },
             retry: { enabled: false },

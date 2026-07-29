@@ -52,8 +52,8 @@ export async function createDetachedAgentSession(
   });
   const defaultModel =
     options.defaultModel?.provider && options.defaultModel.modelId
-      ? services.modelRegistry
-          .getAvailable()
+      ? services.modelRuntime
+          .getAvailableSnapshot()
           .find(
             model =>
               model.provider === options.defaultModel?.provider &&

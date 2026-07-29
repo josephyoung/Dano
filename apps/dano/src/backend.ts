@@ -239,7 +239,7 @@ export function createDanoBackendFromSession(
     },
 
     getAvailableModels() {
-      return session.modelRegistry.getAvailable();
+      return [...session.modelRuntime.getAvailableSnapshot()];
     },
 
     getCurrentModel() {

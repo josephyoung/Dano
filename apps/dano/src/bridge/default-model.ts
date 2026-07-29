@@ -238,7 +238,7 @@ export function resolveAgentSessionDefaults(
   session: AgentSession,
   defaults?: DefaultSessionSettings,
 ): SessionDefaultsState {
-  const availableModels = session.modelRegistry.getAvailable();
+  const availableModels = session.modelRuntime.getAvailableSnapshot();
   const branch = session.sessionManager.getBranch();
   const latestModel = findLatestModelInfo(branch);
   const model =
