@@ -323,6 +323,15 @@
   });
 
   $effect(() => {
+    const el = textareaRef;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(updateComposerMultiline);
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
     if (typeof prefillText === "string") {
       composer.applyExternalText(prefillText, {
         fileInputEl: fileInputRef,

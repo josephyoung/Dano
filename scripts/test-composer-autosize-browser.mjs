@@ -34,6 +34,9 @@ async function textareaMetrics(page) {
       requiredLines: Math.round((textarea.scrollHeight - padding) / lineHeight),
       overflowY: style.overflowY,
       value: textarea.value,
+      multiline: textarea.closest(".composer-dock")?.classList.contains(
+        "multiline",
+      ) ?? false,
     };
   });
 }
@@ -127,6 +130,24 @@ async function run() {
   const restoredBackfill = await textareaMetrics(page);
   assert.equal(restoredBackfill.requiredLines, 2);
   assertVisibleThroughFiveLines(restoredBackfill, "backfill after width recovery");
+
+  await replaceInput(page, "");
+  await replaceInput(
+    page,
+    "这是一段在宽屏保持单行、缩窄后产生软换行并切换多行布局的文本。",
+  );
+  const wideSingleLine = await textareaMetrics(page);
+  assert.equal(wideSingleLine.requiredLines, 1);
+  assert.equal(wideSingleLine.multiline, false);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await waitForLayout(page);
+  const narrowSoftWrap = await textareaMetrics(page);
+  assert.ok(narrowSoftWrap.requiredLines >= 2);
+  assert.equal(narrowSoftWrap.multiline, true);
+
+  await replaceInput(page, "");
+  assert.equal((await textareaMetrics(page)).multiline, false);
 
   await page.setViewportSize({ width: 660, height: 900 });
   await replaceInput(page, "第一行\n第二行\n第三行\n第四行\n第五行");
