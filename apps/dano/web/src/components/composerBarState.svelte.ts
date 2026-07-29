@@ -95,8 +95,6 @@ export interface EditQueuedPayload {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MAX_TEXTAREA_VISIBLE_LINES = 5;
-
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
@@ -451,34 +449,6 @@ export function createComposerBarState(
     $rx.cursorOffset = textareaEl?.selectionStart ?? $rx.inputText.length;
   }
 
-  function resizeTextarea(textareaEl: HTMLTextAreaElement | null | undefined) {
-    queueMicrotask(() => {
-      const el = textareaEl;
-      if (!el) return;
-
-      el.style.height = "auto";
-      const styles = window.getComputedStyle(el);
-      const lineHeight = Number.parseFloat(styles.lineHeight) || 0;
-      const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
-      const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
-      const maxVisibleLines =
-        Number.parseInt(
-          styles.getPropertyValue("--composer-max-visible-lines"),
-          10,
-        ) || DEFAULT_MAX_TEXTAREA_VISIBLE_LINES;
-      const contentPadding = paddingTop + paddingBottom;
-      const singleLineHeight = lineHeight + contentPadding;
-      const maxHeight = lineHeight * maxVisibleLines + contentPadding;
-      const nextHeight = Math.min(
-        Math.max(el.scrollHeight, singleLineHeight),
-        maxHeight,
-      );
-
-      el.style.height = `${Math.ceil(nextHeight)}px`;
-      el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
-    });
-  }
-
   function shouldRevealComposer(
     rootEl: HTMLDivElement | null | undefined,
   ): boolean {
@@ -506,7 +476,6 @@ export function createComposerBarState(
       const cursor = $rx.inputText.length;
       el.setSelectionRange(cursor, cursor);
       $rx.cursorOffset = cursor;
-      resizeTextarea(el);
     });
   }
 
@@ -537,7 +506,6 @@ export function createComposerBarState(
     message: string,
     steer: boolean,
     fileInputEl?: HTMLInputElement | null,
-    textareaEl?: HTMLTextAreaElement | null,
   ): Promise<boolean> {
     if (isSubmitting) return false;
 
@@ -574,7 +542,6 @@ export function createComposerBarState(
       );
       if (fileInputEl) fileInputEl.value = "";
       if (attachments.length === 0) clearAttachmentNotice();
-      resizeTextarea(textareaEl);
       return true;
     } finally {
       isSubmitting = false;
@@ -584,7 +551,6 @@ export function createComposerBarState(
   async function handleSubmit(
     steer: boolean,
     fileInputEl?: HTMLInputElement | null,
-    textareaEl?: HTMLTextAreaElement | null,
   ): Promise<boolean> {
     const text = normalizedInputText;
     if (!canSubmit) return false;
@@ -598,7 +564,7 @@ export function createComposerBarState(
       setAttachmentNotice(t("composer.warning.compactNoImages"));
       return false;
     }
-    return submitMessage(text, steer, fileInputEl, textareaEl);
+    return submitMessage(text, steer, fileInputEl);
   }
 
   function handleAbortAction(): boolean {
@@ -625,7 +591,6 @@ export function createComposerBarState(
       el.focus();
       el.setSelectionRange(ns.cursor, ns.cursor);
       $rx.cursorOffset = ns.cursor;
-      resizeTextarea(el);
     });
   }
 
@@ -655,7 +620,6 @@ export function createComposerBarState(
       el.focus();
       el.setSelectionRange(ns.cursor, ns.cursor);
       $rx.cursorOffset = ns.cursor;
-      resizeTextarea(el);
     });
   }
 
@@ -1015,6 +979,5 @@ export function createComposerBarState(
     handleInputKeydown,
     applyExternalText,
     focusComposer,
-    resizeTextarea,
   };
 }
