@@ -84,10 +84,12 @@ async function run() {
   await waitForLayout(page);
 
   const observedLines = new Set();
+  let criticalViewportMetrics;
   for (let width = 1_440; width >= 320; width -= 20) {
     await page.setViewportSize({ width, height: 900 });
     await waitForLayout(page);
     const metrics = await textareaMetrics(page);
+    if (width === 520) criticalViewportMetrics = metrics;
     if (metrics.requiredLines <= 5) {
       observedLines.add(metrics.requiredLines);
       assert.ok(
@@ -111,6 +113,20 @@ async function run() {
     [...observedLines].filter(lines => lines >= 2 && lines <= 5).sort(),
     [2, 3, 4, 5],
   );
+  assert.deepEqual(
+    {
+      clientHeight: criticalViewportMetrics?.clientHeight,
+      scrollHeight: criticalViewportMetrics?.scrollHeight,
+      requiredLines: criticalViewportMetrics?.requiredLines,
+    },
+    { clientHeight: 144, scrollHeight: 144, requiredLines: 4 },
+  );
+
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await waitForLayout(page);
+  const restoredBackfill = await textareaMetrics(page);
+  assert.equal(restoredBackfill.requiredLines, 2);
+  assertVisibleThroughFiveLines(restoredBackfill, "backfill after width recovery");
 
   await page.setViewportSize({ width: 660, height: 900 });
   await replaceInput(page, "第一行\n第二行\n第三行\n第四行\n第五行");
@@ -128,13 +144,25 @@ async function run() {
   );
   assertVisibleThroughFiveLines(await textareaMetrics(page), "pasted text");
 
+  await page.setViewportSize({ width: 320, height: 900 });
   await replaceInput(page, "/rev");
-  await page.getByRole("button", { name: /\/review/ })
+  await page.getByRole("button", {
+    name: /\/review-current-workspace-with-a-detailed-validation-summary/,
+  })
     .evaluate(button => button.click());
   await waitForLayout(page);
   const command = await textareaMetrics(page);
-  assert.equal(command.value, "/review ");
+  assert.equal(
+    command.value,
+    "/review-current-workspace-with-a-detailed-validation-summary ",
+  );
+  assert.ok(command.requiredLines >= 2);
   assertVisibleThroughFiveLines(command, "slash command completion");
+
+  await replaceInput(page, "命令补全后删除到短文本");
+  const commandShortened = await textareaMetrics(page);
+  assert.equal(commandShortened.requiredLines, 1);
+  assertVisibleThroughFiveLines(commandShortened, "slash command deletion");
 
   await replaceInput(page, "请检查 @composer");
   await page.getByRole("button", {
@@ -143,7 +171,13 @@ async function run() {
   await waitForLayout(page);
   const mention = await textareaMetrics(page);
   assert.match(mention.value, /@docs\/architecture\/composer-autosize/);
+  assert.ok(mention.requiredLines >= 2);
   assertVisibleThroughFiveLines(mention, "workspace mention completion");
+
+  await replaceInput(page, "提及补全后删除到短文本");
+  const mentionShortened = await textareaMetrics(page);
+  assert.equal(mentionShortened.requiredLines, 1);
+  assertVisibleThroughFiveLines(mentionShortened, "workspace mention deletion");
 }
 
 try {

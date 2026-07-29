@@ -25,7 +25,7 @@ const component = createClassComponent({
     slashCommandsAndMentionsEnabled: true,
     commands: [
       {
-        name: "review",
+        name: "review-current-workspace-with-a-detailed-validation-summary",
         description: "Review the current changes",
         source: "prompt",
       },
