@@ -186,13 +186,13 @@
       composer.handleAbortAction();
       return;
     }
-    void composer.handleSubmit(false, fileInputRef, textareaRef);
+    void composer.handleSubmit(false, fileInputRef);
   }
 
   function handleQuickAction(prompt: string) {
     if (composer.isDisabled) return;
     inputText = prompt;
-    void composer.handleSubmit(false, fileInputRef, textareaRef);
+    void composer.handleSubmit(false, fileInputRef);
   }
 
   function openAttachmentPreview(attachment: ComposerAttachment) {
@@ -308,35 +308,18 @@
       hasExplicitNewline,
       wrapsAtCurrentWidth,
     });
-    const switchedToMultilineBySoftWrap =
-      !wasMultiline &&
-      nextIsMultiline &&
-      !hasExplicitNewline &&
-      wrapsAtCurrentWidth;
     isComposerMultiline = nextIsMultiline;
 
     if (nextIsMultiline !== wasMultiline) {
-      if (!nextIsMultiline) {
-        el.style.height = `${Math.ceil(singleLineHeight)}px`;
-        el.style.overflowY = "hidden";
-      } else if (switchedToMultilineBySoftWrap) {
-        void tick().then(() => composer.resizeTextarea(textareaRef));
-      }
       animateComposerLayout(layoutBefore);
     }
-  }
-
-  function resizeComposerInput() {
-    composer.resizeTextarea(textareaRef);
-    queueMicrotask(updateComposerMultiline);
   }
 
   // ---- effects that need DOM refs ----
 
   $effect(() => {
-    // Resize textarea on input change
     void inputText;
-    resizeComposerInput();
+    queueMicrotask(updateComposerMultiline);
   });
 
   $effect(() => {
@@ -360,10 +343,6 @@
     }
   });
 
-  // Initial resize
-  $effect(() => {
-    resizeComposerInput();
-  });
 </script>
 
 <div bind:this={composerRootRef} class="composer-bar" data-center-focus-composer>
@@ -970,9 +949,14 @@
     font-size: 1.04rem;
     font-weight: 400;
     line-height: var(--composer-input-line-height);
+    field-sizing: content;
+    min-height: var(--composer-input-line-height);
+    max-height: calc(
+      var(--composer-input-line-height) * var(--composer-max-visible-lines)
+    );
     outline: none;
     resize: none;
-    overflow-y: hidden;
+    overflow-y: auto;
     scrollbar-gutter: stable;
     transition: padding 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
