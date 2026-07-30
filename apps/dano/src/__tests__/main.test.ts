@@ -662,6 +662,28 @@ describe("Dano main", () => {
     }
   });
 
+  it("renders the configured name in every shipped system prompt placeholder", () => {
+    const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));
+
+    try {
+      initializeDanoAgentSettings(
+        agentRoot,
+        resolve("apps/dano/src"),
+        "测试助手",
+      );
+
+      const systemPrompt = readFileSync(join(agentRoot, "SYSTEM.md"), "utf8");
+      expect(systemPrompt).not.toContain("{产品名称}");
+      expect(systemPrompt).toContain("你是测试助手，公司内部 OA 智能助手。");
+      expect(systemPrompt).toContain("是测试助手当前可以查询");
+      expect(systemPrompt).toContain("当前测试助手暂未配置");
+      expect(systemPrompt).toContain("推测测试助手使用的模型名称");
+      expect(systemPrompt).toContain("只说明你是测试助手，公司内部");
+    } finally {
+      rmSync(agentRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps existing global agent settings", () => {
     const sourceRoot = mkdtempSync(join(tmpdir(), "dano-main-source-"));
     const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));

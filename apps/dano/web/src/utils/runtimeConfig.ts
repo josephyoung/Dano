@@ -34,6 +34,10 @@ export function getRuntimeProductName(): string {
   return normalizedProductName(runtimeConfig()?.productName);
 }
 
+export function applyRuntimeProductTitle(): void {
+  document.title = getRuntimeProductName();
+}
+
 export function getRuntimeLocale(): Locale {
   return normalizeLocale(runtimeConfig()?.locale);
 }

@@ -34,6 +34,25 @@ describe("i18n", () => {
     );
   });
 
+  it.each([
+    [
+      "chatTranscript.askUserQuestionRetryFailureDetail",
+      "模型刚才生成的问题卡参数不符合要求，测试助手已触发自动重试。若多次出现，说明模型还没有按问题卡格式修正调用。",
+    ],
+    [
+      "chatTranscript.askUserQuestionTerminalFailureDetail",
+      "测试助手在有限重试后仍无法显示问题卡，已结束本轮响应。请重新发送，或换一种方式描述需要填写的信息。",
+    ],
+    [
+      "chatTranscript.askUserQuestionValidationFailureDetail",
+      "模型重试后仍未生成有效的问题参数，测试助手已停止问题流程。请重新发送，或换一种方式描述需要填写的信息。",
+    ],
+  ] as const)("uses the configured name without Chinese spacing in %s", (key, expected) => {
+    vi.stubGlobal("window", {});
+
+    expect(t(key, { productName: "测试助手" })).toBe(expected);
+  });
+
   it("falls back to the key when no message exists", () => {
     vi.stubGlobal("window", {});
 
