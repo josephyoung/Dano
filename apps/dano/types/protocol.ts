@@ -1233,8 +1233,6 @@ export interface BridgeThemeColorPreference {
   readonly accentColorPreset: AccentColorPreset;
 }
 
-export const DEFAULT_PRODUCT_NAME = "小络助手";
-
 /** JSON-safe configuration injected by the Dano server into the browser page. */
 export interface BridgeBrowserRuntimeConfig {
   readonly debugModeAvailable?: boolean;

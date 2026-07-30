@@ -11,16 +11,16 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDanoBackend } from "./backend.js";
 import type { DanoBackend } from "./backend.js";
-import { loadDanoConfig } from "./bridge/dano-config.js";
+import {
+  loadDanoConfig,
+  type DanoConfig,
+} from "./bridge/dano-config.js";
 import { DetachedSessionRegistry } from "./bridge/session-registry.js";
 import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
 import { createDanoDevReloadController } from "./dev-reload.js";
 import { loadDanoRuntime, type DanoRuntime } from "./runtime.js";
-import {
-  DEFAULT_PRODUCT_NAME,
-  type BridgeEmptyStateConfig,
-} from "../types/protocol.js";
+import type { BridgeEmptyStateConfig } from "../types/protocol.js";
 
 const DEFAULT_DANO_PORT = 8080;
 const DEFAULT_DANO_HOST = "0.0.0.0";
@@ -91,7 +91,6 @@ Options:
   --port <number>            Port to bind (default: ${DEFAULT_DANO_PORT})
   --default-workspace <path> Deprecated; new sessions use DANO_RUNTIME_DIR/workspaces/ws_<random>
   --sessions-root <path>     Directory for session jsonl files (env: DANO_SESSIONS_ROOT, default: <default-workspace>/${DEFAULT_DANO_SESSIONS_DIR})
-  --product-name <name>      Product name shown in browser UI (env: DANO_PRODUCT_NAME, default: ${DEFAULT_PRODUCT_NAME})
   --empty-state-text <text>  Empty transcript text (env: DANO_EMPTY_STATE_TEXT, default: ${DEFAULT_EMPTY_STATE.content})
   --empty-state-html <html>  Empty transcript HTML (env: DANO_EMPTY_STATE_HTML)
   --help                     Show this help
@@ -154,8 +153,17 @@ function readSessionsRootPath(
   );
 }
 
-function readProductName(env: Record<string, string | undefined>): string {
-  return env.DANO_PRODUCT_NAME?.trim() || DEFAULT_PRODUCT_NAME;
+function readProductName(
+  env: Record<string, string | undefined>,
+  configured: string | undefined,
+): string {
+  const productName = env.DANO_PRODUCT_NAME?.trim() || configured?.trim();
+  if (!productName) {
+    throw new Error(
+      "Set productName in dano.config.json or provide DANO_PRODUCT_NAME",
+    );
+  }
+  return productName;
 }
 
 function readEmptyStateConfig(
@@ -321,12 +329,13 @@ export function readDanoPackageInfo(cwd: string): DanoPackageInfo {
 export function parseDanoServerOptions(
   argv: string[],
   env: Record<string, string | undefined> = process.env,
+  danoConfig: DanoConfig = loadDanoConfig({ cwd: process.cwd(), env }),
 ): DanoServerOptions {
   let host = readHost(env);
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
   let sessionsRootPath = readSessionsRootPath(env);
-  let productName = readProductName(env);
+  const productName = readProductName(env, danoConfig.productName);
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
   const userAuthentication = readUserAuthentication(env);
@@ -376,15 +385,6 @@ export function parseDanoServerOptions(
           throw new Error("Missing value for --sessions-root");
         }
         sessionsRootPath = next;
-        index++;
-        continue;
-      }
-      case "--product-name": {
-        const next = argv[index + 1];
-        if (!next || next.startsWith("--")) {
-          throw new Error("Missing value for --product-name");
-        }
-        productName = next.trim() || DEFAULT_PRODUCT_NAME;
         index++;
         continue;
       }
@@ -453,7 +453,7 @@ function ensureDefaultWorkspace(path: string): string {
 export function initializeDanoAgentSettings(
   agentDir: string,
   sourceCwd: string,
-  productName = DEFAULT_PRODUCT_NAME,
+  productName: string,
 ): void {
   const runtimeDefaultsDir = findNearestRuntimeDefaultsDir(sourceCwd);
   if (!runtimeDefaultsDir) {
@@ -466,19 +466,14 @@ export function initializeDanoAgentSettings(
   for (const fileName of DEFAULT_RUNTIME_SETTINGS_FILES) {
     const sourcePath = join(runtimeDefaultsDir, fileName);
     const targetPath = join(targetSettingsDir, fileName);
-    if (existsSync(sourcePath) && !existsSync(targetPath)) {
-      copyFileSync(sourcePath, targetPath);
-    }
-  }
-
-  const systemPromptPath = join(targetSettingsDir, "SYSTEM.md");
-  if (existsSync(systemPromptPath)) {
-    const systemPrompt = readFileSync(systemPromptPath, "utf8");
-    if (systemPrompt.includes("{产品名称}")) {
+    if (fileName === "SYSTEM.md" && existsSync(sourcePath)) {
+      const systemPrompt = readFileSync(sourcePath, "utf8");
       writeFileSync(
-        systemPromptPath,
+        targetPath,
         systemPrompt.replaceAll("{产品名称}", productName),
       );
+    } else if (existsSync(sourcePath) && !existsSync(targetPath)) {
+      copyFileSync(sourcePath, targetPath);
     }
   }
 
@@ -615,8 +610,14 @@ async function runDanoServer(
 
 async function runDanoMain(): Promise<number> {
   let options: DanoServerOptions;
+  let danoConfig: DanoConfig;
   try {
-    options = parseDanoServerOptions(process.argv.slice(2));
+    danoConfig = loadDanoConfig({ cwd: process.cwd() });
+    options = parseDanoServerOptions(
+      process.argv.slice(2),
+      process.env,
+      danoConfig,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[dano] ${message}`);
@@ -633,7 +634,6 @@ async function runDanoMain(): Promise<number> {
   const packageInfo = readDanoPackageInfo(options.cwd);
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
-  const danoConfig = loadDanoConfig({ cwd: options.cwd });
   const defaultWorkspacePath = ensureDefaultWorkspace(options.defaultWorkspacePath);
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;

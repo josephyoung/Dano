@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
+import danoConfig from "../../dano.config.json";
 
 function readDebugFlag(value: string | undefined): boolean {
   if (typeof value !== "string") return false;
@@ -36,6 +37,7 @@ const devDebugModeEnabled =
 export default defineConfig({
   root: appWebRoot,
   define: {
+    __DANO_DEFAULT_PRODUCT_NAME__: JSON.stringify(danoConfig.productName),
     __PI_WEB_DEV_DEBUG__: JSON.stringify(devDebugModeEnabled),
   },
   plugins: [dropPierreDiffThemes(), svelte()],

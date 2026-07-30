@@ -1,7 +1,4 @@
-import {
-  DEFAULT_PRODUCT_NAME,
-  type BridgeQuickActionConfig,
-} from "@dano/types/protocol";
+import type { BridgeQuickActionConfig } from "@dano/types/protocol";
 import { normalizeLocale, type Locale } from "../i18n/locales";
 import { translate } from "../i18n/translate";
 
@@ -21,7 +18,7 @@ function runtimeConfig() {
 function normalizedProductName(value: unknown): string {
   return typeof value === "string" && value.trim()
     ? value.trim()
-    : DEFAULT_PRODUCT_NAME;
+    : __DANO_DEFAULT_PRODUCT_NAME__;
 }
 
 function interpolateProductName(content: string, productName: string): string {

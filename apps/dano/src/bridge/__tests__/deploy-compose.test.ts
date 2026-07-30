@@ -41,6 +41,10 @@ const envExampleFile = new URL(
   "../../../../../.env.example",
   import.meta.url,
 ).pathname;
+const danoConfigFile = new URL(
+  "../../../../../dano.config.json",
+  import.meta.url,
+).pathname;
 const webIndexFile = new URL(
   "../../../web/index.html",
   import.meta.url,
@@ -512,7 +516,7 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
       "DANO_RUNTIME_DIR: /opt/dano/runtime-data",
     );
     expect(compose).toContain(
-      "DANO_PRODUCT_NAME: ${DANO_PRODUCT_NAME:-小络助手}",
+      "DANO_PRODUCT_NAME: ${DANO_PRODUCT_NAME:-}",
     );
     expect(compose).toContain(
       "DANO_SESSIONS_ROOT: /opt/dano/runtime-data/.dano/sessions",
@@ -541,12 +545,17 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
     expect(compose).not.toContain("DANO_TLS_KEY_PATH");
   });
 
-  it("keeps the default assistant name aligned across shipped assets", () => {
+  it("keeps the product name default only in Dano config", () => {
     const envExample = readFileSync(envExampleFile, "utf8");
+    const danoConfig = JSON.parse(
+      readFileSync(danoConfigFile, "utf8"),
+    ) as { productName?: string };
     const webIndex = readFileSync(webIndexFile, "utf8");
     const assistantIcon = readFileSync(assistantIconFile, "utf8");
 
-    expect(envExample).toMatch(/^DANO_PRODUCT_NAME=小络助手$/m);
+    expect(danoConfig.productName).toBe("小络助手");
+    expect(envExample).toContain("# DANO_PRODUCT_NAME=");
+    expect(envExample).not.toMatch(/^DANO_PRODUCT_NAME=.+$/m);
     expect(webIndex).toContain("<title></title>");
     expect(webIndex).not.toContain("小络助手");
     expect(assistantIcon).toContain('aria-label="助手图标"');
@@ -631,7 +640,7 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
 
     expect(dockerfileText).toContain("ENV HOME=/home/node");
     expect(dockerfileText).toContain("ENV DANO_RUNTIME_DIR=/opt/dano/runtime-data");
-    expect(dockerfileText).toContain("ENV DANO_PRODUCT_NAME=小络助手");
+    expect(dockerfileText).not.toContain("ENV DANO_PRODUCT_NAME=");
     expect(dockerfileText).toContain("ENV HEIMDALL_BWRAP_BIND_KERNEL_FS=1");
     expect(dockerfileText).toContain("ENV HEIMDALL_BWRAP_BIND_PROC=0");
     expect(dockerfileText).toContain(

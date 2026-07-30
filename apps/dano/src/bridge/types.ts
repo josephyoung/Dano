@@ -1,7 +1,6 @@
-import {
-  DEFAULT_PRODUCT_NAME,
-  type BridgeEmptyStateConfig,
-  type BridgeQuickActionConfig,
+import type {
+  BridgeEmptyStateConfig,
+  BridgeQuickActionConfig,
 } from "../../types/protocol.js";
 
 export type * from "../../types/protocol.js";
@@ -75,7 +74,7 @@ export const DEFAULT_BRIDGE_CONFIG: BridgeConfig = {
   port: 7036,
   portMax: 0,
   defaultWorkspacePath: "/tmp/dano",
-  productName: DEFAULT_PRODUCT_NAME,
+  productName: "",
   emptyState: {
     mode: "text",
     content: "给{产品名称}发消息",

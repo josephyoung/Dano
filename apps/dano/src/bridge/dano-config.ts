@@ -6,6 +6,7 @@ import type { BridgeQuickActionConfig } from "./types.js";
 const DANO_CONFIG_FILE_NAME = "dano.config.json";
 
 export interface DanoConfig {
+  productName?: string;
   fieldAssist?: {
     maxRetries?: number;
   };
@@ -29,7 +30,7 @@ export const DANO_DEFAULT_CONFIG = {
   slashCommandsAndMentionsEnabled: false,
   transcriptProcessSummaryEnabled: false,
   quickActions: [],
-} satisfies Required<DanoConfig>;
+} satisfies Required<Omit<DanoConfig, "productName">>;
 
 export interface LoadDanoConfigOptions {
   cwd?: string;
@@ -115,6 +116,7 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   }
 
   const record = raw as Record<string, unknown>;
+  const productName = readString(record.productName);
   const fieldAssist = readRetryOptions(record.fieldAssist);
   const askUserQuestion = readAskUserQuestionOptions(record.askUserQuestion);
   const slashCommandsAndMentionsEnabled = readBoolean(
@@ -126,6 +128,7 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   const quickActions = readQuickActions(record.quickActions);
 
   return {
+    ...(productName ? { productName } : {}),
     ...(fieldAssist ? { fieldAssist } : {}),
     ...(askUserQuestion ? { askUserQuestion } : {}),
     ...(slashCommandsAndMentionsEnabled !== undefined
