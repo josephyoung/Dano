@@ -18,6 +18,14 @@ This project is the Dano P0 browser-only LLM chat app.
 - Do not hardcode. Never complete a specific case by writing variable values,
   decisions, or behavior directly into the implementation.
 
+## Code review
+
+- When an implementation under review looks ad hoc, suspiciously fragile, or
+  vulnerability-prone, do not accept it at face value. Ask whether an
+  industry-standard solution or mature open-source implementation already
+  exists, compare the custom approach against those alternatives, and require
+  a clear justification before accepting a custom implementation.
+
 ## Common Commands
 
 - Install dependencies: `pnpm install`
