@@ -1,4 +1,5 @@
 import {
+  constants,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -11,6 +12,10 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDanoBackend } from "./backend.js";
 import type { DanoBackend } from "./backend.js";
+import {
+  resolveProductName,
+  syncSystemPrompt,
+} from "../runtime/system-prompt.mjs";
 import {
   loadDanoConfig,
   type DanoConfig,
@@ -151,19 +156,6 @@ function readSessionsRootPath(
     env.PI_WEB_SESSIONS_ROOT?.trim() ||
     undefined
   );
-}
-
-function readProductName(
-  env: Record<string, string | undefined>,
-  configured: string | undefined,
-): string {
-  const productName = env.DANO_PRODUCT_NAME?.trim() || configured?.trim();
-  if (!productName) {
-    throw new Error(
-      "Set productName in dano.config.json or provide DANO_PRODUCT_NAME",
-    );
-  }
-  return productName;
 }
 
 function readEmptyStateConfig(
@@ -335,7 +327,10 @@ export function parseDanoServerOptions(
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
   let sessionsRootPath = readSessionsRootPath(env);
-  const productName = readProductName(env, danoConfig.productName);
+  const productName = resolveProductName(
+    env.DANO_PRODUCT_NAME,
+    danoConfig.productName,
+  );
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
   const userAuthentication = readUserAuthentication(env);
@@ -450,11 +445,11 @@ function ensureDefaultWorkspace(path: string): string {
   return path;
 }
 
-export function initializeDanoAgentSettings(
+export async function initializeDanoAgentSettings(
   agentDir: string,
   sourceCwd: string,
   productName: string,
-): void {
+): Promise<void> {
   const runtimeDefaultsDir = findNearestRuntimeDefaultsDir(sourceCwd);
   if (!runtimeDefaultsDir) {
     return;
@@ -466,18 +461,29 @@ export function initializeDanoAgentSettings(
   for (const fileName of DEFAULT_RUNTIME_SETTINGS_FILES) {
     const sourcePath = join(runtimeDefaultsDir, fileName);
     const targetPath = join(targetSettingsDir, fileName);
-    if (!existsSync(sourcePath) || existsSync(targetPath)) {
+    if (!existsSync(sourcePath)) {
       continue;
     }
 
     if (fileName === "SYSTEM.md") {
-      const systemPrompt = readFileSync(sourcePath, "utf8");
-      writeFileSync(
+      await syncSystemPrompt({
+        templatePath: sourcePath,
         targetPath,
-        systemPrompt.replaceAll("{产品名称}", productName),
-      );
+        productName,
+        mode: "if-missing",
+      });
     } else {
-      copyFileSync(sourcePath, targetPath);
+      try {
+        copyFileSync(sourcePath, targetPath, constants.COPYFILE_EXCL);
+      } catch (error) {
+        const alreadyExists =
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EEXIST";
+        if (!alreadyExists) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -642,7 +648,7 @@ async function runDanoMain(): Promise<number> {
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
-  initializeDanoAgentSettings(
+  await initializeDanoAgentSettings(
     options.agentConfigDir,
     options.cwd,
     options.productName,

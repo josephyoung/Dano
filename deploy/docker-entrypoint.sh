@@ -6,7 +6,6 @@ agent_dir="${PI_CODING_AGENT_DIR:-$runtime_root/.pi/agent}"
 export PI_CODING_AGENT_DIR="$agent_dir"
 runtime_defaults_dir="${DANO_RUNTIME_DEFAULTS_DIR:-/app/deploy/runtime-defaults}"
 entrypoint_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-node_binary="${DANO_NODE_BINARY:-node}"
 npm_registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-${DANO_DEFAULT_NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}}}"
 
 mkdir -p "$agent_dir"
@@ -41,7 +40,8 @@ system_prompt_target="$agent_dir/SYSTEM.md"
 if [ ! -f "$system_prompt_source" ]; then
   echo "[dano-entrypoint] warning: missing runtime default: $system_prompt_source" >&2
 elif [ ! -f "$system_prompt_target" ]; then
-  "$node_binary" "$entrypoint_dir/render-system-prompt.mjs" \
+  node "$entrypoint_dir/render-system-prompt.mjs" \
+    --if-missing \
     "$system_prompt_source" \
     "$system_prompt_target"
 fi

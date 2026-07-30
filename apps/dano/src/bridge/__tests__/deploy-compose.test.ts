@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,8 +64,19 @@ const entrypointFile = new URL(
   "../../../../../deploy/docker-entrypoint.sh",
   import.meta.url,
 ).pathname;
+const renderSystemPromptScript = new URL(
+  "../../../../../deploy/render-system-prompt.mjs",
+  import.meta.url,
+).pathname;
 const tempDirs: string[] = [];
 let lastComposeEnv: Record<string, string | undefined> = {};
+
+function nodeOnlyPath(root: string): string {
+  const binDir = join(root, "node-bin");
+  mkdirSync(binDir);
+  symlinkSync(process.execPath, join(binDir, "node"));
+  return `${binDir}:/usr/bin:/bin`;
+}
 
 function run(
   command: string,
@@ -990,11 +1002,10 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
     ], {
       env: {
         ...process.env,
-        PATH: "/usr/bin:/bin",
-        DANO_NODE_BINARY: process.execPath,
+        PATH: nodeOnlyPath(cwd),
         DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
         DANO_RUNTIME_DIR: runtimeDir,
-        DANO_PRODUCT_NAME: "部署助手",
+        DANO_PRODUCT_NAME: " 部署助手 ",
         DANO_DEFAULT_WORKSPACE_PATH: workspaceDir,
         DANO_AGENT_DIR_OUT: agentDirOut,
       },
@@ -1028,8 +1039,7 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
     execFileSync("sh", [entrypointFile, "/usr/bin/true"], {
       env: {
         ...process.env,
-        PATH: "/usr/bin:/bin",
-        DANO_NODE_BINARY: process.execPath,
+        PATH: nodeOnlyPath(cwd),
         DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
         DANO_RUNTIME_DIR: runtimeDir,
         DANO_PRODUCT_NAME: "",
@@ -1039,6 +1049,30 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
 
     expect(readFileSync(join(agentDir, "SYSTEM.md"), "utf8")).toBe(
       "你是配置助手\n",
+    );
+  });
+
+  it("replaces an existing system prompt during an explicit deployment sync", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "dano-system-sync-test-"));
+    tempDirs.push(cwd);
+    const templatePath = join(cwd, "SYSTEM.template.md");
+    const targetPath = join(cwd, "SYSTEM.md");
+    writeFileSync(templatePath, "你是{产品名称}，请联系{产品名称}\n");
+    writeFileSync(targetPath, "宿主机保留内容\n");
+
+    execFileSync(
+      process.execPath,
+      [renderSystemPromptScript, "--replace", templatePath, targetPath],
+      {
+        env: {
+          ...process.env,
+          DANO_PRODUCT_NAME: " 第二验收助手 ",
+        },
+      },
+    );
+
+    expect(readFileSync(targetPath, "utf8")).toBe(
+      "你是第二验收助手，请联系第二验收助手\n",
     );
   });
 
@@ -1068,8 +1102,7 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
     ], {
       env: {
         ...process.env,
-        PATH: "/usr/bin:/bin",
-        DANO_NODE_BINARY: process.execPath,
+        PATH: nodeOnlyPath(cwd),
         DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
         DANO_RUNTIME_DIR: runtimeDir,
         DANO_PRODUCT_NAME: "部署助手",
@@ -1134,11 +1167,35 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
       "docker-compose.exposure.yml",
       "--env-file",
       ".env",
+      "run",
+      "--rm",
+      "--no-deps",
+      "app",
+      "node",
+      "./deploy/render-system-prompt.mjs",
+      "--replace",
+      "/app/deploy/runtime-defaults/SYSTEM.md",
+      "/opt/dano/runtime-data/.pi/agent/SYSTEM.md",
+    ]);
+    expect(JSON.parse(logLines[3])).toEqual([
+      "compose",
+      "-f",
+      "docker-compose.yml",
+      "-f",
+      "docker-compose.exposure.yml",
+      "--env-file",
+      ".env",
       "up",
       "-d",
       "--no-build",
     ]);
-    expect(logLines[3]).toBe("smoke");
+    expect(logLines[4]).toBe("smoke");
+  });
+
+  it("does not expose a production node-binary override", () => {
+    expect(readFileSync(entrypointFile, "utf8")).not.toContain(
+      "DANO_NODE_BINARY",
+    );
   });
 
   it("deploys HTTPS-only with arbitrary host certificate filenames", () => {

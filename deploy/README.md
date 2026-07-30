@@ -40,9 +40,23 @@ On container startup, `deploy/docker-entrypoint.sh` creates:
 The entrypoint initializes those files from `deploy/runtime-defaults/` only when
 the runtime file is missing. It renders a missing `SYSTEM.md` with the effective
 product name. It never overwrites an existing runtime file, so the host
-persistence location may be edited directly. When changing the identity of an
-existing deployment, update its persisted `SYSTEM.md` explicitly. The
-entrypoint does not copy defaults into a Runtime Workspace `.pi` directory.
+persistence location may be edited directly. The release workflow explicitly
+synchronizes `SYSTEM.md` once per deployment, before starting the new app image;
+ordinary application and container restarts still preserve the current file.
+Manual Compose deployments can perform the same explicit synchronization with:
+
+```bash
+docker compose --env-file .env run --rm --no-deps app \
+  node ./deploy/render-system-prompt.mjs --replace \
+  /app/deploy/runtime-defaults/SYSTEM.md \
+  /opt/dano/runtime-data/.pi/agent/SYSTEM.md
+```
+
+The shared renderer uses the mature `atomically` package for complete
+temporary-file writes followed by atomic publication. Missing-file
+initialization additionally uses a no-clobber hard-link publication so a
+concurrent host-created file is preserved. The entrypoint does not copy defaults
+into a Runtime Workspace `.pi` directory.
 
 ## Authenticated User Context
 

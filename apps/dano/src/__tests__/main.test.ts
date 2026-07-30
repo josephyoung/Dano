@@ -630,7 +630,7 @@ describe("Dano main", () => {
     );
   });
 
-  it("initializes runtime settings in the global agent directory", () => {
+  it("initializes runtime settings in the global agent directory", async () => {
     const sourceRoot = mkdtempSync(join(tmpdir(), "dano-main-source-"));
     const workspaceRoot = mkdtempSync(join(tmpdir(), "dano-main-workspace-"));
     const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));
@@ -647,7 +647,7 @@ describe("Dano main", () => {
       writeFileSync(join(runtimeDefaultsDir, "settings.json"), "{}");
       writeFileSync(join(runtimeDefaultsDir, "heimdall.json"), "{}");
 
-      initializeDanoAgentSettings(agentRoot, nestedSourceDir, "My Agent");
+      await initializeDanoAgentSettings(agentRoot, nestedSourceDir, "My Agent");
 
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
         "你是My Agent，system prompt",
@@ -666,11 +666,11 @@ describe("Dano main", () => {
     }
   });
 
-  it("renders the configured name in every shipped system prompt placeholder", () => {
+  it("renders the configured name in every shipped system prompt placeholder", async () => {
     const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));
 
     try {
-      initializeDanoAgentSettings(
+      await initializeDanoAgentSettings(
         agentRoot,
         resolve("apps/dano/src"),
         "测试助手",
@@ -691,7 +691,7 @@ describe("Dano main", () => {
     }
   });
 
-  it("preserves a host-managed system prompt and other agent settings", () => {
+  it("preserves a host-managed system prompt and other agent settings", async () => {
     const sourceRoot = mkdtempSync(join(tmpdir(), "dano-main-source-"));
     const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));
 
@@ -714,7 +714,7 @@ describe("Dano main", () => {
       writeFileSync(join(agentRoot, "SYSTEM.md"), "宿主机自定义 prompt");
       writeFileSync(join(agentRoot, "settings.json"), '{"custom":true}');
 
-      initializeDanoAgentSettings(agentRoot, sourceRoot, "测试助手");
+      await initializeDanoAgentSettings(agentRoot, sourceRoot, "测试助手");
 
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
         "宿主机自定义 prompt",
@@ -726,7 +726,7 @@ describe("Dano main", () => {
         '{\n  "sandbox": {\n    "userNamespace": false,\n    "env": {\n      "allow": [\n        "PATH",\n        "HOME",\n        "SHELL",\n        "USER",\n        "LOGNAME",\n        "LANG",\n        "LC_*",\n        "TMPDIR",\n        "DANO_URL",\n        "DANO_TENANT_KEY"\n      ],\n      "deny": []\n    }\n  }\n}\n',
       );
 
-      initializeDanoAgentSettings(agentRoot, sourceRoot, "第二助手");
+      await initializeDanoAgentSettings(agentRoot, sourceRoot, "第二助手");
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
         "宿主机自定义 prompt",
       );
@@ -736,7 +736,7 @@ describe("Dano main", () => {
     }
   });
 
-  it("preserves Heimdall runtime settings while disabling user namespaces by default", () => {
+  it("preserves Heimdall runtime settings while disabling user namespaces by default", async () => {
     const sourceRoot = mkdtempSync(join(tmpdir(), "dano-main-source-"));
     const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));
 
@@ -759,7 +759,7 @@ describe("Dano main", () => {
         }),
       );
 
-      initializeDanoAgentSettings(agentRoot, sourceRoot, "测试助手");
+      await initializeDanoAgentSettings(agentRoot, sourceRoot, "测试助手");
 
       expect(
         JSON.parse(readFileSync(join(agentRoot, "heimdall.json"), "utf8")),
