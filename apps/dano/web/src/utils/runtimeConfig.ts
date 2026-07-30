@@ -1,4 +1,7 @@
-import type { BridgeQuickActionConfig } from "@dano/types/protocol";
+import {
+  DEFAULT_PRODUCT_NAME,
+  type BridgeQuickActionConfig,
+} from "@dano/types/protocol";
 import { normalizeLocale, type Locale } from "../i18n/locales";
 import { translate } from "../i18n/translate";
 
@@ -9,7 +12,6 @@ export interface EmptyStateConfig {
   content: string;
 }
 
-const DEFAULT_PRODUCT_NAME = "Dano";
 const DEFAULT_EMPTY_STATE_KEY = "emptyState.message";
 
 function runtimeConfig() {

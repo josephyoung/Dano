@@ -17,7 +17,10 @@ import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
 import { createDanoDevReloadController } from "./dev-reload.js";
 import { loadDanoRuntime, type DanoRuntime } from "./runtime.js";
-import type { BridgeEmptyStateConfig } from "../types/protocol.js";
+import {
+  DEFAULT_PRODUCT_NAME,
+  type BridgeEmptyStateConfig,
+} from "../types/protocol.js";
 
 const DEFAULT_DANO_PORT = 8080;
 const DEFAULT_DANO_HOST = "0.0.0.0";
@@ -29,7 +32,6 @@ const DEFAULT_DANO_UPLOAD_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_REFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_ORPHANED_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-const DEFAULT_PRODUCT_NAME = "Dano";
 const DEFAULT_RUNTIME_SETTINGS_FILES = [
   "SYSTEM.md",
   "settings.json",
@@ -451,6 +453,7 @@ function ensureDefaultWorkspace(path: string): string {
 export function initializeDanoAgentSettings(
   agentDir: string,
   sourceCwd: string,
+  productName = DEFAULT_PRODUCT_NAME,
 ): void {
   const runtimeDefaultsDir = findNearestRuntimeDefaultsDir(sourceCwd);
   if (!runtimeDefaultsDir) {
@@ -465,6 +468,17 @@ export function initializeDanoAgentSettings(
     const targetPath = join(targetSettingsDir, fileName);
     if (existsSync(sourcePath) && !existsSync(targetPath)) {
       copyFileSync(sourcePath, targetPath);
+    }
+  }
+
+  const systemPromptPath = join(targetSettingsDir, "SYSTEM.md");
+  if (existsSync(systemPromptPath)) {
+    const systemPrompt = readFileSync(systemPromptPath, "utf8");
+    if (systemPrompt.includes("{产品名称}")) {
+      writeFileSync(
+        systemPromptPath,
+        systemPrompt.replaceAll("{产品名称}", productName),
+      );
     }
   }
 
@@ -624,7 +638,11 @@ async function runDanoMain(): Promise<number> {
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
-  initializeDanoAgentSettings(options.agentConfigDir, options.cwd);
+  initializeDanoAgentSettings(
+    options.agentConfigDir,
+    options.cwd,
+    options.productName,
+  );
   mkdirSync(options.sessionsRootPath, { recursive: true });
   process.env.DANO_SESSIONS_ROOT = options.sessionsRootPath;
   process.env.PI_WEB_SESSIONS_ROOT = options.sessionsRootPath;

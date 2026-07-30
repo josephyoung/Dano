@@ -91,6 +91,7 @@
   import {
     getRuntimeEmptyStateConfig,
     getRuntimeLocale,
+    getRuntimeProductName,
     getRuntimeTranscriptProcessSummaryEnabled,
   } from "../utils/runtimeConfig";
   import { t } from "../i18n";
@@ -176,6 +177,7 @@
   >;
 
   const emptyStateConfig = getRuntimeEmptyStateConfig();
+  const productName = getRuntimeProductName();
   const transcriptProcessSummaryEnabled =
     getRuntimeTranscriptProcessSummaryEnabled();
   const transcriptRevealTransition = { duration: 160 };
@@ -581,11 +583,14 @@
         : terminal
           ? "chatTranscript.askUserQuestionTerminalFailure"
           : "chatTranscript.askUserQuestionRetryFailure"),
-      details: [t(validationTerminal
-        ? "chatTranscript.askUserQuestionValidationFailureDetail"
-        : terminal
-          ? "chatTranscript.askUserQuestionTerminalFailureDetail"
-          : "chatTranscript.askUserQuestionRetryFailureDetail")],
+      details: [t(
+        validationTerminal
+          ? "chatTranscript.askUserQuestionValidationFailureDetail"
+          : terminal
+            ? "chatTranscript.askUserQuestionTerminalFailureDetail"
+            : "chatTranscript.askUserQuestionRetryFailureDetail",
+        { productName },
+      )],
       rawDetails: [],
     };
   }

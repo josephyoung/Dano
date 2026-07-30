@@ -18,6 +18,7 @@
   import type { RpcModelInfo } from "../utils/models";
   import type { HistoricalMessageRevisionPayload } from "../utils/messageRevision";
   import type { ComposerSubmissionPayload } from "../utils/composerSubmission";
+  import { getRuntimeProductName } from "../utils/runtimeConfig";
   import CommandPalette from "./CommandPalette.svelte";
   import FilePreviewDialog from "./FilePreviewDialog.svelte";
   import WorkspaceMentionPalette from "./WorkspaceMentionPalette.svelte";
@@ -25,6 +26,7 @@
   import { createComposerBarState } from "./composerBarState.svelte";
 
   const COMPOSER_LAYOUT_ANIMATION_MS = 180;
+  const productName = getRuntimeProductName();
 
   let {
     connectionStatus = "disconnected" as ConnectionStatus,
@@ -68,7 +70,7 @@
   let composerPlaceholder = $derived(
     isDebugMode && isDebugSession
       ? "Use /fixture, /tps, /json, or type synthetic markdown"
-      : t("composer.placeholder"),
+      : t("composer.placeholder", { productName }),
   );
 
   // ---- DOM refs (must stay in .svelte for bind:this) ----
