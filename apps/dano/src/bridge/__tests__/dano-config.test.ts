@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadDanoConfig } from "../dano-config.js";
 
 describe("Dano config", () => {
-  it("leaves Pi-owned model and thinking defaults out of Dano config", () => {
+  it("leaves Pi-owned session defaults out of Dano config", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-config-"));
     const configPath = path.join(tmpDir, "dano.config.json");
     fs.writeFileSync(
@@ -38,7 +38,6 @@ describe("Dano config", () => {
         env: { DANO_CONFIG_PATH: configPath },
       }),
     ).toEqual({
-      defaultProjectTrust: "always",
       fieldAssist: {
         maxRetries: 10,
       },

@@ -121,7 +121,7 @@ describe("Pi 0.82.1 public interface baseline", () => {
 
     for (const source of [danoConfigSource, productConfig]) {
       expect(source).not.toMatch(
-        /\bdefaultProvider\b|\bdefaultModel\b|\bdefaultThinkingLevel\b/,
+        /\bdefaultProvider\b|\bdefaultModel\b|\bdefaultThinkingLevel\b|\bdefaultProjectTrust\b/,
       );
     }
     expect(existsSync(new URL("../default-model.ts", import.meta.url))).toBe(

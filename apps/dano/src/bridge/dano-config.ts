@@ -6,7 +6,6 @@ import type { BridgeQuickActionConfig } from "./types.js";
 const DANO_CONFIG_FILE_NAME = "dano.config.json";
 
 export interface DanoConfig {
-  defaultProjectTrust?: "always" | string;
   fieldAssist?: {
     maxRetries?: number;
   };
@@ -20,7 +19,6 @@ export interface DanoConfig {
 }
 
 export const DANO_DEFAULT_CONFIG = {
-  defaultProjectTrust: "always",
   fieldAssist: {
     maxRetries: 10,
   },
@@ -117,7 +115,6 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   }
 
   const record = raw as Record<string, unknown>;
-  const defaultProjectTrust = readString(record.defaultProjectTrust);
   const fieldAssist = readRetryOptions(record.fieldAssist);
   const askUserQuestion = readAskUserQuestionOptions(record.askUserQuestion);
   const slashCommandsAndMentionsEnabled = readBoolean(
@@ -129,7 +126,6 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   const quickActions = readQuickActions(record.quickActions);
 
   return {
-    ...(defaultProjectTrust ? { defaultProjectTrust } : {}),
     ...(fieldAssist ? { fieldAssist } : {}),
     ...(askUserQuestion ? { askUserQuestion } : {}),
     ...(slashCommandsAndMentionsEnabled !== undefined

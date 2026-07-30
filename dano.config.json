@@ -1,5 +1,4 @@
 {
-  "defaultProjectTrust": "always",
   "fieldAssist": {
     "maxRetries": 10
   },
