@@ -1286,7 +1286,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
     expect(spaHtml).toContain('"transcriptProcessSummaryEnabled":true');
   });
 
-  it("uses the configured product name in the no-bundle placeholder title", async () => {
+  it("keeps the no-bundle placeholder title unbranded", async () => {
     const { server } = createServer(undefined, {
       staticDir: undefined,
       productName: "测试 <助手>",
@@ -1297,7 +1297,8 @@ describe("BridgeServer HTTP/SSE transport", () => {
       response.text(),
     );
 
-    expect(html).toContain("<title>测试 &lt;助手&gt;</title>");
+    expect(html).toContain("<title></title>");
+    expect(html).not.toContain("测试 &lt;助手&gt;");
     expect(html).toContain("No web bundle is configured");
   });
 

@@ -901,9 +901,7 @@ export class BridgeServer {
     if (!this.config.staticDir) {
       if (safePath === "/index.html") {
         res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(
-          getPlaceholderHtml(this.host, this.port, this.config.productName),
-        );
+        res.end(getPlaceholderHtml(this.host, this.port));
       } else {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Not Found - No web bundle configured");
@@ -1143,13 +1141,6 @@ function serializeRuntimeConfig(config: unknown): string {
   return JSON.stringify(config).replace(/</g, "\\u003c");
 }
 
-function escapeHtmlText(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
 function injectRuntimeConfig(html: string, config: BridgeConfig): string {
   const runtimeConfig: BridgeBrowserRuntimeConfig = {
     debugModeAvailable: runtimeDebugModeEnabled(),
@@ -1170,7 +1161,6 @@ function injectRuntimeConfig(html: string, config: BridgeConfig): string {
 function getPlaceholderHtml(
   _host: string,
   port: number,
-  productName: string,
 ): string {
   const lanIps = getLanIps();
   const httpUrl = (ip: string) => `http://${ip}:${port}`;
@@ -1189,7 +1179,7 @@ function getPlaceholderHtml(
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>${escapeHtmlText(productName)}</title>
+	<title></title>
 	<style>
 		body {
 			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

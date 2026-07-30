@@ -974,7 +974,10 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
 
     mkdirSync(defaultsDir, { recursive: true });
     mkdirSync(agentDir, { recursive: true });
-    writeFileSync(join(defaultsDir, "SYSTEM.md"), "default system\n");
+    writeFileSync(
+      join(defaultsDir, "SYSTEM.md"),
+      "你是{产品名称}，deployment default\n",
+    );
     writeFileSync(join(defaultsDir, "settings.json"), "{\"default\":true}\n");
     writeFileSync(join(defaultsDir, "heimdall.json"), "{\"guard\":true}\n");
     writeFileSync(join(agentDir, "settings.json"), "{\"custom\":true}\n");
@@ -988,8 +991,10 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
       env: {
         ...process.env,
         PATH: "/usr/bin:/bin",
+        DANO_NODE_BINARY: process.execPath,
         DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
         DANO_RUNTIME_DIR: runtimeDir,
+        DANO_PRODUCT_NAME: "部署助手",
         DANO_DEFAULT_WORKSPACE_PATH: workspaceDir,
         DANO_AGENT_DIR_OUT: agentDirOut,
       },
@@ -997,7 +1002,7 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
 
     expect(readFileSync(agentDirOut, "utf8")).toBe(agentDir);
     expect(readFileSync(join(agentDir, "SYSTEM.md"), "utf8")).toBe(
-      "default system\n",
+      "你是部署助手，deployment default\n",
     );
     expect(readFileSync(join(agentDir, "settings.json"), "utf8")).toBe(
       "{\"custom\":true}\n",
@@ -1006,6 +1011,35 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
       "{\"guard\":true}\n",
     );
     expect(existsSync(join(workspaceDir, ".pi"))).toBe(false);
+  });
+
+  it("renders a missing system prompt from the configured product name", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "dano-entrypoint-test-"));
+    tempDirs.push(cwd);
+    const defaultsDir = join(cwd, "defaults");
+    const runtimeDir = join(cwd, "runtime-data");
+    const agentDir = join(runtimeDir, ".pi/agent");
+    const configPath = join(cwd, "dano.config.json");
+
+    mkdirSync(defaultsDir, { recursive: true });
+    writeFileSync(join(defaultsDir, "SYSTEM.md"), "你是{产品名称}\n");
+    writeFileSync(configPath, JSON.stringify({ productName: "配置助手" }));
+
+    execFileSync("sh", [entrypointFile, "/usr/bin/true"], {
+      env: {
+        ...process.env,
+        PATH: "/usr/bin:/bin",
+        DANO_NODE_BINARY: process.execPath,
+        DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
+        DANO_RUNTIME_DIR: runtimeDir,
+        DANO_PRODUCT_NAME: "",
+        DANO_CONFIG_PATH: configPath,
+      },
+    });
+
+    expect(readFileSync(join(agentDir, "SYSTEM.md"), "utf8")).toBe(
+      "你是配置助手\n",
+    );
   });
 
   it("honors an existing PI_CODING_AGENT_DIR", () => {
@@ -1017,9 +1051,14 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
     const agentDirOut = join(cwd, "agent-dir.txt");
 
     mkdirSync(defaultsDir, { recursive: true });
-    writeFileSync(join(defaultsDir, "SYSTEM.md"), "default system\n");
+    writeFileSync(
+      join(defaultsDir, "SYSTEM.md"),
+      "你是{产品名称}，deployment default\n",
+    );
     writeFileSync(join(defaultsDir, "settings.json"), "{\"default\":true}\n");
     writeFileSync(join(defaultsDir, "heimdall.json"), "{\"guard\":true}\n");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "SYSTEM.md"), "宿主机自定义 prompt\n");
 
     execFileSync("sh", [
       entrypointFile,
@@ -1030,8 +1069,10 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
       env: {
         ...process.env,
         PATH: "/usr/bin:/bin",
+        DANO_NODE_BINARY: process.execPath,
         DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
         DANO_RUNTIME_DIR: runtimeDir,
+        DANO_PRODUCT_NAME: "部署助手",
         PI_CODING_AGENT_DIR: agentDir,
         DANO_AGENT_DIR_OUT: agentDirOut,
       },
@@ -1039,7 +1080,7 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
 
     expect(readFileSync(agentDirOut, "utf8")).toBe(agentDir);
     expect(readFileSync(join(agentDir, "SYSTEM.md"), "utf8")).toBe(
-      "default system\n",
+      "宿主机自定义 prompt\n",
     );
     expect(existsSync(join(runtimeDir, "default-settings"))).toBe(false);
   });

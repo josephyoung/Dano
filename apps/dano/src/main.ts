@@ -466,13 +466,17 @@ export function initializeDanoAgentSettings(
   for (const fileName of DEFAULT_RUNTIME_SETTINGS_FILES) {
     const sourcePath = join(runtimeDefaultsDir, fileName);
     const targetPath = join(targetSettingsDir, fileName);
-    if (fileName === "SYSTEM.md" && existsSync(sourcePath)) {
+    if (!existsSync(sourcePath) || existsSync(targetPath)) {
+      continue;
+    }
+
+    if (fileName === "SYSTEM.md") {
       const systemPrompt = readFileSync(sourcePath, "utf8");
       writeFileSync(
         targetPath,
         systemPrompt.replaceAll("{产品名称}", productName),
       );
-    } else if (existsSync(sourcePath) && !existsSync(targetPath)) {
+    } else {
       copyFileSync(sourcePath, targetPath);
     }
   }

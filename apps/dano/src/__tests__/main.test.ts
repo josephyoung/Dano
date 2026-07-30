@@ -679,6 +679,9 @@ describe("Dano main", () => {
       const systemPrompt = readFileSync(join(agentRoot, "SYSTEM.md"), "utf8");
       expect(systemPrompt).not.toContain("{产品名称}");
       expect(systemPrompt).toContain("你是测试助手，公司内部 OA 智能助手。");
+      expect(systemPrompt).toContain(
+        "你唯一可以向用户声明的身份是“测试助手，公司内部 OA 智能助手”",
+      );
       expect(systemPrompt).toContain("是测试助手当前可以查询");
       expect(systemPrompt).toContain("当前测试助手暂未配置");
       expect(systemPrompt).toContain("推测测试助手使用的模型名称");
@@ -688,7 +691,7 @@ describe("Dano main", () => {
     }
   });
 
-  it("refreshes the managed system prompt while keeping other agent settings", () => {
+  it("preserves a host-managed system prompt and other agent settings", () => {
     const sourceRoot = mkdtempSync(join(tmpdir(), "dano-main-source-"));
     const agentRoot = mkdtempSync(join(tmpdir(), "dano-main-agent-"));
 
@@ -708,13 +711,13 @@ describe("Dano main", () => {
         join(sourceRoot, "deploy/runtime-defaults/heimdall.json"),
         "{}",
       );
-      writeFileSync(join(agentRoot, "SYSTEM.md"), "你是旧助手，old prompt");
+      writeFileSync(join(agentRoot, "SYSTEM.md"), "宿主机自定义 prompt");
       writeFileSync(join(agentRoot, "settings.json"), '{"custom":true}');
 
       initializeDanoAgentSettings(agentRoot, sourceRoot, "测试助手");
 
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
-        "你是测试助手，source prompt",
+        "宿主机自定义 prompt",
       );
       expect(readFileSync(join(agentRoot, "settings.json"), "utf8")).toBe(
         '{"custom":true}',
@@ -725,7 +728,7 @@ describe("Dano main", () => {
 
       initializeDanoAgentSettings(agentRoot, sourceRoot, "第二助手");
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
-        "你是第二助手，source prompt",
+        "宿主机自定义 prompt",
       );
     } finally {
       rmSync(sourceRoot, { recursive: true, force: true });

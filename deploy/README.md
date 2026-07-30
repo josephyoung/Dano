@@ -11,9 +11,9 @@ This directory contains deployment-specific defaults and proxy config.
 - Runtime skills stay under `/opt/dano/runtime-data/.agents/skills`.
 
 `productName` in `dano.config.json` is the default assistant name used by the
-browser title, empty state, composer prompt, and system prompt. A deployment may
-set `DANO_PRODUCT_NAME` explicitly to override that single configured value;
-Compose does not define a second product-name default.
+browser title, empty state, composer prompt, and the initial system-prompt
+render. A deployment may set `DANO_PRODUCT_NAME` explicitly to override that
+single configured value; Compose does not define a second product-name default.
 
 - Production deployment keeps three directories separate:
   - `/tmp/dano-build-*` is the disposable source checkout and image build dir.
@@ -37,9 +37,12 @@ On container startup, `deploy/docker-entrypoint.sh` creates:
 /opt/dano/runtime-data/.pi/agent/heimdall.json
 ```
 
-The entrypoint copies those files from `deploy/runtime-defaults/` only when the
-runtime file is missing. It does not overwrite user-modified runtime files.
-It does not copy defaults into a Runtime Workspace `.pi` directory.
+The entrypoint initializes those files from `deploy/runtime-defaults/` only when
+the runtime file is missing. It renders a missing `SYSTEM.md` with the effective
+product name. It never overwrites an existing runtime file, so the host
+persistence location may be edited directly. When changing the identity of an
+existing deployment, update its persisted `SYSTEM.md` explicitly. The
+entrypoint does not copy defaults into a Runtime Workspace `.pi` directory.
 
 ## Authenticated User Context
 
