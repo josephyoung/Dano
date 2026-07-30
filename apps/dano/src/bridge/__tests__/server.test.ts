@@ -1239,7 +1239,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
     const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-static-"));
     fs.writeFileSync(
       path.join(staticDir, "index.html"),
-      "<html><head><title>Dano</title></head><body><main>index</main></body></html>",
+      "<html><head><title></title></head><body><main>index</main></body></html>",
     );
     fs.writeFileSync(path.join(staticDir, "asset.txt"), "asset");
     const eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
@@ -1273,8 +1273,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
     );
     const spaHtml = await fetch(`${origin}/missing/route`).then(r => r.text());
     expect(spaHtml).toContain("<main>index</main>");
-    expect(spaHtml).toContain("<title>Custom Agent</title>");
-    expect(spaHtml).not.toContain("<title>Dano</title>");
+    expect(spaHtml).toContain("<title></title>");
     expect(spaHtml).toContain("window.__PI_WEB_CONFIG__=");
     expect(spaHtml).toContain('"productName":"Custom Agent"');
     expect(spaHtml).toContain(
@@ -1300,27 +1299,6 @@ describe("BridgeServer HTTP/SSE transport", () => {
 
     expect(html).toContain("<title>测试 &lt;助手&gt;</title>");
     expect(html).toContain("No web bundle is configured");
-  });
-
-  it("escapes the configured product name in the HTML title", async () => {
-    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-static-"));
-    fs.writeFileSync(
-      path.join(staticDir, "index.html"),
-      "<html><head></head><body></body></html>",
-    );
-    const server = createServer(undefined, {
-      staticDir,
-      productName: "Agent <Admin> & Team",
-    }).server;
-    const address = await server.start();
-
-    const html = await fetch(`http://127.0.0.1:${address.port}/`).then(response =>
-      response.text(),
-    );
-
-    expect(html).toContain(
-      "<title>Agent &lt;Admin&gt; &amp; Team</title>",
-    );
   });
 
   it("uploads arbitrary files into the current workspace by declared hash", async () => {

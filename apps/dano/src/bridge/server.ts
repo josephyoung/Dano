@@ -1150,17 +1150,6 @@ function escapeHtmlText(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function injectProductTitle(html: string, productName: string): string {
-  const title = `<title>${escapeHtmlText(productName)}</title>`;
-  const titlePattern = /<title(?:\s[^>]*)?>[\s\S]*?<\/title>/i;
-  if (titlePattern.test(html)) {
-    return html.replace(titlePattern, title);
-  }
-  return html.includes("</head>")
-    ? html.replace("</head>", `${title}</head>`)
-    : `${title}${html}`;
-}
-
 function injectRuntimeConfig(html: string, config: BridgeConfig): string {
   const runtimeConfig: BridgeBrowserRuntimeConfig = {
     debugModeAvailable: runtimeDebugModeEnabled(),
@@ -1173,10 +1162,9 @@ function injectRuntimeConfig(html: string, config: BridgeConfig): string {
       config.transcriptProcessSummaryEnabled,
   };
   const configScript = `<script>window.__PI_WEB_CONFIG__=${serializeRuntimeConfig(runtimeConfig)};</script>`;
-  const brandedHtml = injectProductTitle(html, config.productName);
-  return brandedHtml.includes("</head>")
-    ? brandedHtml.replace("</head>", `${configScript}</head>`)
-    : `${configScript}${brandedHtml}`;
+  return html.includes("</head>")
+    ? html.replace("</head>", `${configScript}</head>`)
+    : `${configScript}${html}`;
 }
 
 function getPlaceholderHtml(
