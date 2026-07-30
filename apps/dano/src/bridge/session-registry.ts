@@ -25,6 +25,7 @@ export interface DetachedSessionRegistryEvent {
 export class DetachedSessionHandle {
   private session: AgentSession | null = null;
   private unsubscribeSession: (() => void) | null = null;
+  private disposeDanoLlmResilience: (() => void) | null = null;
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly viewerBindings = new Map<string, ViewerBinding>();
 
@@ -92,7 +93,6 @@ export class DetachedSessionHandle {
     }
 
     try {
-      this.session.abortRetry();
       await this.session.abort();
     } catch (error) {
       console.error(
@@ -116,6 +116,7 @@ export class DetachedSessionHandle {
     );
 
     const session = created.session;
+    this.disposeDanoLlmResilience = created.disposeDanoLlmResilience;
     const nextSessionPath = session.sessionFile ?? this.sessionPath;
     this.sessionManager = session.sessionManager;
 
@@ -145,6 +146,8 @@ export class DetachedSessionHandle {
   dispose(): void {
     this.unsubscribeSession?.();
     this.unsubscribeSession = null;
+    this.disposeDanoLlmResilience?.();
+    this.disposeDanoLlmResilience = null;
     this.session?.dispose();
     this.session = null;
     this.listeners.clear();

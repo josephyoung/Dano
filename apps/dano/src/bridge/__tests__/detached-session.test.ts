@@ -40,7 +40,6 @@ vi.mock("../curl-tool.js", () => ({
 
 import { createDetachedAgentSession } from "../detached-session.js";
 import { danoVersionTool } from "../dano-version-tool.js";
-import { resolveDanoLlmTimeoutMs } from "../llm-resilience.js";
 import { detectWorkspaceEnvironments } from "../workspace-environment.js";
 
 describe("detached-session", () => {
@@ -59,10 +58,6 @@ describe("detached-session", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it("defaults the model response timeout to 300 seconds", () => {
-    expect(resolveDanoLlmTimeoutMs({})).toBe(300_000);
   });
 
   it("detects the workspace environments exposed to the UI", () => {
@@ -121,11 +116,12 @@ describe("detached-session", () => {
   });
 
   it("builds custom tools for detached sessions", async () => {
-    vi.stubEnv("DANO_LLM_TIMEOUT_MS", "1234");
+    vi.stubEnv("DANO_ASSISTANT_TURN_TIMEOUT_MS", "10");
     const applyOverrides = vi.fn();
     const services = {
       settingsManager: {
         getImageAutoResize: vi.fn().mockReturnValue(false),
+        getRetryEnabled: vi.fn().mockReturnValue(true),
         applyOverrides,
       },
     };
@@ -138,6 +134,7 @@ describe("detached-session", () => {
     const sessionResult = {
       session: {
         sessionId: "session-123",
+        abort: vi.fn().mockResolvedValue(undefined),
         subscribe: vi.fn((handler: (event: any) => void) => {
           sessionEventHandler = handler;
           return vi.fn();
@@ -167,16 +164,7 @@ describe("detached-session", () => {
         ],
       },
     });
-    expect(applyOverrides).toHaveBeenCalledWith({
-      retry: {
-        enabled: true,
-        maxRetries: 10,
-        provider: {
-          timeoutMs: 1234,
-          maxRetries: 0,
-        },
-      },
-    });
+    expect(applyOverrides).not.toHaveBeenCalled();
     expect(createReadToolDefinitionMock).toHaveBeenCalledWith(tmpDir, {
       autoResizeImages: false,
     });
@@ -196,7 +184,8 @@ describe("detached-session", () => {
         configuredAskUserQuestionTool,
       ],
     });
-    expect(result).toBe(sessionResult);
+    expect(result.session).toBe(sessionResult.session);
+    expect(result.disposeDanoLlmResilience).toEqual(expect.any(Function));
 
     const overrideCallCount = applyOverrides.mock.calls.length;
     sessionEventHandler?.({
@@ -235,25 +224,10 @@ describe("detached-session", () => {
     expect(applyOverrides).toHaveBeenLastCalledWith({
       retry: { enabled: false },
     });
+
+    result.disposeDanoLlmResilience();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(sessionResult.session.abort).not.toHaveBeenCalled();
   });
 
-  it("fails fast when DANO_LLM_TIMEOUT_MS is invalid", async () => {
-    vi.stubEnv("DANO_LLM_TIMEOUT_MS", "not-a-timeout");
-    const services = {
-      settingsManager: {
-        getImageAutoResize: vi.fn().mockReturnValue(false),
-        applyOverrides: vi.fn(),
-      },
-    };
-    createAgentSessionServicesMock.mockResolvedValue(services);
-    createAgentSessionFromServicesMock.mockResolvedValue({
-      session: { subscribe: vi.fn() },
-    });
-
-    await expect(
-      createDetachedAgentSession(tmpDir, {} as never),
-    ).rejects.toThrow(
-      'Invalid DANO_LLM_TIMEOUT_MS: expected a positive integer, received "not-a-timeout"',
-    );
-  });
 });

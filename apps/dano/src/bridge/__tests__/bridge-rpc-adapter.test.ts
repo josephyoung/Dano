@@ -7376,7 +7376,7 @@ describe("BridgeRpcAdapter", () => {
       adapter.dispose();
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(abortRetry).toHaveBeenCalledTimes(1);
+      expect(abortRetry).not.toHaveBeenCalled();
       expect(abort).toHaveBeenCalledTimes(1);
 
       (ws.send as ReturnType<typeof vi.fn>).mockClear();
