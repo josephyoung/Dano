@@ -1,4 +1,15 @@
-import { readFileSync } from "node:fs";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+} from "@earendil-works/pi-ai";
+import {
+  ModelRuntime,
+  SessionManager,
+  createAgentSession,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { Value } from "typebox/value";
 import {
@@ -13,7 +24,7 @@ import type {
   AskUserQuestionResult,
 } from "../types.js";
 
-const guide = readFileSync(
+const guide = fs.readFileSync(
   new URL(
     "../../../../../docs/skill-generator-ask-user-question-guide.md",
     import.meta.url,
@@ -31,6 +42,12 @@ const requiredCapabilities = [
   "field-assist.default-on",
   "field-assist.explicit-on",
   "field-assist.explicit-off",
+  "field-assist.generate-empty",
+  "field-assist.polish-non-empty",
+  "field-assist.current-runtime",
+  "field-assist.product-retry",
+  "field-assist.safety-preflight",
+  "field-assist.main-turn-isolation",
   "date.date-only",
   "date.date-time-minute",
   "date.default-format",
@@ -335,6 +352,90 @@ describe("backend Skill-generator ask_user_question guide", () => {
       error: { code: "question_validation_failed", retryable: false },
     });
     expect(block<JsonRecord>(blocks, "E17:result")).toEqual({ status: "cancelled" });
+  });
+
+  it("keeps the documented Field Assist actions executable", async () => {
+    const {
+      createFieldAssistService,
+      createPiSdkFieldAssistClient,
+    } = await import("../field-assist.js");
+    const blocks = parseTaggedBlocks();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "field-assist-guide-"));
+    const provider = fauxProvider({
+      provider: "current-provider",
+      models: [{ id: "current-model" }],
+    });
+    provider.setResponses([
+      fauxAssistantMessage("请补充一下请假原因"),
+      fauxAssistantMessage(
+        block<{ value: string }>(blocks, "E18:generated-value").value,
+      ),
+      fauxAssistantMessage(
+        block<{ value: string }>(blocks, "E18:polished-value").value,
+      ),
+    ]);
+    const modelRuntime = await ModelRuntime.create({
+      authPath: path.join(root, "agent", "auth.json"),
+      modelsPath: null,
+    });
+    modelRuntime.registerNativeProvider(provider.provider);
+    await modelRuntime.setRuntimeApiKey("current-provider", "test-only");
+    const sessionManager = SessionManager.create(root, root);
+    const { session } = await createAgentSession({
+      cwd: root,
+      agentDir: path.join(root, "agent"),
+      modelRuntime,
+      model: provider.getModel(),
+      thinkingLevel: "off",
+      noTools: "all",
+      sessionManager,
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "主会话已有内容",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage(fauxAssistantMessage("主会话已有回答"));
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) throw new Error("Expected persistent E18 session file");
+    const entriesBefore = structuredClone(sessionManager.getEntries());
+    const sessionFileBefore = fs.readFileSync(sessionFile, "utf8");
+    const sessionFilesBefore = fs.readdirSync(root)
+      .filter(name => name.endsWith(".jsonl"))
+      .sort();
+    const service = createFieldAssistService({
+      ai: createPiSdkFieldAssistClient({ modelRuntime }),
+      getCurrentModel: () => session.model,
+      maxRetries: 1,
+    });
+
+    try {
+      await expect(
+        service.assist(block(blocks, "E18:generate-action")),
+      ).resolves.toMatchObject({
+        ...block(blocks, "E18:generated-value"),
+        metadata: {
+          model: { provider: "current-provider", id: "current-model" },
+        },
+      });
+      await expect(
+        service.assist(block(blocks, "E18:polish-action")),
+      ).resolves.toMatchObject(block(blocks, "E18:polished-value"));
+      await expect(
+        service.assist(block(blocks, "E18:sensitive-action")),
+      ).rejects.toMatchObject(block(blocks, "E18:sensitive-failure"));
+      expect(provider.state.callCount).toBe(3);
+      expect(sessionManager.getEntries()).toEqual(entriesBefore);
+      expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionFileBefore);
+      expect(
+        fs.readdirSync(root).filter(name => name.endsWith(".jsonl")).sort(),
+      ).toEqual(sessionFilesBefore);
+      expect(session.pendingMessageCount).toBe(0);
+      expect(session.isStreaming).toBe(false);
+    } finally {
+      session.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("links every required capability to at least one executable example", () => {

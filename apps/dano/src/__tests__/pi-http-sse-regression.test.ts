@@ -2,7 +2,12 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  type Context,
+  type FauxResponseStep,
+} from "@earendil-works/pi-ai";
 import {
   ModelRuntime,
   SessionManager,
@@ -11,6 +16,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { createDanoBackendFromSession } from "../backend.js";
+import {
+  createFieldAssistService,
+  createPiSdkFieldAssistClient,
+} from "../bridge/field-assist.js";
 import {
   DEFAULT_BRIDGE_CONFIG,
   type ClientMessage,
@@ -71,6 +80,96 @@ function waitForSseMessage(
       request.destroy();
     },
     result,
+  };
+}
+
+async function createFieldAssistHttpHarness(
+  responses: FauxResponseStep[],
+  options: { timeoutMs?: number; tokensPerSecond?: number } = {},
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-field-assist-http-"));
+  const provider = fauxProvider({
+    provider: "dano-field-assist-http",
+    tokensPerSecond: options.tokensPerSecond,
+  });
+  provider.setResponses(responses);
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(root, "agent", "auth.json"),
+    modelsPath: null,
+  });
+  modelRuntime.registerNativeProvider(provider.provider);
+  await modelRuntime.setRuntimeApiKey(provider.provider.id, "test-only");
+  const { session } = await createAgentSession({
+    cwd: root,
+    agentDir: path.join(root, "agent"),
+    modelRuntime,
+    model: provider.getModel(),
+    thinkingLevel: "off",
+    noTools: "all",
+    sessionManager: SessionManager.inMemory(root),
+  });
+  const backend = createDanoBackendFromSession(session);
+  if (options.timeoutMs !== undefined) {
+    backend.context.fieldAssist = createFieldAssistService({
+      ai: createPiSdkFieldAssistClient({ modelRuntime }),
+      getCurrentModel: () => session.model,
+      timeoutMs: options.timeoutMs,
+    });
+  }
+  const controller = await startDanoServer(
+    {
+      ...DEFAULT_BRIDGE_CONFIG,
+      host: "127.0.0.1",
+      port: 0,
+      upload: {
+        ...DEFAULT_BRIDGE_CONFIG.upload,
+        uploadDir: path.join(root, "uploads"),
+      },
+    },
+    { backend, captureSigint: false },
+  );
+  const origin = controller.getBridgeUrl();
+  if (!origin) throw new Error("Dano Field Assist test server did not start");
+
+  return {
+    provider,
+    async execute(command: ClientMessage): Promise<ServerMessage> {
+      const createResponse = await fetch(`${origin}/api/clients`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const created = (await createResponse.json()) as {
+        eventsUrl: string;
+        messagesUrl: string;
+      };
+      const correlationId =
+        command.type === "command" ? command.payload.id : undefined;
+      const sse = waitForSseMessage(
+        `${origin}${created.eventsUrl}`,
+        message =>
+          message.type === "response" &&
+          message.payload.id === correlationId,
+        `Field Assist response ${correlationId}`,
+      );
+      try {
+        await sse.ready;
+        const response = await fetch(`${origin}${created.messagesUrl}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(command),
+        });
+        expect(response.status).toBe(202);
+        return await sse.result;
+      } finally {
+        sse.close();
+      }
+    },
+    async dispose() {
+      await controller.stop();
+      await backend.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    },
   };
 }
 
@@ -168,6 +267,281 @@ describe("Pi 0.82.1 HTTP/SSE regression baseline", () => {
       await controller.stop();
       await backend.dispose();
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs Field Assist through ModelRuntime without changing the main Assistant Turn", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-field-assist-"));
+    const provider = fauxProvider({ provider: "dano-field-assist" });
+    let observedContext: Context | undefined;
+    provider.setResponses([
+      context => {
+        observedContext = context;
+        return fauxAssistantMessage("个人事务需要处理。");
+      },
+    ]);
+    const modelRuntime = await ModelRuntime.create({
+      authPath: path.join(root, "agent", "auth.json"),
+      modelsPath: null,
+    });
+    modelRuntime.registerNativeProvider(provider.provider);
+    await modelRuntime.setRuntimeApiKey("dano-field-assist", "test-only");
+    await modelRuntime.getAvailable("dano-field-assist");
+    const sessionManager = SessionManager.create(root, root);
+    const { session } = await createAgentSession({
+      cwd: root,
+      agentDir: path.join(root, "agent"),
+      modelRuntime,
+      model: provider.getModel(),
+      thinkingLevel: "off",
+      noTools: "all",
+      sessionManager,
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "主会话已有内容",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage(fauxAssistantMessage("主会话已有回答"));
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) throw new Error("Expected a persistent main session file");
+    const sessionFileBefore = fs.readFileSync(sessionFile, "utf8");
+    const sessionFilesBefore = fs.readdirSync(root)
+      .filter(name => name.endsWith(".jsonl"))
+      .sort();
+    const entriesBefore = structuredClone(sessionManager.getEntries());
+    const mainSessionEvents: string[] = [];
+    const unsubscribeMainSession = session.subscribe(event => {
+      mainSessionEvents.push(event.type);
+    });
+    const backend = createDanoBackendFromSession(session);
+    const controller = await startDanoServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: {
+          ...DEFAULT_BRIDGE_CONFIG.upload,
+          uploadDir: path.join(root, "uploads"),
+        },
+      },
+      { backend, captureSigint: false },
+    );
+
+    let sse: ReturnType<typeof waitForSseMessage> | undefined;
+    try {
+      const origin = controller.getBridgeUrl();
+      if (!origin) throw new Error("Dano test server did not start");
+      const createResponse = await fetch(`${origin}/api/clients`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const created = (await createResponse.json()) as {
+        eventsUrl: string;
+        messagesUrl: string;
+      };
+      sse = waitForSseMessage(
+        `${origin}${created.eventsUrl}`,
+        message =>
+          message.type === "response" &&
+          message.payload.id === "field-assist-model-runtime",
+        "Field Assist response",
+      );
+      await sse.ready;
+
+      const command: ClientMessage = {
+        type: "command",
+        payload: {
+          id: "field-assist-model-runtime",
+          type: "field_assist",
+          requestId: "leave-form:reason",
+          action: "polish",
+          fieldType: "textarea",
+          requestMethod: "editor",
+          title: "请假原因",
+          currentValue: "个人事务",
+        },
+      };
+      const postResponse = await fetch(`${origin}${created.messagesUrl}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(command),
+      });
+      expect(postResponse.status).toBe(202);
+      await expect(sse.result).resolves.toMatchObject({
+        type: "response",
+        payload: {
+          id: "field-assist-model-runtime",
+          command: "field_assist",
+          success: true,
+          data: {
+            value: "个人事务需要处理。",
+            metadata: {
+              model: {
+                provider: "dano-field-assist",
+                id: provider.getModel().id,
+              },
+            },
+          },
+        },
+      });
+
+      expect(provider.state.callCount).toBe(1);
+      expect(observedContext?.systemPrompt).toContain("字段文本润色助手");
+      expect(observedContext?.messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "个人事务",
+        }),
+      ]);
+      expect(observedContext?.tools).toBeUndefined();
+      expect(sessionManager.getEntries()).toEqual(entriesBefore);
+      expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionFileBefore);
+      expect(
+        fs.readdirSync(root).filter(name => name.endsWith(".jsonl")).sort(),
+      ).toEqual(sessionFilesBefore);
+      expect(mainSessionEvents).toEqual([]);
+      expect(session.pendingMessageCount).toBe(0);
+      expect(session.isStreaming).toBe(false);
+      expect(session.model).toMatchObject({
+        provider: "dano-field-assist",
+        id: provider.getModel().id,
+      });
+      expect(session.thinkingLevel).toBe("off");
+    } finally {
+      unsubscribeMainSession();
+      sse?.close();
+      await controller.stop();
+      await backend.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves Field Assist error projection at the HTTP/SSE seam", async () => {
+    const invalidFollowUp = fauxAssistantMessage("请补充一下具体内容");
+    const harness = await createFieldAssistHttpHarness([
+      fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "provider failed",
+      }),
+      ...Array.from({ length: 11 }, () => invalidFollowUp),
+    ]);
+    const command = (
+      id: string,
+      currentValue: string,
+    ): ClientMessage => ({
+      type: "command",
+      payload: {
+        id,
+        type: "field_assist",
+        requestId: `field:${id}`,
+        action: "polish",
+        fieldType: "textarea",
+        requestMethod: "editor",
+        title: "说明",
+        currentValue,
+      },
+    });
+
+    try {
+      await expect(
+        harness.execute(command("provider", "失败内容")),
+      ).resolves.toMatchObject({
+        payload: {
+          id: "provider",
+          command: "field_assist",
+          success: false,
+          error: "AI assist returned empty content",
+        },
+      });
+      await expect(
+        harness.execute(command("invalid", "无效内容")),
+      ).resolves.toMatchObject({
+        payload: {
+          id: "invalid",
+          command: "field_assist",
+          success: false,
+          error: "AI 辅助返回了追问内容，请重试",
+        },
+      });
+      expect(harness.provider.state.callCount).toBe(12);
+    } finally {
+      await harness.dispose();
+    }
+
+    const timeoutHarness = await createFieldAssistHttpHarness(
+      [fauxAssistantMessage("这个响应会在超时后才完成")],
+      { timeoutMs: 1, tokensPerSecond: 100 },
+    );
+    try {
+      await expect(
+        timeoutHarness.execute(command("timeout", "超时内容")),
+      ).resolves.toMatchObject({
+        payload: {
+          id: "timeout",
+          command: "field_assist",
+          success: false,
+          error: "AI assist timed out",
+        },
+      });
+      expect(timeoutHarness.provider.state.callCount).toBe(1);
+    } finally {
+      await timeoutHarness.dispose();
+    }
+  });
+
+  it("keeps concurrent HTTP/SSE Field Assist responses isolated on one ModelRuntime", async () => {
+    const respondByField: FauxResponseStep = async context => {
+      const value = context.messages.at(-1)?.content;
+      const serialized =
+        typeof value === "string" ? value : JSON.stringify(value);
+      if (serialized.includes("并发甲")) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return fauxAssistantMessage("并发甲润色结果");
+      }
+      return fauxAssistantMessage("并发乙润色结果");
+    };
+    const harness = await createFieldAssistHttpHarness([
+      respondByField,
+      respondByField,
+    ]);
+    const command = (id: string, currentValue: string): ClientMessage => ({
+      type: "command",
+      payload: {
+        id,
+        type: "field_assist",
+        requestId: `field:${id}`,
+        action: "polish",
+        fieldType: "textarea",
+        requestMethod: "editor",
+        title: id,
+        currentValue,
+      },
+    });
+
+    try {
+      const [first, second] = await Promise.all([
+        harness.execute(command("concurrent-a", "并发甲")),
+        harness.execute(command("concurrent-b", "并发乙")),
+      ]);
+      expect(first).toMatchObject({
+        payload: {
+          id: "concurrent-a",
+          success: true,
+          data: { value: "并发甲润色结果" },
+        },
+      });
+      expect(second).toMatchObject({
+        payload: {
+          id: "concurrent-b",
+          success: true,
+          data: { value: "并发乙润色结果" },
+        },
+      });
+      expect(harness.provider.state.callCount).toBe(2);
+    } finally {
+      await harness.dispose();
     }
   });
 

@@ -1,3 +1,13 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  type FauxResponseStep,
+  type RegisterFauxProviderOptions,
+} from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   FieldAssistError,
@@ -6,9 +16,34 @@ import {
   buildPolishMessages,
   buildRegenerateMessages,
   createFieldAssistService,
+  createPiSdkFieldAssistClient,
   getFieldAssistWarnings,
   normalizeFieldAssistOutput,
 } from "../field-assist.js";
+
+async function createModelRuntimeClient(options: {
+  provider: string;
+  responses: FauxResponseStep[];
+  providerOptions?: Omit<RegisterFauxProviderOptions, "provider">;
+}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "field-assist-runtime-"));
+  const provider = fauxProvider({
+    ...options.providerOptions,
+    provider: options.provider,
+  });
+  provider.setResponses(options.responses);
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(root, "auth.json"),
+    modelsPath: null,
+  });
+  modelRuntime.registerNativeProvider(provider.provider);
+  await modelRuntime.setRuntimeApiKey(options.provider, "test-only");
+  return {
+    client: createPiSdkFieldAssistClient({ modelRuntime }),
+    provider,
+    dispose: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
 
 describe("field assist", () => {
   it("keeps polish user prompt as the raw current value", () => {
@@ -281,6 +316,98 @@ describe("field assist", () => {
       value: "请在此处详细描述项目目标、范围和关键要求。",
     });
     expect(ai.generateText).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps concurrent Field Assist results isolated per request", async () => {
+    const pending = new Map<string, (value: string) => void>();
+    const ai = {
+      generateText: vi.fn(
+        ({ messages }: { messages: Array<{ role: string; content: string }> }) =>
+          new Promise<string>(resolve => {
+            pending.set(messages.at(-1)?.content ?? "", resolve);
+          }),
+      ),
+    };
+    const service = createFieldAssistService({
+      ai,
+      getCurrentModel: () => ({ id: "gpt-4", provider: "openai" }),
+      maxRetries: 0,
+    });
+
+    const first = service.assist({
+      requestId: "req-first",
+      action: "polish",
+      fieldType: "textarea",
+      requestMethod: "editor",
+      title: "第一项",
+      currentValue: "第一项内容",
+    });
+    const second = service.assist({
+      requestId: "req-second",
+      action: "polish",
+      fieldType: "textarea",
+      requestMethod: "editor",
+      title: "第二项",
+      currentValue: "第二项内容",
+    });
+
+    pending.get("第二项内容")?.("第二项内容更加完整");
+    pending.get("第一项内容")?.("第一项内容更加完整");
+
+    await expect(Promise.all([first, second])).resolves.toMatchObject([
+      { value: "第一项内容更加完整" },
+      { value: "第二项内容更加完整" },
+    ]);
+  });
+
+  it("keeps the existing provider-failure projection on ModelRuntime", async () => {
+    const harness = await createModelRuntimeClient({
+      provider: "field-assist-error",
+      responses: [
+        fauxAssistantMessage([], {
+          stopReason: "error",
+          errorMessage: "provider failed",
+        }),
+      ],
+    });
+
+    try {
+      await expect(
+        harness.client.generateText({
+          model: harness.provider.getModel(),
+          messages: [{ role: "user", content: "内容" }],
+        }),
+      ).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+        message: "AI assist returned empty content",
+      });
+      expect(harness.provider.state.callCount).toBe(1);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  it("keeps the existing timeout projection on ModelRuntime", async () => {
+    const harness = await createModelRuntimeClient({
+      provider: "field-assist-timeout",
+      providerOptions: { tokensPerSecond: 100 },
+      responses: [fauxAssistantMessage("这个响应会在超时后才完成")],
+    });
+
+    try {
+      await expect(
+        harness.client.generateText({
+          model: harness.provider.getModel(),
+          messages: [{ role: "user", content: "内容" }],
+          timeoutMs: 1,
+        }),
+      ).rejects.toMatchObject({
+        code: "MODEL_TIMEOUT",
+        message: "AI assist timed out",
+      });
+    } finally {
+      harness.dispose();
+    }
   });
 
   it("retries regenerate outputs that only echo the current value or prefill", async () => {

@@ -146,4 +146,16 @@ describe("Pi 0.82.1 public interface baseline", () => {
     expect(backendSource).toContain("session.pendingMessageCount");
     expect(backendSource).not.toContain('event.type === "queue_update"');
   });
+
+  it("keeps Field Assist on the public ModelRuntime boundary", () => {
+    const fieldAssistSource = readFileSync(
+      new URL("../field-assist.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(fieldAssistSource).toContain("modelRuntime.complete");
+    expect(fieldAssistSource).not.toMatch(
+      /\bcreateAgentSession\b|\bSessionManager\b|\bSettingsManager\b/,
+    );
+  });
 });
