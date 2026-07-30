@@ -6677,7 +6677,7 @@ export class BridgeRpcAdapter {
       case "set_model": {
         const detachedSession = this.sessionRuntime.getDetachedSession();
         const models = detachedSession
-          ? detachedSession.modelRegistry.getAvailable()
+          ? [...detachedSession.modelRuntime.getAvailableSnapshot()]
           : this.context.state.getAvailableModels();
         const model = models.find(
           m => m.provider === command.provider && m.id === command.modelId,
@@ -6711,7 +6711,7 @@ export class BridgeRpcAdapter {
       case "get_available_models": {
         const detachedSession = this.sessionRuntime.getDetachedSession();
         const models = detachedSession
-          ? detachedSession.modelRegistry.getAvailable()
+          ? [...detachedSession.modelRuntime.getAvailableSnapshot()]
           : this.context.state.getAvailableModels();
         return {
           id: correlationId,

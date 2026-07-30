@@ -74,7 +74,7 @@ SKILL_BODY_EXPANDED
     });
 
     try {
-      vi.spyOn(session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+      vi.spyOn(session.modelRuntime, "hasConfiguredAuth").mockReturnValue(true);
       const agent = (session as unknown as {
         agent: { prompt(messages: unknown[]): Promise<void> };
       }).agent;

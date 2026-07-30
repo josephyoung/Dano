@@ -16,7 +16,8 @@
     "test": "vitest run --root ../.. --config vitest.config.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.80.2",
+    "@earendil-works/pi-ai": "0.82.1",
+    "@earendil-works/pi-coding-agent": "0.82.1",
     "@internationalized/date": "^3.12.2",
     "@josephyoung/pi-heimdall": "0.2.17",
     "bits-ui": "^2.18.1",

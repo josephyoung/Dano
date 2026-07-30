@@ -29,8 +29,8 @@ function createMockSession() {
     appendThinkingLevelChange: vi.fn(),
   };
 
-  const modelRegistry = {
-    getAvailable: vi.fn().mockReturnValue([
+  const modelRuntime = {
+    getAvailableSnapshot: vi.fn().mockReturnValue([
       {
         id: "gpt-4",
         name: "GPT-4",
@@ -67,7 +67,7 @@ function createMockSession() {
 
   const session = {
     sessionManager,
-    modelRegistry,
+    modelRuntime,
     settingsManager: {
       getDefaultProvider: vi.fn().mockReturnValue("openai"),
       getDefaultModel: vi.fn().mockReturnValue("gpt-4"),
@@ -311,8 +311,8 @@ describe("Dano backend", () => {
     };
     const session = {
       sessionManager,
-      modelRegistry: {
-        getAvailable: vi.fn().mockReturnValue([model]),
+      modelRuntime: {
+        getAvailableSnapshot: vi.fn().mockReturnValue([model]),
       },
       settingsManager: {
         getDefaultProvider: vi.fn().mockReturnValue("openai"),
@@ -398,8 +398,8 @@ describe("Dano backend", () => {
     };
     const session = {
       sessionManager,
-      modelRegistry: {
-        getAvailable: vi.fn().mockReturnValue([openaiModel, xiaomiModel]),
+      modelRuntime: {
+        getAvailableSnapshot: vi.fn().mockReturnValue([openaiModel, xiaomiModel]),
       },
       settingsManager: {
         getDefaultProvider: vi.fn().mockReturnValue("openai"),
@@ -486,8 +486,8 @@ describe("Dano backend", () => {
     };
     const session = {
       sessionManager,
-      modelRegistry: {
-        getAvailable: vi.fn().mockReturnValue([model]),
+      modelRuntime: {
+        getAvailableSnapshot: vi.fn().mockReturnValue([model]),
       },
       settingsManager: {
         getDefaultProvider: vi.fn().mockReturnValue("openai"),

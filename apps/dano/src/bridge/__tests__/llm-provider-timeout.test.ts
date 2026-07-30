@@ -3,6 +3,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  ModelRuntime,
   SessionManager,
   createAgentSession,
 } from "@earendil-works/pi-coding-agent";
@@ -47,31 +48,37 @@ async function createProviderSession(
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-llm-timeout-"));
   roots.push(root);
-  const model = {
-    id: "timeout-fixture",
-    name: "Timeout Fixture",
-    provider: "timeout-fixture",
-    api: "openai-completions" as const,
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(root, "agent", "auth.json"),
+    modelsPath: null,
+  });
+  modelRuntime.registerProvider("timeout-fixture", {
+    api: "openai-completions",
     baseUrl,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 16_000,
-    maxTokens: 1_024,
-  };
+    apiKey: "test-key",
+    models: [
+      {
+        id: "timeout-fixture",
+        name: "Timeout Fixture",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 16_000,
+        maxTokens: 1_024,
+      },
+    ],
+  });
+  const model = modelRuntime.getModel("timeout-fixture", "timeout-fixture");
+  if (!model) throw new Error("Provider fixture model was not registered");
   const { session } = await createAgentSession({
     cwd: root,
     agentDir: path.join(root, "agent"),
+    modelRuntime,
     model,
     noTools: "all",
     sessionManager: options.persistSession
       ? SessionManager.create(root, root)
       : SessionManager.inMemory(root),
-  });
-  vi.spyOn(session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
-  vi.spyOn(session.modelRegistry, "getApiKeyAndHeaders").mockResolvedValue({
-    ok: true,
-    apiKey: "test-key",
   });
   configureDanoLlmResilience(session.settingsManager, session, {
     DANO_LLM_TIMEOUT_MS: String(timeoutMs),
