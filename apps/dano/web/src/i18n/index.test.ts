@@ -14,7 +14,7 @@ describe("i18n", () => {
     vi.stubGlobal("window", {});
 
     expect(t("emptyState.message", { productName: "Dano" })).toBe(
-      "给 Dano 发消息",
+      "给Dano发消息",
     );
   });
 

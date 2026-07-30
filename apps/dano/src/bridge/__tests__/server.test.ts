@@ -1252,7 +1252,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
         productName: "Custom Agent",
         emptyState: {
           mode: "html",
-          content: "<strong>给 {产品名称} 发消息</strong>",
+          content: "<strong>给{产品名称}发消息</strong>",
         },
         slashCommandsAndMentionsEnabled: true,
         transcriptProcessSummaryEnabled: true,
@@ -1278,7 +1278,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
     expect(spaHtml).toContain("window.__PI_WEB_CONFIG__=");
     expect(spaHtml).toContain('"productName":"Custom Agent"');
     expect(spaHtml).toContain(
-      '"emptyState":{"mode":"html","content":"\\u003cstrong>给 {产品名称} 发消息\\u003c/strong>"}',
+      '"emptyState":{"mode":"html","content":"\\u003cstrong>给{产品名称}发消息\\u003c/strong>"}',
     );
     expect(spaHtml).toContain(
       '"quickActions":[{"label":"请假","prompt":"帮我申请请假"}]',

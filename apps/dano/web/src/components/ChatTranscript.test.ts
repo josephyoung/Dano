@@ -1043,11 +1043,11 @@ describe("ChatTranscript Activity Trail", () => {
       expect(target.textContent).toContain("问题卡显示失败");
       expect(target.querySelector(".tool-activity .lucide-list-checks")).not.toBeNull();
       expect(target.textContent).not.toContain("internal parser trace");
-      expect(target.textContent).not.toContain("Dano 在有限重试后");
+      expect(target.textContent).not.toContain("小络助手在有限重试后");
 
       target.querySelector<HTMLButtonElement>(".tool-activity-trigger")?.click();
       await tick();
-      expect(target.textContent).toContain("小络助手 在有限重试后仍无法显示问题卡");
+      expect(target.textContent).toContain("小络助手在有限重试后仍无法显示问题卡");
       expect(target.textContent).not.toContain("internal parser trace");
     } finally {
       await unmount(component);

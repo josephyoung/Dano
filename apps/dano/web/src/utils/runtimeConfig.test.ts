@@ -24,7 +24,7 @@ describe("runtimeConfig", () => {
     expect(getRuntimeLocale()).toBe("zh-CN");
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "text",
-      content: "给 小络助手 发消息",
+      content: "给小络助手发消息",
     });
     expect(getRuntimeSlashCommandsAndMentionsEnabled()).toBe(false);
     expect(getRuntimeTranscriptProcessSummaryEnabled()).toBe(false);
@@ -46,12 +46,12 @@ describe("runtimeConfig", () => {
   it("renders configured text with the Chinese product placeholder", () => {
     stubRuntimeConfig({
       productName: "My Agent",
-      emptyState: { mode: "text", content: "给 {产品名称} 发消息" },
+      emptyState: { mode: "text", content: "给{产品名称}发消息" },
     });
 
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "text",
-      content: "给 My Agent 发消息",
+      content: "给My Agent发消息",
     });
   });
 
@@ -60,13 +60,13 @@ describe("runtimeConfig", () => {
       productName: "My Agent",
       emptyState: {
         mode: "html",
-        content: "<strong>给 {产品名称} 发消息</strong>",
+        content: "<strong>给{产品名称}发消息</strong>",
       },
     });
 
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "html",
-      content: "<strong>给 My Agent 发消息</strong>",
+      content: "<strong>给My Agent发消息</strong>",
     });
   });
 

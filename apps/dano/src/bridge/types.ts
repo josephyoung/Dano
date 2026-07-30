@@ -78,7 +78,7 @@ export const DEFAULT_BRIDGE_CONFIG: BridgeConfig = {
   productName: DEFAULT_PRODUCT_NAME,
   emptyState: {
     mode: "text",
-    content: "给 {产品名称} 发消息",
+    content: "给{产品名称}发消息",
   },
   quickActions: [],
   slashCommandsAndMentionsEnabled: false,

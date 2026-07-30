@@ -51,7 +51,7 @@ const DANO_HEIMDALL_SANDBOX_ENV_ALLOW = [
 ] as const;
 const DEFAULT_EMPTY_STATE: BridgeEmptyStateConfig = {
   mode: "text",
-  content: "给 {产品名称} 发消息",
+  content: "给{产品名称}发消息",
 };
 
 interface DanoPackageInfo {

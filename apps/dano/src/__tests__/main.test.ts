@@ -531,13 +531,13 @@ describe("Dano main", () => {
   it("uses product name and empty text from environment", () => {
     const options = parseDanoServerOptions([], {
       DANO_PRODUCT_NAME: "My Agent",
-      DANO_EMPTY_STATE_TEXT: "给 {产品名称} 发消息",
+      DANO_EMPTY_STATE_TEXT: "给{产品名称}发消息",
     });
 
     expect(options.productName).toBe("My Agent");
     expect(options.emptyState).toEqual({
       mode: "text",
-      content: "给 {产品名称} 发消息",
+      content: "给{产品名称}发消息",
     });
   });
 
@@ -550,12 +550,12 @@ describe("Dano main", () => {
   it("uses empty html from environment when provided", () => {
     const options = parseDanoServerOptions([], {
       DANO_EMPTY_STATE_TEXT: "ignored",
-      DANO_EMPTY_STATE_HTML: "<strong>给 {产品名称} 发消息</strong>",
+      DANO_EMPTY_STATE_HTML: "<strong>给{产品名称}发消息</strong>",
     });
 
     expect(options.emptyState).toEqual({
       mode: "html",
-      content: "<strong>给 {产品名称} 发消息</strong>",
+      content: "<strong>给{产品名称}发消息</strong>",
     });
   });
 
@@ -638,7 +638,7 @@ describe("Dano main", () => {
       mkdirSync(runtimeDefaultsDir, { recursive: true });
       writeFileSync(
         join(runtimeDefaultsDir, "SYSTEM.md"),
-        "你是 {产品名称}，system prompt",
+        "你是{产品名称}，system prompt",
       );
       writeFileSync(join(runtimeDefaultsDir, "settings.json"), "{}");
       writeFileSync(join(runtimeDefaultsDir, "heimdall.json"), "{}");
@@ -646,7 +646,7 @@ describe("Dano main", () => {
       initializeDanoAgentSettings(agentRoot, nestedSourceDir, "My Agent");
 
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
-        "你是 My Agent，system prompt",
+        "你是My Agent，system prompt",
       );
       expect(readFileSync(join(agentRoot, "settings.json"), "utf8")).toBe(
         "{}",

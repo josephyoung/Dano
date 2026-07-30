@@ -39,7 +39,7 @@ describe("ComposerBar prompt submission", () => {
     try {
       expect(
         target.querySelector<HTMLTextAreaElement>("textarea")?.placeholder,
-      ).toBe("想让 My Agent 帮你处理什么问题");
+      ).toBe("想让My Agent帮你处理什么问题");
     } finally {
       window.__PI_WEB_CONFIG__ = originalConfig;
       await unmount(component);
