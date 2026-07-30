@@ -12,6 +12,7 @@ services:
       DANO_HOST: 0.0.0.0
       DANO_PORT: 8080
       DANO_RUNTIME_DIR: /opt/dano/runtime-data
+      DANO_PRODUCT_NAME: ${DANO_PRODUCT_NAME:-}
       DANO_SESSIONS_ROOT: /opt/dano/runtime-data/.dano/sessions
       DANO_UPLOAD_DIR: /opt/dano/runtime-data/.dano/uploads
       DANO_UPLOAD_MAX_TOTAL_BYTES: ${DANO_UPLOAD_MAX_TOTAL_BYTES:-10737418240}

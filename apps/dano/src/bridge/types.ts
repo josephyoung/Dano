@@ -48,7 +48,7 @@ export interface BridgeConfig {
   readonly staticDir?: string;
   /** Workspace path used by browser clients when opening a fresh page. Default: "/tmp/dano" */
   readonly defaultWorkspacePath?: string;
-  /** Browser product name used in branded UI. Default: "Dano" */
+  /** Browser product name used in branded UI. */
   readonly productName: string;
   /** Empty transcript content shown before the first message. */
   readonly emptyState: BridgeEmptyStateConfig;
@@ -74,10 +74,10 @@ export const DEFAULT_BRIDGE_CONFIG: BridgeConfig = {
   port: 7036,
   portMax: 0,
   defaultWorkspacePath: "/tmp/dano",
-  productName: "Dano",
+  productName: "",
   emptyState: {
     mode: "text",
-    content: "给 {产品名称} 发消息",
+    content: "给{产品名称}发消息",
   },
   quickActions: [],
   slashCommandsAndMentionsEnabled: false,

@@ -11,6 +11,7 @@ describe("Dano config", () => {
     fs.writeFileSync(
       configPath,
       JSON.stringify({
+        productName: " 测试助手 ",
         defaultProvider: "xiaomi-token-plan-cn",
         defaultModel: "mimo-v2.5",
         defaultThinkingLevel: "medium",
@@ -38,6 +39,7 @@ describe("Dano config", () => {
         env: { DANO_CONFIG_PATH: configPath },
       }),
     ).toEqual({
+      productName: "测试助手",
       fieldAssist: {
         maxRetries: 10,
       },

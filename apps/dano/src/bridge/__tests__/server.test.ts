@@ -1237,7 +1237,10 @@ describe("BridgeServer HTTP/SSE transport", () => {
 
   it("serves static assets and falls back to index.html for SPA routes", async () => {
     const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-static-"));
-    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>index</main>");
+    fs.writeFileSync(
+      path.join(staticDir, "index.html"),
+      "<html><head><title></title></head><body><main>index</main></body></html>",
+    );
     fs.writeFileSync(path.join(staticDir, "asset.txt"), "asset");
     const eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
     const server = new BridgeServer(
@@ -1249,7 +1252,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
         productName: "Custom Agent",
         emptyState: {
           mode: "html",
-          content: "<strong>给 {产品名称} 发消息</strong>",
+          content: "<strong>给{产品名称}发消息</strong>",
         },
         slashCommandsAndMentionsEnabled: true,
         transcriptProcessSummaryEnabled: true,
@@ -1270,16 +1273,33 @@ describe("BridgeServer HTTP/SSE transport", () => {
     );
     const spaHtml = await fetch(`${origin}/missing/route`).then(r => r.text());
     expect(spaHtml).toContain("<main>index</main>");
+    expect(spaHtml).toContain("<title></title>");
     expect(spaHtml).toContain("window.__PI_WEB_CONFIG__=");
     expect(spaHtml).toContain('"productName":"Custom Agent"');
     expect(spaHtml).toContain(
-      '"emptyState":{"mode":"html","content":"\\u003cstrong>给 {产品名称} 发消息\\u003c/strong>"}',
+      '"emptyState":{"mode":"html","content":"\\u003cstrong>给{产品名称}发消息\\u003c/strong>"}',
     );
     expect(spaHtml).toContain(
       '"quickActions":[{"label":"请假","prompt":"帮我申请请假"}]',
     );
     expect(spaHtml).toContain('"slashCommandsAndMentionsEnabled":true');
     expect(spaHtml).toContain('"transcriptProcessSummaryEnabled":true');
+  });
+
+  it("keeps the no-bundle placeholder title unbranded", async () => {
+    const { server } = createServer(undefined, {
+      staticDir: undefined,
+      productName: "测试 <助手>",
+    });
+    const address = await server.start();
+
+    const html = await fetch(`http://127.0.0.1:${address.port}/`).then(response =>
+      response.text(),
+    );
+
+    expect(html).toContain("<title></title>");
+    expect(html).not.toContain("测试 &lt;助手&gt;");
+    expect(html).toContain("No web bundle is configured");
   });
 
   it("uploads arbitrary files into the current workspace by declared hash", async () => {

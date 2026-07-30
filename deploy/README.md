@@ -9,6 +9,12 @@ This directory contains deployment-specific defaults and proxy config.
 - The Pi agent config directory is
   `${PI_CODING_AGENT_DIR:-$DANO_RUNTIME_DIR/.pi/agent}`.
 - Runtime skills stay under `/opt/dano/runtime-data/.agents/skills`.
+
+`productName` in `dano.config.json` is the default assistant name used by the
+browser title, empty state, composer prompt, and the initial system-prompt
+render. A deployment may set `DANO_PRODUCT_NAME` explicitly to override that
+single configured value; Compose does not define a second product-name default.
+
 - Production deployment keeps three directories separate:
   - `/tmp/dano-build-*` is the disposable source checkout and image build dir.
   - `/opt/dano/deploy` stores Compose, `.env`, secrets, and nginx config.
@@ -31,9 +37,26 @@ On container startup, `deploy/docker-entrypoint.sh` creates:
 /opt/dano/runtime-data/.pi/agent/heimdall.json
 ```
 
-The entrypoint copies those files from `deploy/runtime-defaults/` only when the
-runtime file is missing. It does not overwrite user-modified runtime files.
-It does not copy defaults into a Runtime Workspace `.pi` directory.
+The entrypoint initializes those files from `deploy/runtime-defaults/` only when
+the runtime file is missing. It renders a missing `SYSTEM.md` with the effective
+product name. It never overwrites an existing runtime file, so the host
+persistence location may be edited directly. The release workflow explicitly
+synchronizes `SYSTEM.md` once per deployment, before starting the new app image;
+ordinary application and container restarts still preserve the current file.
+Manual Compose deployments can perform the same explicit synchronization with:
+
+```bash
+docker compose --env-file .env run --rm --no-deps app \
+  node ./deploy/render-system-prompt.mjs --replace \
+  /app/deploy/runtime-defaults/SYSTEM.md \
+  /opt/dano/runtime-data/.pi/agent/SYSTEM.md
+```
+
+The shared renderer uses the mature `atomically` package for complete
+temporary-file writes followed by atomic publication. Missing-file
+initialization additionally uses a no-clobber hard-link publication so a
+concurrent host-created file is preserved. The entrypoint does not copy defaults
+into a Runtime Workspace `.pi` directory.
 
 ## Authenticated User Context
 

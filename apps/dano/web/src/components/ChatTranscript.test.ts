@@ -1008,6 +1008,8 @@ describe("ChatTranscript Activity Trail", () => {
   });
 
   it("shows a terminal question-card failure with its matching icon and useful detail", async () => {
+    const originalConfig = window.__PI_WEB_CONFIG__;
+    window.__PI_WEB_CONFIG__ = { productName: "测试助手" };
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(ChatTranscript, {
@@ -1043,13 +1045,14 @@ describe("ChatTranscript Activity Trail", () => {
       expect(target.textContent).toContain("问题卡显示失败");
       expect(target.querySelector(".tool-activity .lucide-list-checks")).not.toBeNull();
       expect(target.textContent).not.toContain("internal parser trace");
-      expect(target.textContent).not.toContain("Dano 在有限重试后");
+      expect(target.textContent).not.toContain("测试助手在有限重试后");
 
       target.querySelector<HTMLButtonElement>(".tool-activity-trigger")?.click();
       await tick();
-      expect(target.textContent).toContain("Dano 在有限重试后仍无法显示问题卡");
+      expect(target.textContent).toContain("测试助手在有限重试后仍无法显示问题卡");
       expect(target.textContent).not.toContain("internal parser trace");
     } finally {
+      window.__PI_WEB_CONFIG__ = originalConfig;
       await unmount(component);
       target.remove();
     }

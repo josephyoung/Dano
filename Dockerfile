@@ -55,6 +55,8 @@ COPY --from=build /app/apps/dano/dist ./dist
 COPY --from=build /app/dano.config.json ./dano.config.json
 COPY deploy/runtime-defaults ./deploy/runtime-defaults
 COPY deploy/docker-entrypoint.sh ./deploy/docker-entrypoint.sh
+COPY deploy/render-system-prompt.mjs ./deploy/render-system-prompt.mjs
+COPY apps/dano/runtime/system-prompt.mjs ./apps/dano/runtime/system-prompt.mjs
 RUN chmod +x ./deploy/docker-entrypoint.sh \
   && mkdir -p /opt/dano/runtime-data \
   && chown -R node:node /opt/dano /home/node

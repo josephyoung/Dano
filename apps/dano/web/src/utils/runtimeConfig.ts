@@ -1,4 +1,5 @@
 import type { BridgeQuickActionConfig } from "@dano/types/protocol";
+import danoConfig from "../../../../../dano.config.json";
 import { normalizeLocale, type Locale } from "../i18n/locales";
 import { translate } from "../i18n/translate";
 
@@ -9,7 +10,6 @@ export interface EmptyStateConfig {
   content: string;
 }
 
-const DEFAULT_PRODUCT_NAME = "Dano";
 const DEFAULT_EMPTY_STATE_KEY = "emptyState.message";
 
 function runtimeConfig() {
@@ -19,7 +19,7 @@ function runtimeConfig() {
 function normalizedProductName(value: unknown): string {
   return typeof value === "string" && value.trim()
     ? value.trim()
-    : DEFAULT_PRODUCT_NAME;
+    : danoConfig.productName;
 }
 
 function interpolateProductName(content: string, productName: string): string {
@@ -30,6 +30,10 @@ function interpolateProductName(content: string, productName: string): string {
 
 export function getRuntimeProductName(): string {
   return normalizedProductName(runtimeConfig()?.productName);
+}
+
+export function applyRuntimeProductTitle(): void {
+  document.title = getRuntimeProductName();
 }
 
 export function getRuntimeLocale(): Locale {

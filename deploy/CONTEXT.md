@@ -21,5 +21,5 @@ The Pi global agent directory selected by `PI_CODING_AGENT_DIR`, where Dano stor
 _Avoid_: Runtime Workspace, user home, project `.pi`
 
 **Runtime Defaults**:
-Source-controlled files copied into the Agent Config Directory only when the corresponding runtime file is missing.
+Source-controlled files used to initialize the Agent Config Directory only when the corresponding runtime file is missing. The system-prompt template is rendered with the deployment's effective product name. Ordinary starts preserve existing host-managed files; an explicit Release Build synchronizes the system prompt atomically before starting the new app image.
 _Avoid_: Runtime state, generated config

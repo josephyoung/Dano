@@ -1,4 +1,5 @@
 import {
+  constants,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -11,7 +12,14 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDanoBackend } from "./backend.js";
 import type { DanoBackend } from "./backend.js";
-import { loadDanoConfig } from "./bridge/dano-config.js";
+import {
+  resolveProductName,
+  syncSystemPrompt,
+} from "../runtime/system-prompt.mjs";
+import {
+  loadDanoConfig,
+  type DanoConfig,
+} from "./bridge/dano-config.js";
 import { DetachedSessionRegistry } from "./bridge/session-registry.js";
 import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
@@ -29,7 +37,6 @@ const DEFAULT_DANO_UPLOAD_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_REFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_ORPHANED_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-const DEFAULT_PRODUCT_NAME = "Dano";
 const DEFAULT_RUNTIME_SETTINGS_FILES = [
   "SYSTEM.md",
   "settings.json",
@@ -49,7 +56,7 @@ const DANO_HEIMDALL_SANDBOX_ENV_ALLOW = [
 ] as const;
 const DEFAULT_EMPTY_STATE: BridgeEmptyStateConfig = {
   mode: "text",
-  content: "给 {产品名称} 发消息",
+  content: "给{产品名称}发消息",
 };
 
 interface DanoPackageInfo {
@@ -89,7 +96,6 @@ Options:
   --port <number>            Port to bind (default: ${DEFAULT_DANO_PORT})
   --default-workspace <path> Deprecated; new sessions use DANO_RUNTIME_DIR/workspaces/ws_<random>
   --sessions-root <path>     Directory for session jsonl files (env: DANO_SESSIONS_ROOT, default: <default-workspace>/${DEFAULT_DANO_SESSIONS_DIR})
-  --product-name <name>      Product name shown in browser UI (env: DANO_PRODUCT_NAME, default: ${DEFAULT_PRODUCT_NAME})
   --empty-state-text <text>  Empty transcript text (env: DANO_EMPTY_STATE_TEXT, default: ${DEFAULT_EMPTY_STATE.content})
   --empty-state-html <html>  Empty transcript HTML (env: DANO_EMPTY_STATE_HTML)
   --help                     Show this help
@@ -150,10 +156,6 @@ function readSessionsRootPath(
     env.PI_WEB_SESSIONS_ROOT?.trim() ||
     undefined
   );
-}
-
-function readProductName(env: Record<string, string | undefined>): string {
-  return env.DANO_PRODUCT_NAME?.trim() || DEFAULT_PRODUCT_NAME;
 }
 
 function readEmptyStateConfig(
@@ -319,12 +321,16 @@ export function readDanoPackageInfo(cwd: string): DanoPackageInfo {
 export function parseDanoServerOptions(
   argv: string[],
   env: Record<string, string | undefined> = process.env,
+  danoConfig: DanoConfig = loadDanoConfig({ cwd: process.cwd(), env }),
 ): DanoServerOptions {
   let host = readHost(env);
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
   let sessionsRootPath = readSessionsRootPath(env);
-  let productName = readProductName(env);
+  const productName = resolveProductName(
+    env.DANO_PRODUCT_NAME,
+    danoConfig.productName,
+  );
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
   const userAuthentication = readUserAuthentication(env);
@@ -374,15 +380,6 @@ export function parseDanoServerOptions(
           throw new Error("Missing value for --sessions-root");
         }
         sessionsRootPath = next;
-        index++;
-        continue;
-      }
-      case "--product-name": {
-        const next = argv[index + 1];
-        if (!next || next.startsWith("--")) {
-          throw new Error("Missing value for --product-name");
-        }
-        productName = next.trim() || DEFAULT_PRODUCT_NAME;
         index++;
         continue;
       }
@@ -448,10 +445,11 @@ function ensureDefaultWorkspace(path: string): string {
   return path;
 }
 
-export function initializeDanoAgentSettings(
+export async function initializeDanoAgentSettings(
   agentDir: string,
   sourceCwd: string,
-): void {
+  productName: string,
+): Promise<void> {
   const runtimeDefaultsDir = findNearestRuntimeDefaultsDir(sourceCwd);
   if (!runtimeDefaultsDir) {
     return;
@@ -463,8 +461,29 @@ export function initializeDanoAgentSettings(
   for (const fileName of DEFAULT_RUNTIME_SETTINGS_FILES) {
     const sourcePath = join(runtimeDefaultsDir, fileName);
     const targetPath = join(targetSettingsDir, fileName);
-    if (existsSync(sourcePath) && !existsSync(targetPath)) {
-      copyFileSync(sourcePath, targetPath);
+    if (!existsSync(sourcePath)) {
+      continue;
+    }
+
+    if (fileName === "SYSTEM.md") {
+      await syncSystemPrompt({
+        templatePath: sourcePath,
+        targetPath,
+        productName,
+        mode: "if-missing",
+      });
+    } else {
+      try {
+        copyFileSync(sourcePath, targetPath, constants.COPYFILE_EXCL);
+      } catch (error) {
+        const alreadyExists =
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EEXIST";
+        if (!alreadyExists) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -601,8 +620,14 @@ async function runDanoServer(
 
 async function runDanoMain(): Promise<number> {
   let options: DanoServerOptions;
+  let danoConfig: DanoConfig;
   try {
-    options = parseDanoServerOptions(process.argv.slice(2));
+    danoConfig = loadDanoConfig({ cwd: process.cwd() });
+    options = parseDanoServerOptions(
+      process.argv.slice(2),
+      process.env,
+      danoConfig,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[dano] ${message}`);
@@ -619,12 +644,15 @@ async function runDanoMain(): Promise<number> {
   const packageInfo = readDanoPackageInfo(options.cwd);
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
-  const danoConfig = loadDanoConfig({ cwd: options.cwd });
   const defaultWorkspacePath = ensureDefaultWorkspace(options.defaultWorkspacePath);
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
-  initializeDanoAgentSettings(options.agentConfigDir, options.cwd);
+  await initializeDanoAgentSettings(
+    options.agentConfigDir,
+    options.cwd,
+    options.productName,
+  );
   mkdirSync(options.sessionsRootPath, { recursive: true });
   process.env.DANO_SESSIONS_ROOT = options.sessionsRootPath;
   process.env.PI_WEB_SESSIONS_ROOT = options.sessionsRootPath;

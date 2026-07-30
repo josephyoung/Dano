@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyRuntimeProductTitle,
   getRuntimeEmptyStateConfig,
   getRuntimeLocale,
   getRuntimeProductName,
@@ -17,14 +18,14 @@ describe("runtimeConfig", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses Dano defaults when runtime config is absent", () => {
+  it("uses 小络助手 defaults when runtime config is absent", () => {
     vi.stubGlobal("window", {});
 
-    expect(getRuntimeProductName()).toBe("Dano");
+    expect(getRuntimeProductName()).toBe("小络助手");
     expect(getRuntimeLocale()).toBe("zh-CN");
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "text",
-      content: "给 Dano 发消息",
+      content: "给小络助手发消息",
     });
     expect(getRuntimeSlashCommandsAndMentionsEnabled()).toBe(false);
     expect(getRuntimeTranscriptProcessSummaryEnabled()).toBe(false);
@@ -43,15 +44,24 @@ describe("runtimeConfig", () => {
     });
   });
 
+  it("applies the configured assistant name to the document title", () => {
+    stubRuntimeConfig({ productName: "测试助手" });
+    vi.stubGlobal("document", { title: "" });
+
+    applyRuntimeProductTitle();
+
+    expect(document.title).toBe("测试助手");
+  });
+
   it("renders configured text with the Chinese product placeholder", () => {
     stubRuntimeConfig({
       productName: "My Agent",
-      emptyState: { mode: "text", content: "给 {产品名称} 发消息" },
+      emptyState: { mode: "text", content: "给{产品名称}发消息" },
     });
 
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "text",
-      content: "给 My Agent 发消息",
+      content: "给My Agent发消息",
     });
   });
 
@@ -60,13 +70,13 @@ describe("runtimeConfig", () => {
       productName: "My Agent",
       emptyState: {
         mode: "html",
-        content: "<strong>给 {产品名称} 发消息</strong>",
+        content: "<strong>给{产品名称}发消息</strong>",
       },
     });
 
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "html",
-      content: "<strong>给 My Agent 发消息</strong>",
+      content: "<strong>给My Agent发消息</strong>",
     });
   });
 
