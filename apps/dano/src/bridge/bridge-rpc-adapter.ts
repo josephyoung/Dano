@@ -5208,6 +5208,7 @@ export class BridgeRpcAdapter {
     string,
     RpcTranscriptUpsertEvent
   >();
+  private readonly retryingSessions = new Set<string>();
   private readonly pendingDetachedPromptTimers = new Set<
     ReturnType<typeof setTimeout>
   >();
@@ -5319,6 +5320,13 @@ export class BridgeRpcAdapter {
           );
           return;
 
+        case "auto_retry_end":
+          this.forwardAutoRetryEnd(
+            event,
+            this.context.state.sessionManager.getSessionFile(),
+          );
+          return;
+
         case "session_compact":
           if (!this.sessionRuntime.shouldHandleLiveSessionEvents()) return;
           this.sendTranscriptSnapshot(
@@ -5380,6 +5388,9 @@ export class BridgeRpcAdapter {
           case "auto_retry_start":
             this.forwardAutoRetryStart(event, sessionPath);
             return;
+          case "auto_retry_end":
+            this.forwardAutoRetryEnd(event, sessionPath);
+            return;
           default:
             return;
         }
@@ -5395,6 +5406,7 @@ export class BridgeRpcAdapter {
       this.discardPendingLlmError(sessionPath);
       return false;
     }
+    this.retryingSessions.delete(this.llmErrorSessionKey(sessionPath));
     this.flushPendingLlmError(sessionPath);
     this.sendEvent(toRpcAgentEndEvent(event, sessionPath));
     return true;
@@ -5404,7 +5416,20 @@ export class BridgeRpcAdapter {
     event: { attempt: number; maxAttempts: number; delayMs: number },
     sessionPath: string | null | undefined,
   ): void {
+    this.retryingSessions.add(this.llmErrorSessionKey(sessionPath));
     this.sendEvent(toRpcAutoRetryStartEvent(event, sessionPath));
+  }
+
+  private forwardAutoRetryEnd(
+    event: { success: boolean },
+    sessionPath: string | null | undefined,
+  ): void {
+    if (event.success) return;
+    const key = this.llmErrorSessionKey(sessionPath);
+    if (!this.retryingSessions.delete(key)) return;
+    this.flushPendingLlmError(sessionPath);
+    this.sendEvent(toRpcAgentEndEvent({}, sessionPath));
+    this.sessionStatsPusher.queue(sessionPath ?? null);
   }
 
   private sendEvent(payload: RpcBridgeEvent): void {
@@ -7960,6 +7985,7 @@ export class BridgeRpcAdapter {
       this.pendingTranscriptDeltaBatch = null;
     }
     this.pendingLlmErrors.clear();
+    this.retryingSessions.clear();
     for (const timer of this.pendingDetachedPromptTimers) {
       clearTimeout(timer);
     }

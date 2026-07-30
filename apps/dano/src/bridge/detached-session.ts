@@ -37,11 +37,16 @@ export interface CreateDetachedAgentSessionOptions {
   askUserQuestionTool?: ToolDefinition;
 }
 
+export interface CreateDetachedAgentSessionResult
+  extends CreateAgentSessionResult {
+  disposeDanoLlmResilience(): void;
+}
+
 export async function createDetachedAgentSession(
   cwd: string,
   sessionManager: SessionManager,
   options: CreateDetachedAgentSessionOptions = {},
-): Promise<CreateAgentSessionResult> {
+): Promise<CreateDetachedAgentSessionResult> {
   const services = await createAgentSessionServices({
     cwd,
     resourceLoaderOptions: {
@@ -65,6 +70,9 @@ export async function createDetachedAgentSession(
       options.askUserQuestionTool ?? askUserQuestionTool,
     ] as unknown as ToolDefinition[],
   });
-  configureDanoLlmResilience(services.settingsManager, result.session);
-  return result;
+  const disposeDanoLlmResilience = configureDanoLlmResilience(
+    services.settingsManager,
+    result.session,
+  );
+  return { ...result, disposeDanoLlmResilience };
 }

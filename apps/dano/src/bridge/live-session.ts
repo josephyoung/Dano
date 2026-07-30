@@ -27,6 +27,10 @@ export type BridgeLiveEvent =
       delayMs: number;
     }
   | {
+      type: "auto_retry_end";
+      success: boolean;
+    }
+  | {
       type: "message_start" | "message_update" | "message_end";
       [key: string]: unknown;
     }
