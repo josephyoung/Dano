@@ -59,8 +59,8 @@ export interface BridgeSessionState {
   /** True when the live agent is idle (not streaming). */
   isIdle(): boolean;
 
-  /** True when the live session has queued / pending messages. */
-  hasPendingMessages(): boolean;
+  /** Number of queued messages reported by the live Pi session. */
+  getPendingMessageCount(): number;
 
   /** Available model registry. */
   getAvailableModels(): Array<{
@@ -78,14 +78,13 @@ export interface BridgeSessionState {
     | { id: string; provider: string; name?: string }
     | undefined;
 
-  /** Saved default model from runtime settings, when available. */
-  getDefaultModel?(): { provider?: string; modelId?: string };
+  /** Default model configured by Pi SettingsManager, when resolvable. */
+  getConfiguredDefaultModel():
+    | { id: string; provider: string; name?: string }
+    | undefined;
 
-  /** Ordered saved default models from runtime settings, when available. */
-  getDefaultModels?(): Array<{ provider?: string; modelId?: string }>;
-
-  /** Saved default thinking level from runtime settings, when available. */
-  getDefaultThinkingLevel?(): string | undefined;
+  /** Default thinking level configured by Pi SettingsManager. */
+  getConfiguredDefaultThinkingLevel(): string | undefined;
 
   /** Current thinking level. */
   getThinkingLevel(): string;

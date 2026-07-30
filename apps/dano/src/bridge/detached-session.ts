@@ -34,8 +34,6 @@ const HEIMDALL_EXTENSION_PATH = resolveHeimdallExtensionPath();
 export interface CreateDetachedAgentSessionOptions {
   model?: CreateAgentSessionFromServicesOptions["model"];
   thinkingLevel?: CreateAgentSessionFromServicesOptions["thinkingLevel"];
-  defaultModel?: { provider?: string; modelId?: string };
-  defaultThinkingLevel?: CreateAgentSessionFromServicesOptions["thinkingLevel"];
   askUserQuestionTool?: ToolDefinition;
 }
 
@@ -50,23 +48,12 @@ export async function createDetachedAgentSession(
       additionalExtensionPaths: [HEIMDALL_EXTENSION_PATH],
     },
   });
-  const defaultModel =
-    options.defaultModel?.provider && options.defaultModel.modelId
-      ? services.modelRuntime
-          .getAvailableSnapshot()
-          .find(
-            model =>
-              model.provider === options.defaultModel?.provider &&
-              model.id === options.defaultModel?.modelId,
-          )
-      : undefined;
-
   const result = await createAgentSessionFromServices({
     services,
     sessionManager,
     noTools: "builtin",
-    model: options.model ?? defaultModel,
-    thinkingLevel: options.thinkingLevel ?? options.defaultThinkingLevel,
+    model: options.model,
+    thinkingLevel: options.thinkingLevel,
     customTools: [
       createReadToolDefinition(cwd, {
         autoResizeImages: services.settingsManager.getImageAutoResize(),

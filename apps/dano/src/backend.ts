@@ -16,11 +16,6 @@ import {
   createFieldAssistService,
   createPiSdkFieldAssistClient,
 } from "./bridge/field-assist.js";
-import {
-  resolveAgentSessionDefaults,
-  resolveAgentSessionModel,
-  type DefaultSessionSettings,
-} from "./bridge/default-model.js";
 import { createHeadlessUIContext } from "./bridge/headless-ui-context.js";
 import { interruptOpenFormInteractions } from "./bridge/form-interaction.js";
 import type {
@@ -32,7 +27,6 @@ import type {
 import type { BridgeRpcAdapterContext } from "./bridge/bridge-rpc-adapter.js";
 import type {
   RpcSlashCommand,
-  RpcThinkingLevel,
 } from "../types/protocol.js";
 
 export interface DanoBackend {
@@ -76,78 +70,6 @@ function listSessionCommands(session: AgentSession): RpcSlashCommand[] {
   );
 }
 
-function normalizeDefaultThinkingLevel(
-  value: string | undefined,
-): RpcThinkingLevel | undefined {
-  switch (value) {
-    case "off":
-    case "minimal":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
-      return value;
-    default:
-      return undefined;
-  }
-}
-
-function configuredDanoDefaultModel(
-  danoConfig: DanoConfig,
-): { provider: string; modelId: string } | undefined {
-  return danoConfig.defaultProvider && danoConfig.defaultModel
-    ? {
-        provider: danoConfig.defaultProvider,
-        modelId: danoConfig.defaultModel,
-      }
-    : undefined;
-}
-
-function getSettingsManagerDefaults(session: AgentSession): {
-  provider?: string;
-  modelId?: string;
-  thinkingLevel?: RpcThinkingLevel;
-} {
-  const settingsManager = session.settingsManager as
-    | {
-        getDefaultProvider?: () => string | undefined;
-        getDefaultModel?: () => string | undefined;
-        getDefaultThinkingLevel?: () => string | undefined;
-      }
-    | undefined;
-
-  return {
-    provider: settingsManager?.getDefaultProvider?.(),
-    modelId: settingsManager?.getDefaultModel?.(),
-    thinkingLevel: normalizeDefaultThinkingLevel(
-      settingsManager?.getDefaultThinkingLevel?.(),
-    ),
-  };
-}
-
-function createDefaultSessionSettings(
-  session: AgentSession,
-  danoConfig: DanoConfig,
-): DefaultSessionSettings {
-  const settingsDefaults = getSettingsManagerDefaults(session);
-  const models = [
-    configuredDanoDefaultModel(danoConfig),
-    {
-      provider: settingsDefaults.provider,
-      modelId: settingsDefaults.modelId,
-    },
-  ].filter(
-    (model): model is { provider: string; modelId: string } =>
-      Boolean(model?.provider && model.modelId),
-  );
-
-  return {
-    models,
-    thinkingLevel:
-      danoConfig.defaultThinkingLevel ?? settingsDefaults.thinkingLevel,
-  };
-}
-
 function toBridgeLiveEvent(event: AgentSessionEvent): BridgeLiveEvent | null {
   switch (event.type) {
     case "agent_start":
@@ -185,7 +107,6 @@ export function createDanoBackendFromSession(
   }),
 ): DanoBackend {
   interruptOpenFormInteractions(session.sessionManager);
-  let pendingMessageCount = 0;
   const liveEventHandlers = new Set<(event: BridgeLiveEvent) => void>();
 
   const emitLiveEvent = (event: BridgeLiveEvent): void => {
@@ -199,11 +120,6 @@ export function createDanoBackendFromSession(
   };
 
   const unsubscribeSession = session.subscribe(event => {
-    if (event.type === "queue_update") {
-      pendingMessageCount = event.steering.length + event.followUp.length;
-      return;
-    }
-
     const liveEvent = toBridgeLiveEvent(event);
     if (!liveEvent) {
       return;
@@ -234,8 +150,8 @@ export function createDanoBackendFromSession(
       return !session.isStreaming;
     },
 
-    hasPendingMessages() {
-      return pendingMessageCount > 0;
+    getPendingMessageCount() {
+      return session.pendingMessageCount;
     },
 
     getAvailableModels() {
@@ -243,35 +159,23 @@ export function createDanoBackendFromSession(
     },
 
     getCurrentModel() {
-      return resolveAgentSessionModel(
-        session,
-        createDefaultSessionSettings(session, danoConfig),
-      );
+      return session.model;
     },
 
-    getDefaultModel() {
-      const settingsDefaults = getSettingsManagerDefaults(session);
-      return configuredDanoDefaultModel(danoConfig) ?? {
-        provider: settingsDefaults.provider,
-        modelId: settingsDefaults.modelId,
-      };
+    getConfiguredDefaultModel() {
+      const provider = session.settingsManager.getDefaultProvider();
+      const modelId = session.settingsManager.getDefaultModel();
+      return provider && modelId
+        ? session.modelRuntime.getModel(provider, modelId)
+        : undefined;
     },
 
-    getDefaultModels() {
-      return [
-        ...(createDefaultSessionSettings(session, danoConfig).models ?? []),
-      ];
-    },
-
-    getDefaultThinkingLevel() {
-      return createDefaultSessionSettings(session, danoConfig).thinkingLevel;
+    getConfiguredDefaultThinkingLevel() {
+      return session.settingsManager.getDefaultThinkingLevel();
     },
 
     getThinkingLevel() {
-      return resolveAgentSessionDefaults(
-        session,
-        createDefaultSessionSettings(session, danoConfig),
-      ).thinkingLevel;
+      return session.thinkingLevel;
     },
 
     getContextUsage() {
@@ -364,8 +268,6 @@ export async function createDanoBackend(
     sessionManager.getCwd() || cwd,
     sessionManager,
     {
-      defaultModel: configuredDanoDefaultModel(danoConfig),
-      defaultThinkingLevel: danoConfig.defaultThinkingLevel,
       askUserQuestionTool: askUserQuestion.tool,
     },
   );

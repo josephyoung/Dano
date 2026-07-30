@@ -1,7 +1,4 @@
 {
-  "defaultProvider": "xiaomi-token-plan-cn",
-  "defaultModel": "mimo-v2.5",
-  "defaultThinkingLevel": "medium",
   "defaultProjectTrust": "always",
   "fieldAssist": {
     "maxRetries": 10
