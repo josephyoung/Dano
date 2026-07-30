@@ -1287,6 +1287,21 @@ describe("BridgeServer HTTP/SSE transport", () => {
     expect(spaHtml).toContain('"transcriptProcessSummaryEnabled":true');
   });
 
+  it("uses the configured product name in the no-bundle placeholder title", async () => {
+    const { server } = createServer(undefined, {
+      staticDir: undefined,
+      productName: "测试 <助手>",
+    });
+    const address = await server.start();
+
+    const html = await fetch(`http://127.0.0.1:${address.port}/`).then(response =>
+      response.text(),
+    );
+
+    expect(html).toContain("<title>测试 &lt;助手&gt;</title>");
+    expect(html).toContain("No web bundle is configured");
+  });
+
   it("escapes the configured product name in the HTML title", async () => {
     const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-static-"));
     fs.writeFileSync(

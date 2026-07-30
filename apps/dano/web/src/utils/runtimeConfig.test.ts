@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyRuntimeProductTitle,
   getRuntimeEmptyStateConfig,
   getRuntimeLocale,
   getRuntimeProductName,
@@ -41,6 +42,15 @@ describe("runtimeConfig", () => {
       mode: "text",
       content: "Message My Agent",
     });
+  });
+
+  it("applies the configured assistant name to the document title", () => {
+    stubRuntimeConfig({ productName: "测试助手" });
+    vi.stubGlobal("document", { title: "" });
+
+    applyRuntimeProductTitle();
+
+    expect(document.title).toBe("测试助手");
   });
 
   it("renders configured text with the Chinese product placeholder", () => {

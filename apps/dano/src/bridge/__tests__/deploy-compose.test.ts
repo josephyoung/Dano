@@ -41,6 +41,14 @@ const envExampleFile = new URL(
   "../../../../../.env.example",
   import.meta.url,
 ).pathname;
+const webIndexFile = new URL(
+  "../../../web/index.html",
+  import.meta.url,
+).pathname;
+const assistantIconFile = new URL(
+  "../../../web/public/dano-assistant.svg",
+  import.meta.url,
+).pathname;
 const deployRoot = new URL("../../../../../deploy/", import.meta.url).pathname;
 const dockerfile = new URL("../../../../../Dockerfile", import.meta.url).pathname;
 const dockerignoreFile = new URL(
@@ -531,6 +539,18 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
     expect(compose).not.toContain("DANO_HTTPS_PORT");
     expect(compose).not.toContain("DANO_TLS_CERT_PATH");
     expect(compose).not.toContain("DANO_TLS_KEY_PATH");
+  });
+
+  it("keeps the default assistant name aligned across shipped assets", () => {
+    const envExample = readFileSync(envExampleFile, "utf8");
+    const webIndex = readFileSync(webIndexFile, "utf8");
+    const assistantIcon = readFileSync(assistantIconFile, "utf8");
+
+    expect(envExample).toMatch(/^DANO_PRODUCT_NAME=小络助手$/m);
+    expect(webIndex).toContain("<title></title>");
+    expect(webIndex).not.toContain("小络助手");
+    expect(assistantIcon).toContain('aria-label="助手图标"');
+    expect(assistantIcon).not.toContain("小络助手");
   });
 
   it("ships four exposure modes with shared proxy behavior", () => {
