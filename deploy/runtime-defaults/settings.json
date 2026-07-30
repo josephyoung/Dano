@@ -2,10 +2,5 @@
   "defaultProvider": "xiaomi-token-plan-cn",
   "defaultModel": "mimo-v2.5",
   "defaultThinkingLevel": "high",
-  "defaultProjectTrust": "always",
-  "retry": {
-    "provider": {
-      "timeoutMs": 300000
-    }
-  }
+  "defaultProjectTrust": "always"
 }

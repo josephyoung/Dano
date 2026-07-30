@@ -25,6 +25,7 @@ const roots: string[] = [];
 const providerServers: http.Server[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   for (const server of providerServers.splice(0)) {
     server.closeAllConnections();
@@ -204,7 +205,6 @@ async function startRetryHarness(
   options: {
     retryDelayMs?: number;
     maxRetries?: number;
-    assistantTurnTimeoutMs?: number;
     providerTimeoutMs?: number;
   } = {},
 ) {
@@ -266,12 +266,6 @@ async function startRetryHarness(
     }),
   );
   vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
-  if (options.assistantTurnTimeoutMs !== undefined) {
-    vi.stubEnv(
-      "DANO_ASSISTANT_TURN_TIMEOUT_MS",
-      String(options.assistantTurnTimeoutMs),
-    );
-  }
 
   const controller = await startDanoServer(
     {
@@ -406,11 +400,20 @@ describe("Pi-owned provider retry over HTTP/SSE", () => {
       request.once("close", () => {
         providerCancellations += 1;
       });
-    }, { assistantTurnTimeoutMs: 500 });
+    }, { providerTimeoutMs: 20 * 60_000 });
 
     try {
-      await harness.prompt("respect the total turn budget");
-      expect(providerRequests).toBe(1);
+      vi.useFakeTimers();
+      await harness.startPrompt("respect the total turn budget");
+      await vi.waitFor(() => expect(providerRequests).toBe(1));
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      vi.useRealTimers();
+      await harness.sse.waitFor(
+        candidate =>
+          candidate.type === "event" &&
+          candidate.payload.type === "agent_end",
+        "terminal agent_end after the Assistant Turn budget",
+      );
       await vi.waitFor(() => expect(providerCancellations).toBe(1));
       const payloads = eventPayloads(harness.sse.snapshot());
 
@@ -664,7 +667,6 @@ describe("Pi-owned provider retry over HTTP/SSE", () => {
     }, {
       maxRetries: 0,
       providerTimeoutMs: 100,
-      assistantTurnTimeoutMs: 2_000,
     });
 
     try {
@@ -718,7 +720,6 @@ describe("Pi-owned provider retry over HTTP/SSE", () => {
     }, {
       maxRetries: 0,
       providerTimeoutMs: 60,
-      assistantTurnTimeoutMs: 2_000,
     });
 
     try {

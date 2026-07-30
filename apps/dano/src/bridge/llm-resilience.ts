@@ -4,24 +4,9 @@ import type {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
-export const DEFAULT_DANO_ASSISTANT_TURN_TIMEOUT_MS = 15 * 60_000;
+export const ASSISTANT_TURN_BUDGET_MS = 15 * 60_000;
 
 const READ_ONLY_TOOLS = new Set(["read", "get_dano_version"]);
-
-export function resolveDanoAssistantTurnTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
-  const configured = env.DANO_ASSISTANT_TURN_TIMEOUT_MS?.trim();
-  if (!configured) return DEFAULT_DANO_ASSISTANT_TURN_TIMEOUT_MS;
-
-  const timeoutMs = Number(configured);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new Error(
-      `Invalid DANO_ASSISTANT_TURN_TIMEOUT_MS: expected a positive integer, received ${JSON.stringify(configured)}`,
-    );
-  }
-  return timeoutMs;
-}
 
 function hasVisibleAssistantOutput(event: AgentSessionEvent): boolean {
   if (event.type !== "message_update" || event.message.role !== "assistant") {
@@ -38,9 +23,7 @@ function hasVisibleAssistantOutput(event: AgentSessionEvent): boolean {
 export function configureDanoLlmResilience(
   settingsManager: SettingsManager,
   session: AgentSession,
-  env: NodeJS.ProcessEnv = process.env,
 ): () => void {
-  const assistantTurnTimeoutMs = resolveDanoAssistantTurnTimeoutMs(env);
   let retryEnabledBeforeSuppression = true;
   let retrySuppressed = false;
   let assistantTurnTimer: ReturnType<typeof setTimeout> | undefined;
@@ -74,7 +57,7 @@ export function configureDanoLlmResilience(
       void session.abort().catch(error => {
         console.error("Failed to abort expired Assistant Turn:", error);
       });
-    }, assistantTurnTimeoutMs);
+    }, ASSISTANT_TURN_BUDGET_MS);
     assistantTurnTimer.unref?.();
   };
 

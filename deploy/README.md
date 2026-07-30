@@ -35,12 +35,6 @@ The entrypoint copies those files from `deploy/runtime-defaults/` only when the
 runtime file is missing. It does not overwrite user-modified runtime files.
 It does not copy defaults into a Runtime Workspace `.pi` directory.
 
-The shipped provider request timeout has a single source:
-`runtime-defaults/settings.json` configures Pi's
-`retry.provider.timeoutMs` to 300000 milliseconds. Dano's
-`DANO_ASSISTANT_TURN_TIMEOUT_MS` is a separate total Assistant Turn budget and
-does not configure individual provider requests.
-
 ## Authenticated User Context
 
 Dano can verify an HS256 JWT supplied as an `Authorization: Bearer` token or

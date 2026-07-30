@@ -59,8 +59,9 @@ describe("provider retry ownership guard", () => {
     expect(retryOwnershipSource).not.toMatch(
       /retry\s*:\s*\{[^}]*?(?:maxRetries|baseDelayMs|provider\s*:)/s,
     );
-    expect(deploymentInputs).not.toContain("DANO_LLM_TIMEOUT_MS");
-    expect(deploymentInputs).toContain("DANO_ASSISTANT_TURN_TIMEOUT_MS");
-    expect(runtimeSettings.retry?.provider?.timeoutMs).toBe(300_000);
+    expect(deploymentInputs).not.toMatch(
+      /DANO_(?:LLM|ASSISTANT_TURN)_TIMEOUT_MS/,
+    );
+    expect(runtimeSettings.retry?.provider?.timeoutMs).toBeUndefined();
   });
 });

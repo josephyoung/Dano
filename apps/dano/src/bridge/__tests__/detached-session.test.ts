@@ -56,6 +56,7 @@ describe("detached-session", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -116,7 +117,7 @@ describe("detached-session", () => {
   });
 
   it("builds custom tools for detached sessions", async () => {
-    vi.stubEnv("DANO_ASSISTANT_TURN_TIMEOUT_MS", "10");
+    vi.useFakeTimers();
     const applyOverrides = vi.fn();
     const services = {
       settingsManager: {
@@ -226,7 +227,7 @@ describe("detached-session", () => {
     });
 
     result.disposeDanoLlmResilience();
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(sessionResult.session.abort).not.toHaveBeenCalled();
   });
 
