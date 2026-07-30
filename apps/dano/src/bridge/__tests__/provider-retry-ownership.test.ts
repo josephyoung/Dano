@@ -41,6 +41,11 @@ describe("provider retry ownership guard", () => {
       readRepoFile(".env.example"),
       readRepoFile("docker-compose.yml"),
     ].join("\n");
+    const runtimeSettings = JSON.parse(
+      readRepoFile("deploy/runtime-defaults/settings.json"),
+    ) as {
+      retry?: { provider?: { timeoutMs?: number } };
+    };
 
     expect(productionSources).toContain(
       "apps/dano/src/bridge/llm-resilience.ts",
@@ -56,5 +61,6 @@ describe("provider retry ownership guard", () => {
     );
     expect(deploymentInputs).not.toContain("DANO_LLM_TIMEOUT_MS");
     expect(deploymentInputs).toContain("DANO_ASSISTANT_TURN_TIMEOUT_MS");
+    expect(runtimeSettings.retry?.provider?.timeoutMs).toBe(300_000);
   });
 });

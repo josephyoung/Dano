@@ -119,6 +119,16 @@ describe("Dano main", () => {
     );
   });
 
+  it("ships the provider request timeout through Pi settings", () => {
+    const settings = JSON.parse(
+      readFileSync(resolve("deploy/runtime-defaults/settings.json"), "utf8"),
+    ) as {
+      retry?: { provider?: { timeoutMs?: number } };
+    };
+
+    expect(settings.retry?.provider?.timeoutMs).toBe(300_000);
+  });
+
   it("reloads source runs from the app src without treating builds as dev", () => {
     expect(
       resolveDanoDevWatchPath(
