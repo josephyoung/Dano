@@ -85,7 +85,11 @@ function waitForSseMessage(
 
 async function createFieldAssistHttpHarness(
   responses: FauxResponseStep[],
-  options: { timeoutMs?: number; tokensPerSecond?: number } = {},
+  options: {
+    settingsManager?: SettingsManager;
+    timeoutMs?: number;
+    tokensPerSecond?: number;
+  } = {},
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-field-assist-http-"));
   const provider = fauxProvider({
@@ -107,6 +111,7 @@ async function createFieldAssistHttpHarness(
     thinkingLevel: "off",
     noTools: "all",
     sessionManager: SessionManager.inMemory(root),
+    settingsManager: options.settingsManager,
   });
   const backend = createDanoBackendFromSession(session);
   if (options.timeoutMs !== undefined) {
@@ -133,6 +138,7 @@ async function createFieldAssistHttpHarness(
 
   return {
     provider,
+    session,
     async execute(command: ClientMessage): Promise<ServerMessage> {
       const createResponse = await fetch(`${origin}/api/clients`, {
         method: "POST",
@@ -415,6 +421,75 @@ describe("Pi 0.82.1 HTTP/SSE regression baseline", () => {
       await controller.stop();
       await backend.dispose();
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves main Assistant Turn auto-retry after Field Assist", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      retry: {
+        enabled: true,
+        maxRetries: 1,
+        baseDelayMs: 0,
+        provider: { maxRetries: 0 },
+      },
+    });
+    const harness = await createFieldAssistHttpHarness(
+      [fauxAssistantMessage("个人事务需要处理。")],
+      { settingsManager },
+    );
+    const sessionEvents: string[] = [];
+    const unsubscribe = harness.session.subscribe(event => {
+      sessionEvents.push(event.type);
+    });
+
+    try {
+      await expect(
+        harness.execute({
+          type: "command",
+          payload: {
+            id: "field-assist-before-main-retry",
+            type: "field_assist",
+            requestId: "leave-form:reason",
+            action: "polish",
+            fieldType: "textarea",
+            requestMethod: "editor",
+            title: "请假原因",
+            currentValue: "个人事务",
+          },
+        }),
+      ).resolves.toMatchObject({
+        payload: {
+          id: "field-assist-before-main-retry",
+          success: true,
+          data: { value: "个人事务需要处理。" },
+        },
+      });
+      expect(sessionEvents).toEqual([]);
+
+      harness.provider.setResponses([
+        fauxAssistantMessage([], {
+          stopReason: "error",
+          errorMessage: "429 rate limit exceeded",
+        }),
+        fauxAssistantMessage("主会话自动重试成功。"),
+      ]);
+      await harness.session.prompt("验证主会话自动重试");
+
+      expect(harness.provider.state.callCount).toBe(3);
+      expect(sessionEvents).toContain("auto_retry_start");
+      expect(sessionEvents).toContain("auto_retry_end");
+      expect(harness.session.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [
+          expect.objectContaining({
+            type: "text",
+            text: "主会话自动重试成功。",
+          }),
+        ],
+      });
+    } finally {
+      unsubscribe();
+      await harness.dispose();
     }
   });
 
