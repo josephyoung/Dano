@@ -57,7 +57,7 @@ Pi SDK 文档中的关键点：
 ### 领域语言 / ADR
 
 - 领域术语使用 `Field Assist`，定义见 `CONTEXT.md`。
-- 架构决策见 `docs/adr/0004-field-assist-uses-transient-pi-session.md`。
+- 当前架构决策见 `docs/adr/0004-field-assist-uses-pi-model-runtime.md`；本文后续描述的瞬态 Pi session 方案是已被该 ADR 取代的历史实现计划。
 
 ## 产品目标
 

@@ -233,8 +233,7 @@ export function createDanoBackendFromSession(
       askUserQuestion,
       fieldAssist: createFieldAssistService({
         ai: createPiSdkFieldAssistClient({
-          cwd: session.sessionManager.getCwd(),
-          session,
+          modelRuntime: session.modelRuntime,
         }),
         getCurrentModel: state.getCurrentModel,
         maxRetries: danoConfig.fieldAssist?.maxRetries,

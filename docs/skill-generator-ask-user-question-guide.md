@@ -1464,6 +1464,86 @@ E09 和 E10 均在同一 Assistant Turn 中已提交。
 }
 ```
 
+### E18 Field Assist 生成、润色与安全预检
+
+`fieldAssist:true` 只决定文本控件是否展示“重新生成 / AI 润色”。用户触发后，
+Dano 使用当前 session 的 model、provider 和认证配置，通过 Pi `ModelRuntime`
+完成一次瞬态调用：空字段使用 `regenerate` 生成，非空字段使用 `polish` 润色，
+结果只写回触发操作的目标字段。
+
+Dano 在模型调用前拒绝明显 secret，在模型输出追问、复读或不满足字段规则时执行
+产品级语义重试；provider 自身的失败重试仍由 Pi 负责。Field Assist 不创建
+`AgentSession` 或 session 文件，也不写入主 Assistant Turn 的 transcript、queue、
+thinking、tool、compaction 或 JSONL。
+
+空字段生成动作：
+
+<!-- example:E18 kind:generate-action -->
+```json
+{
+  "requestId": "leave-form:reason",
+  "action": "regenerate",
+  "fieldType": "textarea",
+  "requestMethod": "editor",
+  "title": "请假原因",
+  "placeholder": "请输入请假原因",
+  "currentValue": "",
+  "prefill": "家庭事务"
+}
+```
+
+首次模型输出若是追问，Dano 会进行产品级语义重试；可用结果只包含目标字段值：
+
+<!-- example:E18 kind:generated-value -->
+```json
+{
+  "value": "因家庭事务需要请假一天。"
+}
+```
+
+非空字段润色动作：
+
+<!-- example:E18 kind:polish-action -->
+```json
+{
+  "requestId": "leave-form:summary",
+  "action": "polish",
+  "fieldType": "input",
+  "requestMethod": "input",
+  "title": "事由",
+  "currentValue": "有事"
+}
+```
+
+<!-- example:E18 kind:polished-value -->
+```json
+{
+  "value": "有事需要处理"
+}
+```
+
+明显 secret 会在任何模型调用前失败，并保留原字段内容：
+
+<!-- example:E18 kind:sensitive-action -->
+```json
+{
+  "requestId": "leave-form:secret",
+  "action": "polish",
+  "fieldType": "input",
+  "requestMethod": "input",
+  "title": "备注",
+  "currentValue": "api_key=sk-1234567890abcdefghijklmnop"
+}
+```
+
+<!-- example:E18 kind:sensitive-failure -->
+```json
+{
+  "code": "FIELD_ASSIST_NOT_ALLOWED",
+  "message": "Field contains obvious secret credentials"
+}
+```
+
 ## Result JSON Schema
 
 <!-- schema:result -->
@@ -1668,6 +1748,12 @@ E09 和 E10 均在同一 Assistant Turn 中已提交。
 | `field-assist.default-on` | textarea 默认开启 | [E03](#e03-一次填写完整分组表单) | `fieldAssist:true` |
 | `field-assist.explicit-on` | 显式开启 | [E01](#e01-单行文本与显式-field-assist) | `fieldAssist:true` |
 | `field-assist.explicit-off` | 显式关闭 | [E02](#e02-多行文本与显式关闭-field-assist) | `fieldAssist:false` |
+| `field-assist.generate-empty` | 空字段生成 | [E18](#e18-field-assist-生成润色与安全预检) | `regenerate` 只返回目标字段值 |
+| `field-assist.polish-non-empty` | 非空字段润色 | [E18](#e18-field-assist-生成润色与安全预检) | `polish` 保留原事实 |
+| `field-assist.current-runtime` | 使用当前 model/provider/auth | [E18](#e18-field-assist-生成润色与安全预检) | Pi `ModelRuntime` |
+| `field-assist.product-retry` | Dano 产品级语义重试 | [E18](#e18-field-assist-生成润色与安全预检) | 无效输出后重新生成 |
+| `field-assist.safety-preflight` | 明显 secret 模型前拒绝 | [E18](#e18-field-assist-生成润色与安全预检) | `FIELD_ASSIST_NOT_ALLOWED` |
+| `field-assist.main-turn-isolation` | 主 Assistant Turn 无副作用 | [E18](#e18-field-assist-生成润色与安全预检) | 不创建 session 或写入 JSONL |
 | `date.date-only` | 仅日期 | [E03](#e03-一次填写完整分组表单) | `dateFormat:yyyy-MM-dd` |
 | `date.date-time-minute` | 日期时间到分钟 | [E03](#e03-一次填写完整分组表单) | `dateFormat:yyyy-MM-dd HH:mm` |
 | `date.default-format` | default 匹配 dateFormat | [E03](#e03-一次填写完整分组表单) | 两个 date Card items |

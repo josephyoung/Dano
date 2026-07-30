@@ -1,10 +1,5 @@
 import {
-  createAgentSession,
-  createExtensionRuntime,
-  SessionManager,
-  SettingsManager,
-  type AgentSession,
-  type ResourceLoader,
+  type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import type {
   FieldAssistAction,
@@ -138,18 +133,22 @@ export function createFieldAssistService(options: {
 }
 
 export function createPiSdkFieldAssistClient(options: {
-  cwd: string;
-  session: AgentSession;
+  modelRuntime: ModelRuntime;
 }): FieldAssistClient {
   return {
     async generateText(request) {
-      const model = request.model;
+      const model = request.model
+        ? options.modelRuntime.getModel(
+            request.model.provider,
+            request.model.id,
+          )
+        : undefined;
       if (!model) {
         throw new FieldAssistError("MODEL_UNAVAILABLE", "No model is available");
       }
 
-      let session: AgentSession | undefined;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const timeoutMs = request.timeoutMs ?? 60_000;
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
       try {
         const systemPrompt = request.messages
           .filter(message => message.role === "system")
@@ -160,48 +159,36 @@ export function createPiSdkFieldAssistClient(options: {
           .map(message => message.content)
           .join("\n\n");
 
-        const created = await createAgentSession({
-          cwd: options.cwd,
-          model: model as Parameters<typeof createAgentSession>[0] extends {
-            model?: infer M;
-          }
-            ? M
-            : never,
-          thinkingLevel: "off",
-          modelRuntime: options.session.modelRuntime,
-          settingsManager: SettingsManager.inMemory({
-            compaction: { enabled: false },
-            retry: { enabled: false },
-          }),
-          resourceLoader: createLockedResourceLoader(systemPrompt),
-          noTools: "all",
-          sessionManager: SessionManager.inMemory(options.cwd),
-        });
-        session = created.session;
-
-        let text = "";
-        const unsubscribe = session.subscribe(event => {
-          if (
-            event.type === "message_update" &&
-            event.assistantMessageEvent.type === "text_delta"
-          ) {
-            text += event.assistantMessageEvent.delta;
-          }
-        });
-
-        const timeoutMs = request.timeoutMs ?? 60_000;
-        const timedPrompt = new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            void session?.abort();
-            reject(new FieldAssistError("MODEL_TIMEOUT", "AI assist timed out"));
-          }, timeoutMs);
-        });
-
-        try {
-          await Promise.race([session.prompt(userPrompt, { expandPromptTemplates: false }), timedPrompt]);
-        } finally {
-          unsubscribe();
+        const response = await options.modelRuntime.complete(
+          model,
+          {
+            systemPrompt,
+            messages: [
+              {
+                role: "user",
+                content: userPrompt,
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          { signal: timeoutSignal },
+        );
+        if (timeoutSignal.aborted) {
+          throw new FieldAssistError("MODEL_TIMEOUT", "AI assist timed out");
         }
+        if (response.stopReason === "aborted") {
+          throw new FieldAssistError("MODEL_ABORTED", "AI assist was aborted");
+        }
+        if (response.stopReason === "error") {
+          throw new FieldAssistError(
+            "INTERNAL_ERROR",
+            "AI assist returned empty content",
+          );
+        }
+        const text = response.content
+          .filter(block => block.type === "text")
+          .map(block => block.text)
+          .join("");
 
         if (!text.trim()) {
           throw new FieldAssistError(
@@ -210,9 +197,13 @@ export function createPiSdkFieldAssistClient(options: {
           );
         }
         return text.trim();
-      } finally {
-        if (timeout) clearTimeout(timeout);
-        session?.dispose();
+      } catch (cause) {
+        if (timeoutSignal.aborted && !(cause instanceof FieldAssistError)) {
+          throw new FieldAssistError("MODEL_TIMEOUT", "AI assist timed out", {
+            cause,
+          });
+        }
+        throw cause;
       }
     },
   };
@@ -432,22 +423,4 @@ function assertFieldAssistChangedOutput(
       "AI 辅助返回了重复内容，请重试",
     );
   }
-}
-
-function createLockedResourceLoader(systemPrompt: string): ResourceLoader {
-  return {
-    getExtensions: () => ({
-      extensions: [],
-      errors: [],
-      runtime: createExtensionRuntime(),
-    }),
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => systemPrompt,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
 }
