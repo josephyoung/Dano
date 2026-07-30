@@ -1047,7 +1047,7 @@ describe("ChatTranscript Activity Trail", () => {
 
       target.querySelector<HTMLButtonElement>(".tool-activity-trigger")?.click();
       await tick();
-      expect(target.textContent).toContain("Dano 在有限重试后仍无法显示问题卡");
+      expect(target.textContent).toContain("小络助手 在有限重试后仍无法显示问题卡");
       expect(target.textContent).not.toContain("internal parser trace");
     } finally {
       await unmount(component);

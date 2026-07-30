@@ -9,6 +9,11 @@ This directory contains deployment-specific defaults and proxy config.
 - The Pi agent config directory is
   `${PI_CODING_AGENT_DIR:-$DANO_RUNTIME_DIR/.pi/agent}`.
 - Runtime skills stay under `/opt/dano/runtime-data/.agents/skills`.
+
+`DANO_PRODUCT_NAME` configures the assistant name used by the browser title,
+empty state, composer prompt, and the shipped default system prompt. Compose
+defaults it to `小络助手`; set it in the deploy `.env` to override that name.
+
 - Production deployment keeps three directories separate:
   - `/tmp/dano-build-*` is the disposable source checkout and image build dir.
   - `/opt/dano/deploy` stores Compose, `.env`, secrets, and nginx config.

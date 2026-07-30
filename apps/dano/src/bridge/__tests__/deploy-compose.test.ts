@@ -504,6 +504,9 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
       "DANO_RUNTIME_DIR: /opt/dano/runtime-data",
     );
     expect(compose).toContain(
+      "DANO_PRODUCT_NAME: ${DANO_PRODUCT_NAME:-小络助手}",
+    );
+    expect(compose).toContain(
       "DANO_SESSIONS_ROOT: /opt/dano/runtime-data/.dano/sessions",
     );
     expect(compose).toContain(
@@ -608,6 +611,7 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
 
     expect(dockerfileText).toContain("ENV HOME=/home/node");
     expect(dockerfileText).toContain("ENV DANO_RUNTIME_DIR=/opt/dano/runtime-data");
+    expect(dockerfileText).toContain("ENV DANO_PRODUCT_NAME=小络助手");
     expect(dockerfileText).toContain("ENV HEIMDALL_BWRAP_BIND_KERNEL_FS=1");
     expect(dockerfileText).toContain("ENV HEIMDALL_BWRAP_BIND_PROC=0");
     expect(dockerfileText).toContain(

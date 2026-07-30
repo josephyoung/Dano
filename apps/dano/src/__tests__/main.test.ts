@@ -541,6 +541,12 @@ describe("Dano main", () => {
     });
   });
 
+  it("defaults the assistant name to 小络助手", () => {
+    const options = parseDanoServerOptions([], {});
+
+    expect(options.productName).toBe("小络助手");
+  });
+
   it("uses empty html from environment when provided", () => {
     const options = parseDanoServerOptions([], {
       DANO_EMPTY_STATE_TEXT: "ignored",
@@ -630,14 +636,17 @@ describe("Dano main", () => {
       const runtimeDefaultsDir = join(sourceRoot, "deploy", "runtime-defaults");
       mkdirSync(nestedSourceDir, { recursive: true });
       mkdirSync(runtimeDefaultsDir, { recursive: true });
-      writeFileSync(join(runtimeDefaultsDir, "SYSTEM.md"), "system prompt");
+      writeFileSync(
+        join(runtimeDefaultsDir, "SYSTEM.md"),
+        "你是 {产品名称}，system prompt",
+      );
       writeFileSync(join(runtimeDefaultsDir, "settings.json"), "{}");
       writeFileSync(join(runtimeDefaultsDir, "heimdall.json"), "{}");
 
-      initializeDanoAgentSettings(agentRoot, nestedSourceDir);
+      initializeDanoAgentSettings(agentRoot, nestedSourceDir, "My Agent");
 
       expect(readFileSync(join(agentRoot, "SYSTEM.md"), "utf8")).toBe(
-        "system prompt",
+        "你是 My Agent，system prompt",
       );
       expect(readFileSync(join(agentRoot, "settings.json"), "utf8")).toBe(
         "{}",

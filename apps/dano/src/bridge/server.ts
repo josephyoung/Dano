@@ -901,7 +901,9 @@ export class BridgeServer {
     if (!this.config.staticDir) {
       if (safePath === "/index.html") {
         res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(getPlaceholderHtml(this.host, this.port));
+        res.end(
+          getPlaceholderHtml(this.host, this.port, this.config.productName),
+        );
       } else {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Not Found - No web bundle configured");
@@ -1141,6 +1143,24 @@ function serializeRuntimeConfig(config: unknown): string {
   return JSON.stringify(config).replace(/</g, "\\u003c");
 }
 
+function escapeHtmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function injectProductTitle(html: string, productName: string): string {
+  const title = `<title>${escapeHtmlText(productName)}</title>`;
+  const titlePattern = /<title(?:\s[^>]*)?>[\s\S]*?<\/title>/i;
+  if (titlePattern.test(html)) {
+    return html.replace(titlePattern, title);
+  }
+  return html.includes("</head>")
+    ? html.replace("</head>", `${title}</head>`)
+    : `${title}${html}`;
+}
+
 function injectRuntimeConfig(html: string, config: BridgeConfig): string {
   const runtimeConfig: BridgeBrowserRuntimeConfig = {
     debugModeAvailable: runtimeDebugModeEnabled(),
@@ -1153,12 +1173,17 @@ function injectRuntimeConfig(html: string, config: BridgeConfig): string {
       config.transcriptProcessSummaryEnabled,
   };
   const configScript = `<script>window.__PI_WEB_CONFIG__=${serializeRuntimeConfig(runtimeConfig)};</script>`;
-  return html.includes("</head>")
-    ? html.replace("</head>", `${configScript}</head>`)
-    : `${configScript}${html}`;
+  const brandedHtml = injectProductTitle(html, config.productName);
+  return brandedHtml.includes("</head>")
+    ? brandedHtml.replace("</head>", `${configScript}</head>`)
+    : `${configScript}${brandedHtml}`;
 }
 
-function getPlaceholderHtml(_host: string, port: number): string {
+function getPlaceholderHtml(
+  _host: string,
+  port: number,
+  productName: string,
+): string {
   const lanIps = getLanIps();
   const httpUrl = (ip: string) => `http://${ip}:${port}`;
   const lanUrlLines =
@@ -1176,7 +1201,7 @@ function getPlaceholderHtml(_host: string, port: number): string {
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Dano</title>
+	<title>${escapeHtmlText(productName)}</title>
 	<style>
 		body {
 			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

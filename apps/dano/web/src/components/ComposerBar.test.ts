@@ -26,6 +26,26 @@ describe("ComposerBar prompt submission", () => {
     document.body.replaceChildren();
   });
 
+  it("uses the configured assistant name in the input placeholder", async () => {
+    const originalConfig = window.__PI_WEB_CONFIG__;
+    window.__PI_WEB_CONFIG__ = { productName: "My Agent" };
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = mount(ComposerBar, {
+      target,
+      props: { connectionStatus: "connected" },
+    });
+
+    try {
+      expect(
+        target.querySelector<HTMLTextAreaElement>("textarea")?.placeholder,
+      ).toBe("想让 My Agent 帮你处理什么问题");
+    } finally {
+      window.__PI_WEB_CONFIG__ = originalConfig;
+      await unmount(component);
+    }
+  });
+
   it("keeps the submitted draft and blocks duplicate sends until acceptance", async () => {
     const acceptance = deferred<boolean>();
     const onSubmit = vi.fn(() => acceptance.promise);

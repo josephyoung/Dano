@@ -17,14 +17,14 @@ describe("runtimeConfig", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses Dano defaults when runtime config is absent", () => {
+  it("uses 小络助手 defaults when runtime config is absent", () => {
     vi.stubGlobal("window", {});
 
-    expect(getRuntimeProductName()).toBe("Dano");
+    expect(getRuntimeProductName()).toBe("小络助手");
     expect(getRuntimeLocale()).toBe("zh-CN");
     expect(getRuntimeEmptyStateConfig()).toEqual({
       mode: "text",
-      content: "给 Dano 发消息",
+      content: "给 小络助手 发消息",
     });
     expect(getRuntimeSlashCommandsAndMentionsEnabled()).toBe(false);
     expect(getRuntimeTranscriptProcessSummaryEnabled()).toBe(false);
