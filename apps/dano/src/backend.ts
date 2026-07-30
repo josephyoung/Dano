@@ -87,6 +87,11 @@ function toBridgeLiveEvent(event: AgentSessionEvent): BridgeLiveEvent | null {
         maxAttempts: event.maxAttempts,
         delayMs: event.delayMs,
       };
+    case "auto_retry_end":
+      return {
+        type: "auto_retry_end",
+        success: event.success,
+      };
     case "message_start":
     case "message_update":
     case "message_end":
@@ -105,6 +110,7 @@ export function createDanoBackendFromSession(
     maxRetries: danoConfig.askUserQuestion?.maxRetries,
     defaultTitle: danoConfig.askUserQuestion?.defaultTitle,
   }),
+  disposeDanoLlmResilience: () => void = () => {},
 ): DanoBackend {
   interruptOpenFormInteractions(session.sessionManager);
   const liveEventHandlers = new Set<(event: BridgeLiveEvent) => void>();
@@ -242,6 +248,7 @@ export function createDanoBackendFromSession(
     session,
     async dispose() {
       unsubscribeSession();
+      disposeDanoLlmResilience();
       session.dispose();
     },
   };
@@ -286,5 +293,6 @@ export async function createDanoBackend(
     result.session,
     danoConfig,
     askUserQuestion,
+    result.disposeDanoLlmResilience,
   );
 }

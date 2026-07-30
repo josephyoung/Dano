@@ -193,7 +193,13 @@ describe("Dano backend", () => {
 
   it("adapts an AgentSession into bridge state, actions, and events", async () => {
     const mock = createMockSession();
-    const backend = createDanoBackendFromSession(mock.session);
+    const disposeDanoLlmResilience = vi.fn();
+    const backend = createDanoBackendFromSession(
+      mock.session,
+      {},
+      undefined,
+      disposeDanoLlmResilience,
+    );
     const received: string[] = [];
 
     backend.context.events.subscribe(event => {
@@ -288,7 +294,11 @@ describe("Dano backend", () => {
 
     await backend.dispose();
     expect(mock.unsubscribe).toHaveBeenCalled();
+    expect(disposeDanoLlmResilience).toHaveBeenCalledTimes(1);
     expect(mock.session.dispose).toHaveBeenCalled();
+    expect(disposeDanoLlmResilience.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(mock.session.dispose).mock.invocationCallOrder[0],
+    );
   });
 
   it("starts and stops the Dano server lifecycle", async () => {

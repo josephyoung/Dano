@@ -44,6 +44,7 @@ function createRunningSession(registry: DetachedSessionRegistry, root: string) {
   });
   const abort = vi.fn(async () => {
     calls.push("abort");
+    retryController.abort();
     providerController.abort();
     toolController.abort();
   });
@@ -59,7 +60,11 @@ function createRunningSession(registry: DetachedSessionRegistry, root: string) {
     prompt: requestProvider,
     sessionManager: handle.getSessionManager(),
   };
-  createAgentSessionMock.mockResolvedValueOnce({ session });
+  const disposeDanoLlmResilience = vi.fn();
+  createAgentSessionMock.mockResolvedValueOnce({
+    session,
+    disposeDanoLlmResilience,
+  });
   return {
     handle,
     abort,
@@ -68,6 +73,8 @@ function createRunningSession(registry: DetachedSessionRegistry, root: string) {
     requestProvider,
     executeTool,
     waitForRetryDelay,
+    disposeDanoLlmResilience,
+    disposeSession: session.dispose,
   };
 }
 
@@ -104,7 +111,7 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
     await expect(requestResult).resolves.toMatchObject({ name: "AbortError" });
     expect(running.requestProvider).toHaveBeenCalledTimes(1);
     expect(running.executeTool).not.toHaveBeenCalled();
-    expect(running.calls).toEqual(["abortRetry", "abort"]);
+    expect(running.calls).toEqual(["abort"]);
   });
 
   it("aborts an executing tool when its final viewer is destroyed", async () => {
@@ -118,7 +125,7 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
     await expect(toolResult).resolves.toMatchObject({ name: "AbortError" });
     expect(running.executeTool).toHaveBeenCalledTimes(1);
     expect(running.requestProvider).not.toHaveBeenCalled();
-    expect(running.calls).toEqual(["abortRetry", "abort"]);
+    expect(running.calls).toEqual(["abort"]);
   });
 
   it("cancels an active retry delay when its final viewer is destroyed", async () => {
@@ -131,7 +138,7 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
 
     await expect(retryResult).resolves.toMatchObject({ name: "AbortError" });
     expect(running.waitForRetryDelay).toHaveBeenCalledTimes(1);
-    expect(running.calls).toEqual(["abortRetry", "abort"]);
+    expect(running.calls).toEqual(["abort"]);
   });
 
   it("keeps a running session alive while another viewer still owns it", async () => {
@@ -153,7 +160,7 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
     expect(abort).not.toHaveBeenCalled();
 
     await registry.destroyViewer(handle.sessionPath, "client-b");
-    expect(abortRetry).toHaveBeenCalledTimes(1);
+    expect(abortRetry).not.toHaveBeenCalled();
     expect(abort).toHaveBeenCalledTimes(1);
   });
 
@@ -170,7 +177,7 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
     await registry.destroyViewer(handle.sessionPath, "client-a");
     await registry.destroyViewer(handle.sessionPath, "client-a");
 
-    expect(abortRetry).toHaveBeenCalledTimes(1);
+    expect(abortRetry).not.toHaveBeenCalled();
     expect(abort).toHaveBeenCalledTimes(1);
   });
 
@@ -187,5 +194,19 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
 
     expect(abortRetry).not.toHaveBeenCalled();
     expect(abort).not.toHaveBeenCalled();
+  });
+
+  it("clears Dano Assistant Turn resources before disposing the Pi session", async () => {
+    const { registry, root } = createRegistry();
+    const running = createRunningSession(registry, root);
+    await registry.ensureSession(running.handle.sessionPath);
+
+    registry.removeSession(running.handle.sessionPath);
+
+    expect(running.disposeDanoLlmResilience).toHaveBeenCalledTimes(1);
+    expect(running.disposeSession).toHaveBeenCalledTimes(1);
+    expect(running.disposeDanoLlmResilience.mock.invocationCallOrder[0]).toBeLessThan(
+      running.disposeSession.mock.invocationCallOrder[0],
+    );
   });
 });
