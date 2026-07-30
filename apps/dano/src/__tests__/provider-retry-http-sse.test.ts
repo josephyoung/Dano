@@ -681,4 +681,64 @@ describe("Pi-owned provider retry over HTTP/SSE", () => {
       await harness.dispose();
     }
   });
+
+  it("keeps an active provider stream alive while data continues arriving", async () => {
+    let providerRequests = 0;
+    const harness = await startRetryHarness((_request, response) => {
+      providerRequests += 1;
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        connection: "keep-alive",
+      });
+      const writeChunk = (content: string, finishReason: string | null = null) => {
+        response.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-provider-long-stream",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "retry-fixture",
+            choices: [
+              {
+                index: 0,
+                delta: content ? { content } : {},
+                finish_reason: finishReason,
+              },
+            ],
+          })}\n\n`,
+        );
+      };
+
+      writeChunk("first ");
+      setTimeout(() => writeChunk("second "), 40);
+      setTimeout(() => writeChunk("third"), 80);
+      setTimeout(() => {
+        writeChunk("", "stop");
+        response.end("data: [DONE]\n\n");
+      }, 120);
+    }, {
+      maxRetries: 0,
+      providerTimeoutMs: 60,
+      assistantTurnTimeoutMs: 2_000,
+    });
+
+    try {
+      await harness.prompt("keep the active stream alive");
+      const payloads = eventPayloads(harness.sse.snapshot());
+
+      expect(providerRequests).toBe(1);
+      expect(payloads.filter(payload => payload.type === "agent_end"))
+        .toHaveLength(1);
+      expect(
+        payloads.filter(
+          payload =>
+            payload.type === "transcript_upsert" &&
+            payload.message.role === "assistant" &&
+            payload.message.stopReason === "error",
+        ),
+      ).toHaveLength(0);
+      expect(JSON.stringify(payloads)).toContain("first second third");
+    } finally {
+      await harness.dispose();
+    }
+  });
 });
