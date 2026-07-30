@@ -138,7 +138,7 @@ const createMockContext = (): BridgeRpcAdapterContext => {
     sessionManager: sessionManager as unknown as SessionManager,
     cwd: "/test/project",
     isIdle: vi.fn().mockReturnValue(true),
-    hasPendingMessages: vi.fn().mockReturnValue(false),
+    getPendingMessageCount: vi.fn().mockReturnValue(0),
     getAvailableModels: vi.fn().mockReturnValue([
       model,
       {
@@ -151,17 +151,8 @@ const createMockContext = (): BridgeRpcAdapterContext => {
       },
     ]),
     getCurrentModel: vi.fn().mockReturnValue(model),
-    getDefaultModel: vi.fn().mockReturnValue({
-      provider: "openai",
-      modelId: "gpt-4",
-    }),
-    getDefaultModels: vi.fn().mockReturnValue([
-      {
-        provider: "openai",
-        modelId: "gpt-4",
-      },
-    ]),
-    getDefaultThinkingLevel: vi.fn().mockReturnValue("medium"),
+    getConfiguredDefaultModel: vi.fn().mockReturnValue(model),
+    getConfiguredDefaultThinkingLevel: vi.fn().mockReturnValue("medium"),
     getThinkingLevel: vi.fn().mockReturnValue("medium"),
     getContextUsage: vi
       .fn()
@@ -2447,93 +2438,6 @@ describe("BridgeRpcAdapter", () => {
         provider: "openai",
         id: "gpt-4.1",
       });
-    });
-
-    it("initializes live get_state from the default available model", async () => {
-      (context.state.getCurrentModel as ReturnType<typeof vi.fn>).mockReturnValue(
-        undefined,
-      );
-      (
-        context.state.sessionManager.getBranch as ReturnType<typeof vi.fn>
-      ).mockReturnValue([]);
-      (
-        context.state.sessionManager.getEntries as ReturnType<typeof vi.fn>
-      ).mockReturnValue([]);
-
-      const command: RpcCommand = { id: "cmd-default-model", type: "get_state" };
-      (
-        ws as unknown as { trigger: (event: string, data: Buffer) => void }
-      ).trigger(
-        "message",
-        Buffer.from(JSON.stringify({ type: "command", payload: command })),
-      );
-
-      await new Promise(r => setTimeout(r, 10));
-
-      const sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        call => JSON.parse(call[0] as string),
-      );
-      const response = sendCalls.find(
-        call =>
-          call.type === "response" &&
-          call.payload.command === "get_state" &&
-          call.payload.id === "cmd-default-model",
-      );
-
-      expect(response?.payload.success).toBe(true);
-      expect(response?.payload.data.model).toMatchObject({
-        provider: "openai",
-        id: "gpt-4",
-      });
-      expect(response?.payload.data.thinkingLevel).toBe("medium");
-      expect(
-        context.state.sessionManager.appendModelChange,
-      ).toHaveBeenCalledWith("openai", "gpt-4");
-      expect(
-        context.state.sessionManager.appendThinkingLevelChange,
-      ).toHaveBeenCalledWith("medium");
-    });
-
-    it("keeps get_state model empty when no models are available", async () => {
-      (context.state.getCurrentModel as ReturnType<typeof vi.fn>).mockReturnValue(
-        undefined,
-      );
-      (
-        context.state.sessionManager.getBranch as ReturnType<typeof vi.fn>
-      ).mockReturnValue([]);
-      (context.state.getAvailableModels as ReturnType<typeof vi.fn>).mockReturnValue(
-        [],
-      );
-
-      const command: RpcCommand = { id: "cmd-no-model", type: "get_state" };
-      (
-        ws as unknown as { trigger: (event: string, data: Buffer) => void }
-      ).trigger(
-        "message",
-        Buffer.from(JSON.stringify({ type: "command", payload: command })),
-      );
-
-      await new Promise(r => setTimeout(r, 10));
-
-      const sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        call => JSON.parse(call[0] as string),
-      );
-      const response = sendCalls.find(
-        call =>
-          call.type === "response" &&
-          call.payload.command === "get_state" &&
-          call.payload.id === "cmd-no-model",
-      );
-
-      expect(response?.payload.success).toBe(true);
-      expect(response?.payload.data.model).toBeUndefined();
-      expect(response?.payload.data.thinkingLevel).toBe("off");
-      expect(
-        context.state.sessionManager.appendModelChange,
-      ).not.toHaveBeenCalled();
-      expect(
-        context.state.sessionManager.appendThinkingLevelChange,
-      ).toHaveBeenCalledWith("off");
     });
 
     it("returns the selected model after set_model", async () => {
@@ -6393,7 +6297,8 @@ describe("BridgeRpcAdapter", () => {
         newSessionResponse?.payload.data.treeEntries.find(
           (entry: { type: string }) => entry.type === "model_change",
         ),
-      ).toBeTruthy();
+      ).toBeUndefined();
+      expect(createAgentSessionMock).not.toHaveBeenCalled();
 
       const switchToLiveCommand: RpcCommand = {
         id: "cmd-switch-live",
@@ -7663,7 +7568,7 @@ describe("BridgeRpcAdapter", () => {
         responseCall?.payload.data.treeEntries.find(
           (entry: { type: string }) => entry.type === "model_change",
         ),
-      ).toBeTruthy();
+      ).toBeUndefined();
 
       const statsEvent = sendCalls.find(
         call =>
@@ -7690,7 +7595,7 @@ describe("BridgeRpcAdapter", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("uses Dano defaults without forcing an empty session jsonl", async () => {
+    it("projects Pi settings without creating a runtime or empty session jsonl", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-defaults-"));
       const sm = SessionManager.create(tmpDir, tmpDir);
       const existingFile = sm.getSessionFile()!;
@@ -7709,20 +7614,13 @@ describe("BridgeRpcAdapter", () => {
       (context.state.getAvailableModels as ReturnType<typeof vi.fn>).mockReturnValue(
         [xiaomiModel],
       );
-      (context.state.getDefaultModels as ReturnType<typeof vi.fn>).mockReturnValue([
-        {
-          provider: "xiaomi-token-plan-cn",
-          modelId: "mimo-v2.5",
-        },
-        {
-          provider: "openai",
-          modelId: "gpt-4",
-        },
-      ]);
       (
-        context.state.getDefaultThinkingLevel as ReturnType<typeof vi.fn>
+        context.state.getConfiguredDefaultModel as ReturnType<typeof vi.fn>
+      ).mockReturnValue(xiaomiModel);
+      (
+        context.state
+          .getConfiguredDefaultThinkingLevel as ReturnType<typeof vi.fn>
       ).mockReturnValue("medium");
-
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }
       ).trigger(
@@ -7755,6 +7653,7 @@ describe("BridgeRpcAdapter", () => {
       expect(newSessionResponse?.payload.data.thinkingLevel).toBe("medium");
       expect(typeof sessionPath).toBe("string");
       expect(fs.existsSync(sessionPath)).toBe(false);
+      expect(createAgentSessionMock).not.toHaveBeenCalled();
 
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import * as piAi from "@earendil-works/pi-ai";
 import * as piCodingAgent from "@earendil-works/pi-coding-agent";
 import type {
@@ -15,6 +15,7 @@ import type {
   RpcCommand,
   RpcExtensionUIRequest,
   RpcExtensionUIResponse,
+  SettingsManager,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
@@ -33,11 +34,18 @@ type PiAiPublicContracts = {
 };
 
 type PiCodingAgentPublicContracts = {
-  agentSession: AgentSession;
+  agentSession: Pick<
+    AgentSession,
+    "model" | "thinkingLevel" | "pendingMessageCount"
+  >;
   extensionRuntime: ExtensionRuntime;
   rpcCommand: RpcCommand;
   rpcExtensionUIRequest: RpcExtensionUIRequest;
   rpcExtensionUIResponse: RpcExtensionUIResponse;
+  settingsManager: Pick<
+    SettingsManager,
+    "getDefaultProvider" | "getDefaultModel" | "getDefaultThinkingLevel"
+  >;
   toolDefinition: ToolDefinition;
 };
 
@@ -83,5 +91,59 @@ describe("Pi 0.82.1 public interface baseline", () => {
       lazyStream: expect.any(Function),
       retryAssistantCall: expect.any(Function),
     });
+  });
+
+  it("keeps Pi-owned session defaults and pending state out of Dano mirrors", () => {
+    const bridgeDirectory = new URL("..", import.meta.url);
+    const bridgeSources = readdirSync(bridgeDirectory)
+      .filter(name => name.endsWith(".ts"))
+      .map(name => ({
+        name,
+        source: readFileSync(new URL(name, bridgeDirectory), "utf8"),
+      }));
+    const allBridgeSources = bridgeSources.map(({ source }) => source).join("\n");
+    const danoConfigSource = readFileSync(
+      new URL("../dano-config.ts", import.meta.url),
+      "utf8",
+    );
+    const backendSource = readFileSync(
+      new URL("../../backend.ts", import.meta.url),
+      "utf8",
+    );
+    const storedSessionStateSource = readFileSync(
+      new URL("../stored-session-state.ts", import.meta.url),
+      "utf8",
+    );
+    const productConfig = readFileSync(
+      new URL("../../../../../dano.config.json", import.meta.url),
+      "utf8",
+    );
+
+    for (const source of [danoConfigSource, productConfig]) {
+      expect(source).not.toMatch(
+        /\bdefaultProvider\b|\bdefaultModel\b|\bdefaultThinkingLevel\b|\bdefaultProjectTrust\b/,
+      );
+    }
+    expect(existsSync(new URL("../default-model.ts", import.meta.url))).toBe(
+      false,
+    );
+    expect(allBridgeSources).not.toMatch(
+      /DEFAULT_MODEL_PER_PROVIDER|appendModelChange|appendThinkingLevelChange|session\.state/,
+    );
+    expect(allBridgeSources).not.toMatch(
+      /resolveAgentSessionDefaults|initializeSessionManagerDefaults/,
+    );
+    expect(storedSessionStateSource).not.toMatch(/pendingMessageCount|queue_update/);
+
+    // Queue item editing/cancellation and in-process RPC projection are the
+    // explicit #386 deferred exception; no other bridge module may mirror it.
+    for (const { name, source } of bridgeSources) {
+      if (name === "bridge-rpc-adapter.ts") continue;
+      expect(source).not.toMatch(
+        /_steeringMessages|_followUpMessages|steeringQueue|followUpQueue|queue_update/,
+      );
+    }
+    expect(backendSource).toContain("session.pendingMessageCount");
+    expect(backendSource).not.toContain('event.type === "queue_update"');
   });
 });

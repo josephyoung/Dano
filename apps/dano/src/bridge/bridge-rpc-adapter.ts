@@ -20,12 +20,7 @@ import type {
 import {
   findLatestModelInfo,
   findLatestThinkingLevelInfo,
-  initializeSessionManagerDefaults as initializeDefaultSessionManagerDefaults,
-  resolveAgentSessionDefaults,
-  type DefaultModelSettings,
-  type DefaultSessionSettings,
-  type SessionDefaultsState,
-} from "./default-model.js";
+} from "./stored-session-state.js";
 import {
   ASK_USER_QUESTION_CANCELLED_CODE,
   askUserQuestionRuntime,
@@ -3693,38 +3688,6 @@ class SessionRuntime {
     return [];
   }
 
-  private defaultModelCandidates(): DefaultModelSettings[] {
-    const fromState =
-      this.context.state.getDefaultModels?.() ??
-      [this.context.state.getDefaultModel?.()].filter(
-        (model): model is DefaultModelSettings => Boolean(model),
-      );
-
-    return fromState.filter(model =>
-      Boolean(model.provider && model.modelId),
-    );
-  }
-
-  private defaultSessionSettings(): DefaultSessionSettings {
-    const defaultThinkingLevel = this.context.state.getDefaultThinkingLevel?.();
-    return {
-      models: this.defaultModelCandidates(),
-      ...(defaultThinkingLevel
-        ? { thinkingLevel: normalizeThinkingLevel(defaultThinkingLevel) }
-        : {}),
-    };
-  }
-
-  private initializeSessionManagerDefaults(
-    sessionManager: SessionManager,
-  ): SessionDefaultsState {
-    return initializeDefaultSessionManagerDefaults(
-      sessionManager,
-      this.context.state.getAvailableModels(),
-      this.defaultSessionSettings(),
-    );
-  }
-
   buildActiveState(): RpcSessionState {
     if (this.selectedSessionPath) {
       const activeSession = this.registry.getActiveSession(
@@ -3735,13 +3698,9 @@ class SessionRuntime {
           activeSession.sessionManager.getCwd() ?? this.context.state.cwd;
         const workspaceEnvironments =
           detectWorkspaceEnvironments(workspacePath);
-        const defaultsState = resolveAgentSessionDefaults(
-          activeSession,
-          this.defaultSessionSettings(),
-        );
         return {
-          model: defaultsState.model,
-          thinkingLevel: defaultsState.thinkingLevel,
+          model: activeSession.model,
+          thinkingLevel: normalizeThinkingLevel(activeSession.thinkingLevel),
           isStreaming: activeSession.isStreaming,
           isCompacting: activeSession.isCompacting,
           steeringMode: activeSession.steeringMode,
@@ -3765,25 +3724,24 @@ class SessionRuntime {
         const sessionManager = this.registry
           .openSession(this.selectedSessionPath)
           .getSessionManager();
-        this.initializeSessionManagerDefaults(sessionManager);
-        return buildStateFromStoredSession(
+        const storedState = buildStateFromStoredSession(
           sessionManager,
           this.context.state.cwd,
         );
+        return sessionManager.getBranch().length === 0
+          ? { ...storedState, ...this.configuredInitialState() }
+          : storedState;
       }
     }
 
     const sessionFile = this.context.state.sessionManager.getSessionFile();
     const currentModel = this.context.state.getCurrentModel();
-    const defaultsState = this.initializeSessionManagerDefaults(
-      this.context.state.sessionManager,
-    );
     const branch = this.context.state.sessionManager.getBranch();
-    const model = currentModel ?? findLatestModelInfo(branch) ?? defaultsState.model;
+    const model = currentModel ?? findLatestModelInfo(branch) ?? undefined;
     const thinkingLevel = model
       ? (findLatestThinkingLevelInfo(branch) ??
         normalizeThinkingLevel(this.context.state.getThinkingLevel()))
-      : defaultsState.thinkingLevel;
+      : "off";
     const entries = this.context.state.sessionManager.getEntries() ?? [];
     const workspaceEnvironments = detectWorkspaceEnvironments(
       this.context.state.cwd,
@@ -3810,7 +3768,7 @@ class SessionRuntime {
       gitBranch: getCurrentGitBranch(this.context.state.cwd),
       autoCompactionEnabled: false,
       messageCount: entries.length,
-      pendingMessageCount: this.context.state.hasPendingMessages() ? 1 : 0,
+      pendingMessageCount: this.context.state.getPendingMessageCount(),
     };
   }
 
@@ -3841,7 +3799,6 @@ class SessionRuntime {
         : undefined;
 
     const handle = this.registry.createSession({ cwd: targetCwd, sessionDir });
-    this.initializeSessionManagerDefaults(handle.getSessionManager());
     await this.selectSessionPath(handle.sessionPath);
 
     return this.buildSessionSummary(
@@ -3933,6 +3890,9 @@ class SessionRuntime {
     sessionPath: string,
     transcriptLimit?: number,
   ): SessionSummary {
+    const branch = sessionManager.getBranch();
+    const configuredState =
+      branch.length === 0 ? this.configuredInitialState() : undefined;
     return {
       sessionManager,
       sessionPath,
@@ -3942,13 +3902,27 @@ class SessionRuntime {
         { limit: transcriptLimit },
       ),
       treeEntries: buildTreeEntriesFromSession(sessionManager),
-      model: findLatestModelInfo(sessionManager.getBranch()) ?? undefined,
+      model:
+        findLatestModelInfo(branch) ?? configuredState?.model ?? undefined,
       thinkingLevel:
-        findLatestThinkingLevelInfo(sessionManager.getBranch()) ??
+        findLatestThinkingLevelInfo(branch) ??
+        configuredState?.thinkingLevel ??
         normalizeThinkingLevel(sessionManager.buildSessionContext().thinkingLevel),
       sessionId: sessionManager.getSessionId(),
       sessionName: sessionDisplayName(sessionManager, sessionPath),
       workspacePath: normalizeOptionalWorkspaceRoot(sessionManager.getCwd()),
+    };
+  }
+
+  private configuredInitialState(): Pick<
+    RpcSessionState,
+    "model" | "thinkingLevel"
+  > {
+    return {
+      model: this.context.state.getConfiguredDefaultModel(),
+      thinkingLevel: normalizeThinkingLevel(
+        this.context.state.getConfiguredDefaultThinkingLevel() ?? "off",
+      ),
     };
   }
 

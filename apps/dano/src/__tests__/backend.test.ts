@@ -41,6 +41,19 @@ function createMockSession() {
         maxTokens: 8192,
       },
     ]),
+    getModel: vi.fn((provider: string, modelId: string) =>
+      provider === "openai" && modelId === "gpt-4"
+        ? {
+            id: "gpt-4",
+            name: "GPT-4",
+            provider: "openai",
+            api: "openai-responses",
+            reasoning: true,
+            contextWindow: 128000,
+            maxTokens: 8192,
+          }
+        : undefined,
+    ),
   };
 
   const extensionRunner = {
@@ -96,6 +109,7 @@ function createMockSession() {
       maxTokens: 8192,
     },
     thinkingLevel: "medium",
+    pendingMessageCount: 0,
     isStreaming: false,
     getContextUsage: vi
       .fn()
@@ -188,9 +202,13 @@ describe("Dano backend", () => {
 
     expect(backend.context.state.cwd).toBe("/test/project");
     expect(backend.context.state.isIdle()).toBe(true);
-    expect(backend.context.state.hasPendingMessages()).toBe(false);
+    expect(backend.context.state.getPendingMessageCount()).toBe(0);
     expect(backend.context.state.getThinkingLevel()).toBe("medium");
     expect(backend.context.state.getCurrentModel()?.id).toBe("gpt-4");
+    expect(backend.context.state.getConfiguredDefaultModel()?.id).toBe("gpt-4");
+    expect(backend.context.state.getConfiguredDefaultThinkingLevel()).toBe(
+      "medium",
+    );
     expect(backend.context.state.getContextUsage()).toEqual({
       tokens: 1200,
       contextWindow: 8000,
@@ -226,11 +244,6 @@ describe("Dano backend", () => {
 
     mock.emit({ type: "agent_start" });
     mock.emit({
-      type: "queue_update",
-      steering: ["one"],
-      followUp: [],
-    });
-    mock.emit({
       type: "message_start",
       message: { role: "assistant", content: [] },
     } as unknown as AgentSessionEvent);
@@ -247,7 +260,7 @@ describe("Dano backend", () => {
       "message_start",
       "session_compact",
     ]);
-    expect(backend.context.state.hasPendingMessages()).toBe(true);
+    expect(backend.context.state.getPendingMessageCount()).toBe(0);
 
     backend.context.actions.sendUserMessage("hello", { deliverAs: "followUp" });
     expect(mock.session.sendUserMessage).toHaveBeenCalledWith("hello", {
@@ -276,263 +289,6 @@ describe("Dano backend", () => {
     await backend.dispose();
     expect(mock.unsubscribe).toHaveBeenCalled();
     expect(mock.session.dispose).toHaveBeenCalled();
-  });
-
-  it("hydrates a missing Dano current model and writes it to the session", () => {
-    const model = {
-      id: "gpt-4",
-      name: "GPT-4",
-      provider: "openai",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 128000,
-      maxTokens: 8192,
-    };
-    const branchEntries: unknown[] = [];
-    const sessionState: { model?: typeof model } = {};
-    const sessionManager = {
-      getCwd: vi.fn().mockReturnValue("/test/project"),
-      getSessionId: vi.fn().mockReturnValue("session-456"),
-      getSessionFile: vi.fn().mockReturnValue("/test/session-456.jsonl"),
-      getBranch: vi.fn(() => branchEntries),
-      appendModelChange: vi.fn((provider: string, modelId: string) => {
-        branchEntries.push({
-          type: "model_change",
-          provider,
-          modelId,
-        });
-      }),
-      appendThinkingLevelChange: vi.fn((thinkingLevel: string) => {
-        branchEntries.push({
-          type: "thinking_level_change",
-          thinkingLevel,
-        });
-      }),
-    };
-    const session = {
-      sessionManager,
-      modelRuntime: {
-        getAvailableSnapshot: vi.fn().mockReturnValue([model]),
-      },
-      settingsManager: {
-        getDefaultProvider: vi.fn().mockReturnValue("openai"),
-        getDefaultModel: vi.fn().mockReturnValue("gpt-4"),
-        getDefaultThinkingLevel: vi.fn().mockReturnValue("medium"),
-      },
-      extensionRunner: {
-        getRegisteredCommands: vi.fn().mockReturnValue([]),
-      },
-      promptTemplates: [],
-      state: sessionState,
-      get model() {
-        return sessionState.model;
-      },
-      thinkingLevel: "medium",
-      isStreaming: false,
-      getContextUsage: vi.fn().mockReturnValue(null),
-      subscribe: vi.fn().mockReturnValue(vi.fn()),
-      sendUserMessage: vi.fn(),
-      abort: vi.fn(),
-      setModel: vi.fn(),
-      setThinkingLevel: vi.fn(),
-      setSessionName: vi.fn(),
-      dispose: vi.fn(),
-    };
-
-    const backend = createDanoBackendFromSession(
-      session as unknown as AgentSession,
-    );
-
-    expect(backend.context.state.getCurrentModel()).toMatchObject({
-      provider: "openai",
-      id: "gpt-4",
-    });
-    expect(session.model).toMatchObject({
-      provider: "openai",
-      id: "gpt-4",
-    });
-    expect(sessionManager.appendModelChange).toHaveBeenCalledWith(
-      "openai",
-      "gpt-4",
-    );
-  });
-
-  it("uses Dano config before Pi settings when hydrating Dano state", () => {
-    const xiaomiModel = {
-      id: "mimo-v2.5",
-      name: "MiMo V2.5",
-      provider: "xiaomi-token-plan-cn",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 128000,
-      maxTokens: 8192,
-    };
-    const openaiModel = {
-      ...xiaomiModel,
-      id: "gpt-4",
-      name: "GPT-4",
-      provider: "openai",
-    };
-    const branchEntries: unknown[] = [];
-    const sessionState: { model?: typeof xiaomiModel; thinkingLevel: string } = {
-      thinkingLevel: "off",
-    };
-    const sessionManager = {
-      getCwd: vi.fn().mockReturnValue("/test/project"),
-      getSessionId: vi.fn().mockReturnValue("session-dano"),
-      getSessionFile: vi.fn().mockReturnValue("/test/session-dano.jsonl"),
-      getBranch: vi.fn(() => branchEntries),
-      appendModelChange: vi.fn((provider: string, modelId: string) => {
-        branchEntries.push({
-          type: "model_change",
-          provider,
-          modelId,
-        });
-      }),
-      appendThinkingLevelChange: vi.fn((thinkingLevel: string) => {
-        branchEntries.push({
-          type: "thinking_level_change",
-          thinkingLevel,
-        });
-      }),
-    };
-    const session = {
-      sessionManager,
-      modelRuntime: {
-        getAvailableSnapshot: vi.fn().mockReturnValue([openaiModel, xiaomiModel]),
-      },
-      settingsManager: {
-        getDefaultProvider: vi.fn().mockReturnValue("openai"),
-        getDefaultModel: vi.fn().mockReturnValue("gpt-4"),
-        getDefaultThinkingLevel: vi.fn().mockReturnValue("high"),
-      },
-      extensionRunner: {
-        getRegisteredCommands: vi.fn().mockReturnValue([]),
-      },
-      promptTemplates: [],
-      state: sessionState,
-      get model() {
-        return sessionState.model;
-      },
-      get thinkingLevel() {
-        return sessionState.thinkingLevel;
-      },
-      isStreaming: false,
-      getContextUsage: vi.fn().mockReturnValue(null),
-      subscribe: vi.fn().mockReturnValue(vi.fn()),
-      sendUserMessage: vi.fn(),
-      abort: vi.fn(),
-      setModel: vi.fn(),
-      setThinkingLevel: vi.fn(),
-      setSessionName: vi.fn(),
-      dispose: vi.fn(),
-    };
-
-    const backend = createDanoBackendFromSession(
-      session as unknown as AgentSession,
-      {
-        defaultProvider: "xiaomi-token-plan-cn",
-        defaultModel: "mimo-v2.5",
-        defaultThinkingLevel: "medium",
-      },
-    );
-
-    expect(backend.context.state.getCurrentModel()).toMatchObject({
-      provider: "xiaomi-token-plan-cn",
-      id: "mimo-v2.5",
-    });
-    expect(backend.context.state.getThinkingLevel()).toBe("medium");
-    expect(sessionManager.appendModelChange).toHaveBeenCalledWith(
-      "xiaomi-token-plan-cn",
-      "mimo-v2.5",
-    );
-    expect(sessionManager.appendThinkingLevelChange).toHaveBeenCalledWith(
-      "medium",
-    );
-  });
-
-  it("falls back to Pi settings when Dano config is missing model fields", () => {
-    const model = {
-      id: "gpt-4",
-      name: "GPT-4",
-      provider: "openai",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 128000,
-      maxTokens: 8192,
-    };
-    const branchEntries: unknown[] = [];
-    const sessionState: { model?: typeof model; thinkingLevel: string } = {
-      thinkingLevel: "off",
-    };
-    const sessionManager = {
-      getCwd: vi.fn().mockReturnValue("/test/project"),
-      getSessionId: vi.fn().mockReturnValue("session-fallback"),
-      getSessionFile: vi.fn().mockReturnValue("/test/session-fallback.jsonl"),
-      getBranch: vi.fn(() => branchEntries),
-      appendModelChange: vi.fn((provider: string, modelId: string) => {
-        branchEntries.push({
-          type: "model_change",
-          provider,
-          modelId,
-        });
-      }),
-      appendThinkingLevelChange: vi.fn((thinkingLevel: string) => {
-        branchEntries.push({
-          type: "thinking_level_change",
-          thinkingLevel,
-        });
-      }),
-    };
-    const session = {
-      sessionManager,
-      modelRuntime: {
-        getAvailableSnapshot: vi.fn().mockReturnValue([model]),
-      },
-      settingsManager: {
-        getDefaultProvider: vi.fn().mockReturnValue("openai"),
-        getDefaultModel: vi.fn().mockReturnValue("gpt-4"),
-        getDefaultThinkingLevel: vi.fn().mockReturnValue("high"),
-      },
-      extensionRunner: {
-        getRegisteredCommands: vi.fn().mockReturnValue([]),
-      },
-      promptTemplates: [],
-      state: sessionState,
-      get model() {
-        return sessionState.model;
-      },
-      get thinkingLevel() {
-        return sessionState.thinkingLevel;
-      },
-      isStreaming: false,
-      getContextUsage: vi.fn().mockReturnValue(null),
-      subscribe: vi.fn().mockReturnValue(vi.fn()),
-      sendUserMessage: vi.fn(),
-      abort: vi.fn(),
-      setModel: vi.fn(),
-      setThinkingLevel: vi.fn(),
-      setSessionName: vi.fn(),
-      dispose: vi.fn(),
-    };
-
-    const backend = createDanoBackendFromSession(
-      session as unknown as AgentSession,
-      {
-        defaultProvider: "xiaomi-token-plan-cn",
-        defaultThinkingLevel: "medium",
-      },
-    );
-
-    expect(backend.context.state.getCurrentModel()).toMatchObject({
-      provider: "openai",
-      id: "gpt-4",
-    });
-    expect(backend.context.state.getThinkingLevel()).toBe("medium");
-    expect(sessionManager.appendModelChange).toHaveBeenCalledWith(
-      "openai",
-      "gpt-4",
-    );
   });
 
   it("starts and stops the Dano server lifecycle", async () => {

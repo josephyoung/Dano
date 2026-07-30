@@ -1,15 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BridgeQuickActionConfig, RpcThinkingLevel } from "./types.js";
+import type { BridgeQuickActionConfig } from "./types.js";
 
 const DANO_CONFIG_FILE_NAME = "dano.config.json";
 
 export interface DanoConfig {
-  defaultProvider?: string;
-  defaultModel?: string;
-  defaultThinkingLevel?: RpcThinkingLevel;
-  defaultProjectTrust?: "always" | string;
   fieldAssist?: {
     maxRetries?: number;
   };
@@ -23,10 +19,6 @@ export interface DanoConfig {
 }
 
 export const DANO_DEFAULT_CONFIG = {
-  defaultProvider: "xiaomi-token-plan-cn",
-  defaultModel: "mimo-v2.5",
-  defaultThinkingLevel: "medium",
-  defaultProjectTrust: "always",
   fieldAssist: {
     maxRetries: 10,
   },
@@ -43,17 +35,6 @@ export interface LoadDanoConfigOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
   startDir?: string;
-}
-
-function isThinkingLevel(value: unknown): value is RpcThinkingLevel {
-  return (
-    value === "off" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh"
-  );
 }
 
 function readString(value: unknown): string | undefined {
@@ -134,12 +115,6 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   }
 
   const record = raw as Record<string, unknown>;
-  const defaultProvider = readString(record.defaultProvider);
-  const defaultModel = readString(record.defaultModel);
-  const defaultProjectTrust = readString(record.defaultProjectTrust);
-  const defaultThinkingLevel = isThinkingLevel(record.defaultThinkingLevel)
-    ? record.defaultThinkingLevel
-    : undefined;
   const fieldAssist = readRetryOptions(record.fieldAssist);
   const askUserQuestion = readAskUserQuestionOptions(record.askUserQuestion);
   const slashCommandsAndMentionsEnabled = readBoolean(
@@ -151,10 +126,6 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   const quickActions = readQuickActions(record.quickActions);
 
   return {
-    ...(defaultProvider ? { defaultProvider } : {}),
-    ...(defaultModel ? { defaultModel } : {}),
-    ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
-    ...(defaultProjectTrust ? { defaultProjectTrust } : {}),
     ...(fieldAssist ? { fieldAssist } : {}),
     ...(askUserQuestion ? { askUserQuestion } : {}),
     ...(slashCommandsAndMentionsEnabled !== undefined
