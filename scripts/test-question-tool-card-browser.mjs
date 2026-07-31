@@ -186,6 +186,14 @@ async function returnedCardMetrics(page) {
   });
 }
 
+async function assertAppShell(page) {
+  assert.equal(
+    await page.locator(".app-shell").count(),
+    1,
+    "center focus browser harness must provide exactly one .app-shell Portal target",
+  );
+}
+
 async function assertConfirmationRevisionScrollLock(
   browser,
   origin,
@@ -196,6 +204,7 @@ async function assertConfirmationRevisionScrollLock(
     await page.goto(`${origin}/center-focus-scroll-test.html?revision=1`, {
       waitUntil: "domcontentloaded",
     });
+    await assertAppShell(page);
     await page.waitForFunction(() => {
       const transcript = document.querySelector(".chat-transcript");
       return transcript &&
@@ -261,6 +270,7 @@ async function assertFocusLockAndNormalReturn(
         waitUntil: "domcontentloaded",
       },
     );
+    await assertAppShell(page);
     await page.waitForFunction(() => {
       const transcript = document.querySelector(".chat-transcript");
       return transcript &&

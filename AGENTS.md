@@ -72,6 +72,7 @@ PATH=/Users/joseph/.cache/codex-runtimes/codex-primary-runtime/dependencies/node
 
 - Use `pnpm run check` for type and Svelte diagnostics.
 - Use `pnpm test` for Vitest coverage.
+- Use `pnpm run test:browser` for the self-contained system Chrome browser acceptance suite when validating UI changes; browser tests remain separate from the fast Vitest suite. Deployment-dependent browser acceptance, such as `test:browser:demo-auth`, stays in its documented deploy workflow.
 - Use `pnpm run build` before validating the built server.
 - For UI changes, verify the rendered app in a browser against the relevant flow and capture a screenshot as validation evidence.
 - For browser validation, use the Codex in-app Browser against the relevant flow. Use another browser surface only when the user explicitly requests it or the in-app Browser cannot exercise the required flow.
