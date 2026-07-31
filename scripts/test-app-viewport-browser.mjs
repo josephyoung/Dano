@@ -167,12 +167,23 @@ async function layoutMetrics(page) {
     const visualBottom =
       (window.visualViewport?.offsetTop ?? 0) +
       (window.visualViewport?.height ?? window.innerHeight);
+    const visualTop = window.visualViewport?.offsetTop ?? 0;
+    const composerRect = composer.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
     return {
-      composerVisible: composer.getBoundingClientRect().bottom <= visualBottom + tolerance,
+      composerBottom: composerRect.bottom,
+      composerTop: composerRect.top,
+      composerVisible:
+        composerRect.top >= visualTop - tolerance &&
+        composerRect.bottom <= visualBottom + tolerance,
       pageOverflow:
         document.documentElement.scrollHeight >
         document.documentElement.clientHeight + tolerance,
-      shellVisible: shell.getBoundingClientRect().bottom <= visualBottom + tolerance,
+      shellBottom: shellRect.bottom,
+      shellTop: shellRect.top,
+      shellVisible:
+        shellRect.top >= visualTop - tolerance &&
+        shellRect.bottom <= visualBottom + tolerance,
       transcriptOverflow:
         transcript.scrollHeight > transcript.clientHeight + tolerance,
     };
@@ -193,9 +204,29 @@ function assertLongConversationLayout(metrics, label) {
   assert.equal(metrics.transcriptOverflow, true, `${label}: long Chat Transcript did not own scrolling`);
 }
 
+function assertLayoutRestored(before, after, label) {
+  for (const field of ["composerTop", "composerBottom", "shellTop", "shellBottom"]) {
+    assert.ok(
+      Math.abs(after[field] - before[field]) <= geometryTolerance,
+      `${label}: ${field} did not return to its keyboard-closed relationship ` +
+        `(before=${before[field]}, after=${after[field]})`,
+    );
+  }
+}
+
 async function setViewport(page, viewport) {
   await page.setViewportSize(viewport);
-  await waitForLayout(page);
+  let previous;
+  await waitFor(async () => {
+    await waitForLayout(page);
+    const current = await layoutMetrics(page);
+    const stable = previous &&
+      ["composerTop", "composerBottom", "shellTop", "shellBottom"].every(
+        field => Math.abs(current[field] - previous[field]) <= geometryTolerance,
+      );
+    previous = current;
+    return stable;
+  }, "viewport layout did not settle");
 }
 
 async function run() {
@@ -260,7 +291,22 @@ async function run() {
   const mobileClosedViewport = { width: 390, height: 780 };
   const mobileContentViewport = { width: 390, height: 520 };
   await setViewport(page, mobileClosedViewport);
-  assertShortConversationLayout(await layoutMetrics(page), "mobile keyboard closed");
+  const mobileClosedMetrics = await layoutMetrics(page);
+  assertShortConversationLayout(mobileClosedMetrics, "mobile keyboard closed");
+
+  await setViewport(page, mobileContentViewport);
+  assertShortConversationLayout(await layoutMetrics(page), "mobile resizes-content");
+  await setViewport(page, mobileClosedViewport);
+  const mobileRestoredMetrics = await layoutMetrics(page);
+  assertShortConversationLayout(mobileRestoredMetrics, "mobile keyboard restored");
+  assertLayoutRestored(
+    mobileClosedMetrics,
+    mobileRestoredMetrics,
+    "mobile keyboard restored",
+  );
+
+  await sendPrompt(page, longPrompt, longCompletion);
+  assertLongConversationLayout(await layoutMetrics(page), "mobile long conversation");
 
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setDeviceMetricsOverride", {
@@ -284,16 +330,6 @@ async function run() {
     false,
     "resizes-visual control did not expose the App Shell mismatch",
   );
-
-  await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
-  await cdp.send("Emulation.clearDeviceMetricsOverride");
-  await setViewport(page, mobileContentViewport);
-  assertShortConversationLayout(await layoutMetrics(page), "mobile resizes-content");
-  await setViewport(page, mobileClosedViewport);
-  assertShortConversationLayout(await layoutMetrics(page), "mobile keyboard restored");
-
-  await sendPrompt(page, longPrompt, longCompletion);
-  assertLongConversationLayout(await layoutMetrics(page), "mobile long conversation");
 }
 
 try {
