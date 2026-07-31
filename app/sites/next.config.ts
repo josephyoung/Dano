@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
+import { siteBasePath } from "./build/site-base-path";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  basePath: siteBasePath,
 };
 
 export default nextConfig;

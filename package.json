@@ -1,12 +1,13 @@
 {
   "name": "@dano/dano",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Dano P0 web LLM chat",
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "scripts": {
     "build": "pnpm -C apps/dano build",
+    "build:site": "npm --prefix app/sites run build",
     "container:build": "podman build -t dano-app:local .",
     "container:down": "node scripts/local-container.mjs down",
     "container:up": "node scripts/local-container.mjs up",

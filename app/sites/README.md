@@ -1,8 +1,8 @@
-# vinext-starter
+# Xiaoluo Product Site
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+The Xiaoluo product site runs on [vinext](https://github.com/cloudflare/vinext).
+It can run at the origin root for local development or under a configured base
+path for a production sidecar deployment.
 
 ## Prerequisites
 
@@ -15,6 +15,22 @@ npm install
 npm run dev
 npm run build
 ```
+
+Production builds for Dano use `/web`:
+
+```bash
+DANO_SITE_BASE_PATH=/web npm run build
+docker build \
+  --build-arg DANO_SITE_BASE_PATH=/web \
+  --build-arg DANO_SITE_REVISION="$(git rev-parse HEAD)" \
+  --build-arg DANO_SITE_VERSION="$(node -p "require('../../package.json').version")" \
+  -t "dano-site:$(git rev-parse --short=12 HEAD)" \
+  app/sites
+```
+
+`DANO_SITE_BASE_PATH` must be set at build time because it controls both Vinext
+routing and emitted asset URLs. The production image healthcheck verifies
+`/web/` and runs as the non-root `node` user.
 
 This starter does not use `wrangler.jsonc`.
 
@@ -91,7 +107,8 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - `npm run dev`: start local development
 - `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
+- `npm test`: build the `/web` production shape and verify rendered routes,
+  assets, metadata, and navigation behavior
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
 ## Learn More

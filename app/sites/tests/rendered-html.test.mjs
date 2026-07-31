@@ -8,7 +8,7 @@ async function render() {
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("https://xiaoluo.example/", {
+    new Request("https://xiaoluo.example/web/", {
       headers: {
         accept: "text/html",
         host: "xiaoluo.example",
@@ -64,10 +64,21 @@ test("ships the complete production-demo flow and share metadata", async () => {
   assert.match(html, /申请信息自动生成/);
   assert.match(html, /员工核对并确认/);
   assert.match(html, /结果回到对话/);
-  assert.match(html, /https:\/\/xiaoluo\.example\/og\.png/);
+  assert.match(html, /https:\/\/xiaoluo\.example\/web\/og\.png/);
   assert.match(html, /property="og:image:width" content="1200"/);
   assert.match(html, /property="og:image:height" content="630"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
+});
+
+test("renders production links and assets under the configured base path", async () => {
+  const response = await render();
+  const html = await response.text();
+
+  assert.match(html, /href="\/web\/"[^>]*aria-label="小络助手首页"/);
+  assert.match(html, /src="\/web\/xiaoluo-logo\.png"/);
+  assert.match(html, /src="\/web\/start-input\.jpg"/);
+  assert.match(html, /href="\/web\/assets\//);
+  assert.doesNotMatch(html, /(?:src|href)="\/(?:assets|xiaoluo-logo|start-input|application-form|confirm|result|og)/);
 });
 
 test("keeps hash navigation interruptible through a single router handler", async () => {
