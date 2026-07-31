@@ -51,11 +51,13 @@ export async function startDanoServer(
 
   const sessionRegistry =
     options.sessionRegistry ??
+    backend.sessionRegistry ??
     new DetachedSessionRegistry(
       backend.context.state.cwd,
       backend.context.askUserQuestion.tool,
     );
-  const ownsSessionRegistry = !options.sessionRegistry;
+  const ownsSessionRegistry =
+    !options.sessionRegistry && !backend.sessionRegistry;
 
   const emitEvent = (event: BridgeEvent): void => {
     for (const handler of eventHandlers) {
@@ -99,7 +101,7 @@ export async function startDanoServer(
   } catch (error) {
     state = { status: "stopped" };
     if (ownsSessionRegistry) {
-      sessionRegistry.dispose();
+      await sessionRegistry.dispose();
     }
     if (ownsBackend) {
       await backend.dispose();
@@ -128,7 +130,7 @@ export async function startDanoServer(
         await server.stop();
         eventBus.dispose();
         if (ownsSessionRegistry) {
-          sessionRegistry.dispose();
+          await sessionRegistry.dispose();
         }
         if (ownsBackend) {
           await backend.dispose();

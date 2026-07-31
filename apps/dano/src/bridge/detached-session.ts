@@ -1,11 +1,14 @@
 import {
+  createAgentSessionRuntime,
   createAgentSessionFromServices,
   createAgentSessionServices,
   createEditToolDefinition,
+  getAgentDir,
   createReadToolDefinition,
   createWriteToolDefinition,
+  type AgentSessionRuntime,
+  type CreateAgentSessionRuntimeFactory,
   type CreateAgentSessionFromServicesOptions,
-  type CreateAgentSessionResult,
   type SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -37,42 +40,69 @@ export interface CreateDetachedAgentSessionOptions {
   askUserQuestionTool?: ToolDefinition;
 }
 
-export interface CreateDetachedAgentSessionResult
-  extends CreateAgentSessionResult {
+export interface CreateDetachedAgentSessionRuntimeResult {
+  runtime: AgentSessionRuntime;
   disposeDanoLlmResilience(): void;
 }
 
-export async function createDetachedAgentSession(
+export async function createDetachedAgentSessionRuntime(
   cwd: string,
   sessionManager: SessionManager,
   options: CreateDetachedAgentSessionOptions = {},
-): Promise<CreateDetachedAgentSessionResult> {
-  const services = await createAgentSessionServices({
+): Promise<CreateDetachedAgentSessionRuntimeResult> {
+  let disposeActiveDanoLlmResilience: (() => void) | undefined;
+  const createRuntime: CreateAgentSessionRuntimeFactory = async runtimeOptions => {
+    const services = await createAgentSessionServices({
+      cwd: runtimeOptions.cwd,
+      agentDir: runtimeOptions.agentDir,
+      resourceLoaderOptions: {
+        additionalExtensionPaths: [HEIMDALL_EXTENSION_PATH],
+      },
+    });
+    const result = await createAgentSessionFromServices({
+      services,
+      sessionManager: runtimeOptions.sessionManager,
+      sessionStartEvent: runtimeOptions.sessionStartEvent,
+      noTools: "builtin",
+      model: options.model,
+      thinkingLevel: options.thinkingLevel,
+      customTools: [
+        createReadToolDefinition(runtimeOptions.cwd, {
+          autoResizeImages: services.settingsManager.getImageAutoResize(),
+        }),
+        createCurlTool(runtimeOptions.cwd),
+        createEditToolDefinition(runtimeOptions.cwd),
+        createWriteToolDefinition(runtimeOptions.cwd),
+        danoVersionTool,
+        options.askUserQuestionTool ?? askUserQuestionTool,
+      ] as unknown as ToolDefinition[],
+    });
+    disposeActiveDanoLlmResilience = configureDanoLlmResilience(
+      services.settingsManager,
+      result.session,
+    );
+    return {
+      ...result,
+      services,
+      diagnostics: services.diagnostics,
+    };
+  };
+
+  const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd,
-    resourceLoaderOptions: {
-      additionalExtensionPaths: [HEIMDALL_EXTENSION_PATH],
-    },
-  });
-  const result = await createAgentSessionFromServices({
-    services,
+    agentDir: getAgentDir(),
     sessionManager,
-    noTools: "builtin",
-    model: options.model,
-    thinkingLevel: options.thinkingLevel,
-    customTools: [
-      createReadToolDefinition(cwd, {
-        autoResizeImages: services.settingsManager.getImageAutoResize(),
-      }),
-      createCurlTool(cwd),
-      createEditToolDefinition(cwd),
-      createWriteToolDefinition(cwd),
-      danoVersionTool,
-      options.askUserQuestionTool ?? askUserQuestionTool,
-    ] as unknown as ToolDefinition[],
   });
-  const disposeDanoLlmResilience = configureDanoLlmResilience(
-    services.settingsManager,
-    result.session,
-  );
-  return { ...result, disposeDanoLlmResilience };
+  runtime.setBeforeSessionInvalidate(() => {
+    disposeActiveDanoLlmResilience?.();
+    disposeActiveDanoLlmResilience = undefined;
+  });
+
+  return {
+    runtime,
+    disposeDanoLlmResilience() {
+      disposeActiveDanoLlmResilience?.();
+      disposeActiveDanoLlmResilience = undefined;
+    },
+  };
 }

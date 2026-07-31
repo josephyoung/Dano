@@ -11,13 +11,13 @@ import {
   createAskUserQuestionRuntime,
   type AskUserQuestionRuntime,
 } from "./bridge/ask-user-question.js";
-import { createDetachedAgentSession } from "./bridge/detached-session.js";
+import { createDetachedAgentSessionRuntime } from "./bridge/detached-session.js";
 import {
   createFieldAssistService,
   createPiSdkFieldAssistClient,
 } from "./bridge/field-assist.js";
-import { createHeadlessUIContext } from "./bridge/headless-ui-context.js";
 import { interruptOpenFormInteractions } from "./bridge/form-interaction.js";
+import { DetachedSessionRegistry } from "./bridge/session-registry.js";
 import type {
   BridgeLiveEvent,
   BridgeSessionActions,
@@ -32,6 +32,7 @@ import type {
 export interface DanoBackend {
   readonly context: BridgeRpcAdapterContext;
   readonly session: AgentSession;
+  readonly sessionRegistry?: DetachedSessionRegistry;
   dispose(): Promise<void>;
 }
 
@@ -111,6 +112,8 @@ export function createDanoBackendFromSession(
     defaultTitle: danoConfig.askUserQuestion?.defaultTitle,
   }),
   disposeDanoLlmResilience: () => void = () => {},
+  disposeSession: () => void | Promise<void> = () => session.dispose(),
+  sessionRegistry?: DetachedSessionRegistry,
 ): DanoBackend {
   interruptOpenFormInteractions(session.sessionManager);
   const liveEventHandlers = new Set<(event: BridgeLiveEvent) => void>();
@@ -246,10 +249,11 @@ export function createDanoBackendFromSession(
       }),
     },
     session,
+    sessionRegistry,
     async dispose() {
       unsubscribeSession();
       disposeDanoLlmResilience();
-      session.dispose();
+      await disposeSession();
     },
   };
 }
@@ -270,7 +274,7 @@ export async function createDanoBackend(
     maxRetries: danoConfig.askUserQuestion?.maxRetries,
     defaultTitle: danoConfig.askUserQuestion?.defaultTitle,
   });
-  const result = await createDetachedAgentSession(
+  const result = await createDetachedAgentSessionRuntime(
     sessionManager.getCwd() || cwd,
     sessionManager,
     {
@@ -278,21 +282,21 @@ export async function createDanoBackend(
     },
   );
 
-  await result.session.bindExtensions({
-      uiContext: createHeadlessUIContext(),
-      onError: error => {
-        console.error(
-          `Dano server extension error (${error.extensionPath}):`,
-          error.error,
-        );
-    },
-    shutdownHandler: () => {},
-  });
+  const sessionRegistry = new DetachedSessionRegistry(
+    result.runtime.cwd,
+    askUserQuestion.tool,
+  );
+  await sessionRegistry.adoptRuntime(
+    result.runtime,
+    result.disposeDanoLlmResilience,
+  );
 
   return createDanoBackendFromSession(
-    result.session,
+    result.runtime.session,
     danoConfig,
     askUserQuestion,
-    result.disposeDanoLlmResilience,
+    () => {},
+    () => sessionRegistry.dispose(),
+    sessionRegistry,
   );
 }

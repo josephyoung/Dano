@@ -3546,7 +3546,7 @@ function collapseWhitespace(value: string): string {
  * Session runtime
  * ========================================================================== */
 
-class SessionRuntime {
+class BrowserSessionView {
   private selectedSessionPath: string | null = null;
   private unsubscribeSelectedSession: (() => void) | undefined;
 
@@ -3556,7 +3556,27 @@ class SessionRuntime {
     private readonly registry: DetachedSessionRegistry,
     private readonly createExtensionUIContext: () => ExtensionUIContext,
     private readonly onDetachedSessionEvent: (event: AgentSessionEvent) => void,
-  ) {}
+  ) {
+    const initialSessionPath = this.registry.getInitialSessionPath();
+    if (!initialSessionPath) return;
+    this.selectedSessionPath = initialSessionPath;
+    this.unsubscribeSelectedSession = this.registry
+      .openSession(initialSessionPath)
+      .subscribe(event => {
+        this.onDetachedSessionEvent(event);
+      });
+    void this.registry
+      .bindViewer(initialSessionPath, {
+        clientId: this.clientId,
+        uiContext: this.createExtensionUIContext(),
+      })
+      .catch(error => {
+        console.error(
+          `BridgeRpcAdapter[${this.clientId}]: Failed to bind initial session viewer:`,
+          error,
+        );
+      });
+  }
 
   hasDetachedSelection(): boolean {
     return this.selectedSessionPath !== null;
@@ -5196,7 +5216,7 @@ export class BridgeRpcAdapter {
   private emitEvent: (event: BridgeEvent) => void;
   private uploadRegistry: UploadRegistry;
 
-  private readonly sessionRuntime: SessionRuntime;
+  private readonly sessionRuntime: BrowserSessionView;
   private readonly transcriptProjector: TranscriptProjector;
   private readonly uiBridge: ExtensionUIBridge;
   private readonly sessionStatsPusher: SessionStatsPusher;
@@ -5254,7 +5274,7 @@ export class BridgeRpcAdapter {
     this.uiBridge = new ExtensionUIBridge(client.id, config, message => {
       this.sendResponse(message);
     });
-    this.sessionRuntime = new SessionRuntime(
+    this.sessionRuntime = new BrowserSessionView(
       context,
       client.id,
       this.detachedSessionRegistry,
@@ -5291,6 +5311,10 @@ export class BridgeRpcAdapter {
    */
   subscribeToEvents(): void {
     void this.eventBus;
+
+    if (this.detachedSessionRegistry.getInitialSessionPath()) {
+      return;
+    }
 
     this.context.events.subscribe(event => {
       switch (event.type) {
@@ -7148,7 +7172,7 @@ export class BridgeRpcAdapter {
           this.sessionStatsPusher.queue(null);
         }
 
-        this.detachedSessionRegistry.removeSession(sessionPath);
+        await this.detachedSessionRegistry.removeSession(sessionPath);
         fs.unlinkSync(sessionPath);
 
         return {
@@ -7173,33 +7197,32 @@ export class BridgeRpcAdapter {
           };
         }
 
-        const sourceSm = openSessionManager(currentSessionFile);
-        const newSessionPath = sourceSm.createBranchedSession(command.entryId);
-        if (!newSessionPath) {
+        if (!this.sessionRuntime.hasDetachedSelection()) {
+          await this.sessionRuntime.ensureDetachedSessionFromLive();
+        } else {
+          await this.sessionRuntime.ensureDetachedSession();
+        }
+        const forked = await this.detachedSessionRegistry.forkSession(
+          currentSessionFile,
+          command.entryId,
+        );
+        if (forked.cancelled) {
           return {
             id: correlationId,
             type: "response",
             command: "fork",
-            success: false,
-            error: "Failed to create forked session",
+            success: true,
+            data: { text: forked.selectedText ?? "", cancelled: true },
           };
         }
-
-        const selected =
-          await this.sessionRuntime.switchToStoredSession(newSessionPath);
-        const forkedSm = selected.sessionManager;
-        const entry = forkedSm.getEntry(command.entryId);
-        const text =
-          entry && "message" in entry
-            ? ((entry.message as { content?: string }).content ?? "")
-            : "";
+        await this.sessionRuntime.switchToStoredSession(forked.sessionPath);
 
         return {
           id: correlationId,
           type: "response",
           command: "fork",
           success: true,
-          data: { text, cancelled: false },
+          data: { text: forked.selectedText ?? "", cancelled: false },
         };
       }
 

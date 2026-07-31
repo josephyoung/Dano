@@ -10,7 +10,42 @@ const { createAgentSessionMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../detached-session.js", () => ({
-  createDetachedAgentSession: createAgentSessionMock,
+  createDetachedAgentSessionRuntime: async (...args: unknown[]) => {
+    const created = await createAgentSessionMock(...args);
+    let rebindSession:
+      | ((session: typeof created.session) => Promise<void>)
+      | undefined;
+    return {
+      runtime: {
+        session: created.session,
+        setRebindSession: vi.fn(callback => {
+          rebindSession = callback;
+        }),
+        fork: vi.fn(async (entryId: string) => {
+          const entry = created.session.sessionManager.getEntry(entryId);
+          const selectedText =
+            entry?.type === "message" && entry.message?.role === "user"
+              ? typeof entry.message.content === "string"
+                ? entry.message.content
+                : entry.message.content
+                    .filter((part: { type?: string }) => part.type === "text")
+                    .map((part: { text?: string }) => part.text ?? "")
+                    .join("")
+              : undefined;
+          const sessionPath =
+            created.session.sessionManager.createBranchedSession(entryId);
+          if (!sessionPath) throw new Error("Failed to create forked session");
+          created.session.sessionManager = SessionManager.open(sessionPath);
+          created.session.sessionFile = sessionPath;
+          await rebindSession?.(created.session);
+          return { cancelled: false, selectedText };
+        }),
+        dispose: created.session.dispose ?? vi.fn(),
+      },
+      disposeDanoLlmResilience:
+        created.disposeDanoLlmResilience ?? vi.fn(),
+    };
+  },
 }));
 import { BridgeEventBus } from "../bridge-event-bus.js";
 import {
@@ -7530,6 +7565,17 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(existingFile);
+      createAgentSessionMock.mockResolvedValueOnce({
+        session: {
+          sessionFile: existingFile,
+          sessionId: sm.getSessionId(),
+          isStreaming: false,
+          bindExtensions: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn().mockReturnValue(() => {}),
+          dispose: vi.fn(),
+          sessionManager: sm,
+        },
+      });
 
       const command: RpcCommand = { id: "cmd-1", type: "new_session" };
       (
@@ -7813,6 +7859,17 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(existingFile);
+      createAgentSessionMock.mockResolvedValueOnce({
+        session: {
+          sessionFile: existingFile,
+          sessionId: sm.getSessionId(),
+          isStreaming: false,
+          bindExtensions: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn().mockReturnValue(() => {}),
+          dispose: vi.fn(),
+          sessionManager: sm,
+        },
+      });
 
       const command: RpcCommand = {
         id: "cmd-1",
@@ -7827,8 +7884,6 @@ describe("BridgeRpcAdapter", () => {
       );
 
       await new Promise(r => setTimeout(r, 10));
-
-      // ctx.fork should NOT be called (bridge creates fork locally)
 
       const sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
       const lastCall = JSON.parse(sendCalls[sendCalls.length - 1][0] as string);

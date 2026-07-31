@@ -8,7 +8,17 @@ const { createAgentSessionMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../detached-session.js", () => ({
-  createDetachedAgentSession: createAgentSessionMock,
+  createDetachedAgentSessionRuntime: async (...args: unknown[]) => {
+    const created = await createAgentSessionMock(...args);
+    return {
+      runtime: {
+        session: created.session,
+        setRebindSession: vi.fn(),
+        dispose: created.session.dispose,
+      },
+      disposeDanoLlmResilience: created.disposeDanoLlmResilience,
+    };
+  },
 }));
 
 import { DetachedSessionRegistry } from "../session-registry.js";
