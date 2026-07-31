@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "declaration": false,
-    "sourceMap": false
-  },
-  "exclude": ["node_modules", "dist", "packages/bridge/__tests__"]
-}

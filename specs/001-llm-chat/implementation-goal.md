@@ -2,7 +2,7 @@
 
 ## GOAL: 实现可验证 P0 Web LLM Chat
 
-把当前仓库实现成基于 `references/pi-web-main/` 结构的 Dano P0 Web 应用：浏览器可访问独立 Web UI，通过服务端运行的 LLM 正常通信和多轮对话；使用 HTTP POST + EventSource/SSE 替代浏览器 WebSocket；支持 Docker + nginx 部署。
+把当前仓库实现成基于 [woxQAQ/pi-web](https://github.com/woxQAQ/pi-web) 结构的 Dano P0 Web 应用：浏览器可访问独立 Web UI，通过服务端运行的 LLM 正常通信和多轮对话；使用 HTTP POST + EventSource/SSE 替代浏览器 WebSocket；支持 Docker + nginx 部署。
 
 ## CONTEXT: 项目路径、相关文件、当前状态
 
@@ -16,7 +16,7 @@
 - `specs/001-llm-chat/data-model.md`
 - `specs/001-llm-chat/contracts/http-sse.md`
 - `specs/001-llm-chat/quickstart.md`
-- `references/pi-web-main/`
+- 上游参考项目：[woxQAQ/pi-web](https://github.com/woxQAQ/pi-web)
 - `references/dano-assistant.svg`
 
 当前计划要求：
@@ -66,14 +66,14 @@
 
 ## PLAN: 执行步骤
 
-1. 阅读 `plan.md`、`contracts/http-sse.md`、`quickstart.md` 和 `references/pi-web-main` 关键文件。
+1. 阅读 `plan.md`、`contracts/http-sse.md`、`quickstart.md` 和上游 `woxQAQ/pi-web` 的关键文件。
 2. 初始化目标代码结构：
    - `apps/dano`
    - `apps/dano/src/bridge`
    - `apps/dano/web`
    - root `package.json`
    - `pnpm-workspace.yaml`
-3. 从 `references/pi-web-main` 迁移 Dano server 和 Svelte UI 必需代码。
+3. 从上游 `woxQAQ/pi-web` 迁移 Dano server 和 Svelte UI 必需代码。
 4. 删除目标中的 Pi extension 模式：
    - 不迁移或移除 `packages/bin`
    - 移除 root package 中 extension 注册与相关脚本

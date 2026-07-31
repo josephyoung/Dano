@@ -6,13 +6,13 @@
 
 ## Summary
 
-Adapt `references/pi-web-main/` into a browser-only Dano assistant that keeps the server-side LLM session path, removes Pi extension mode and Electron mode, and replaces browser WebSocket RPC with HTTP command endpoints plus EventSource streaming. Package the resulting app with Docker and place nginx in front as the browser-facing reverse proxy. Use `references/dano-assistant.svg` as the product icon.
+Adapt [woxQAQ/pi-web](https://github.com/woxQAQ/pi-web) into a browser-only Dano assistant that keeps the server-side LLM session path, removes Pi extension mode and Electron mode, and replaces browser WebSocket RPC with HTTP command endpoints plus EventSource streaming. Package the resulting app with Docker and place nginx in front as the browser-facing reverse proxy. Use `references/dano-assistant.svg` as the product icon.
 
 ## Technical Context
 
 **Language/Version**: TypeScript on Node.js `>=20.6.0`; Svelte 5 browser client built by Vite.
 
-**Primary Dependencies**: Keep the server-side agent runtime dependency used by `pi-web-main`; keep Svelte/Vite client dependencies; remove Pi extension package dependencies and Electron packaging/runtime dependencies from the target app. The browser transport target is EventSource/SSE, not WebSocket. LLM access credentials are loaded only from server-side environment configuration: local `.env` for development and Docker environment variables or Docker secrets for container deployment.
+**Primary Dependencies**: Keep the server-side agent runtime dependency used by the original `woxQAQ/pi-web` project; keep Svelte/Vite client dependencies; remove Pi extension package dependencies and Electron packaging/runtime dependencies from the target app. The browser transport target is EventSource/SSE, not WebSocket. LLM access credentials are loaded only from server-side environment configuration: local `.env` for development and Docker environment variables or Docker secrets for container deployment.
 
 **Storage**: No database for P0. Conversation state is process/runtime session state only; long-term conversation persistence is outside the P0 spec.
 
