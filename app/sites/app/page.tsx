@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const valueSteps = [
   ["说明需求", "自然语言说清办理目标"],
   ["理解意图", "识别流程、入口与规则"],
@@ -38,23 +40,23 @@ export default function Home() {
   return (
     <main>
       <nav className="nav shell" aria-label="主导航">
-        <a className="brand" href="#top" aria-label="小络助手首页">
+        <Link className="brand" href="/" aria-label="小络助手首页">
           <img src="/xiaoluo-logo.png" alt="" />
           <span>小络助手</span>
-        </a>
+        </Link>
         <div className="nav-links">
-          <a href="#value">产品价值</a>
-          <a href="#workflow">办理流程</a>
-          <a href="#case">真实案例</a>
-          <a href="#scenes">业务场景</a>
-          <a href="#integration">系统接入</a>
+          <Link href="#value">产品价值</Link>
+          <Link href="#workflow">办理流程</Link>
+          <Link href="#case">真实案例</Link>
+          <Link href="#scenes">业务场景</Link>
+          <Link href="#integration">系统接入</Link>
         </div>
         <a className="nav-cta" href="https://1.15.173.22/" target="_blank" rel="noreferrer">
           进入小络助手 <span aria-hidden="true">↗</span>
         </a>
       </nav>
 
-      <section className="hero shell" id="top">
+      <section className="hero shell">
         <div className="hero-copy">
           <div className="eyebrow"><i />企业员工的智能业务办理入口</div>
           <h1>一句话，完成<br /><em>跨系统业务办理</em></h1>
@@ -63,8 +65,8 @@ export default function Home() {
             在对话中补齐信息、集中确认，并把结果带回当前会话。
           </p>
           <div className="hero-actions">
-            <a className="button primary" href="#case">查看真实办理流程 <span>↓</span></a>
-            <a className="button secondary" href="#integration">了解接入方式 <span>→</span></a>
+            <Link className="button primary" href="#case">查看真实办理流程 <span>↓</span></Link>
+            <Link className="button secondary" href="#integration">了解接入方式 <span>→</span></Link>
           </div>
           <div className="trust-row" aria-label="产品特点">
             <span><b>✓</b>只需说清需求</span>
@@ -280,7 +282,7 @@ export default function Home() {
       </section>
 
       <footer className="footer shell">
-        <a className="brand" href="#top"><img src="/xiaoluo-logo.png" alt="" /><span>小络助手</span></a>
+        <Link className="brand" href="/"><img src="/xiaoluo-logo.png" alt="" /><span>小络助手</span></Link>
         <p>面向企业员工的智能业务办理入口</p>
         <span>© 2026 小络助手</span>
       </footer>
