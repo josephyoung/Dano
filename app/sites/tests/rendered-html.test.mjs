@@ -70,16 +70,19 @@ test("ships the complete production-demo flow and share metadata", async () => {
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
 });
 
-test("keeps top navigation as interruptible native anchors", async () => {
+test("keeps hash navigation interruptible through a single router handler", async () => {
   const [page, css] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
+  assert.match(page, /import Link from ["']next\/link["'];/);
+
   for (const anchor of ["value", "workflow", "case", "scenes", "integration"]) {
-    assert.match(page, new RegExp(`href=["']#${anchor}["']`));
+    assert.match(page, new RegExp(`<Link[^>]*href=["']#${anchor}["']`));
   }
 
+  assert.doesNotMatch(page, /<a[^>]*href=["']#/);
   assert.doesNotMatch(page, /onClick|preventDefault|scrollIntoView/);
   assert.doesNotMatch(css, /scroll-behavior\s*:\s*smooth/i);
   assert.doesNotMatch(css, /(?:html|body)\s*\{[^}]*overflow(?:-y)?\s*:\s*hidden/is);
