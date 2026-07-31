@@ -1,6 +1,6 @@
 {
   "name": "@dano/dano",
-  "version": "0.1.150",
+  "version": "0.1.151",
   "private": true,
   "description": "Dano P0 web LLM chat",
   "type": "module",
@@ -32,13 +32,14 @@
     "smoke:deploy": "node scripts/smoke-dano-deploy.mjs",
     "start": "pnpm -C apps/dano start",
     "test": "vitest run",
-    "test:browser": "pnpm run --sequential \"/^test:browser:(composer|header|theme-color|question-tool|multi-tab)$/\"",
+    "test:browser": "pnpm run --sequential \"/^test:browser:(composer|header|theme-color|question-tool|multi-tab|viewport)$/\"",
     "test:browser:composer": "node scripts/test-composer-autosize-browser.mjs",
     "test:browser:header": "node scripts/test-app-header-browser.mjs",
     "test:browser:demo-auth": "node scripts/test-demo-auth-browser.mjs",
     "test:browser:theme-color": "node scripts/test-theme-color-browser.mjs",
     "test:browser:question-tool": "node scripts/test-question-tool-card-browser.mjs",
     "test:browser:multi-tab": "node scripts/test-multi-tab-prompt-browser.mjs",
+    "test:browser:viewport": "node scripts/test-app-viewport-browser.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {
