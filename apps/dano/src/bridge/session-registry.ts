@@ -29,6 +29,7 @@ export interface DetachedSessionRegistryEvent {
 export class DetachedSessionHandle {
   private runtime: AgentSessionRuntime | null = null;
   private initializingSession: Promise<AgentSession> | null = null;
+  private disposePromise: Promise<void> | null = null;
   private disposed = false;
   private unsubscribeSession: (() => void) | null = null;
   private disposeDanoLlmResilience: (() => void) | null = null;
@@ -178,8 +179,16 @@ export class DetachedSessionHandle {
     this.disposeDanoLlmResilience = disposeDanoLlmResilience;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposePromise) {
+      return this.disposePromise;
+    }
     this.disposed = true;
+    this.disposePromise = this.disposeOwnedRuntime();
+    return this.disposePromise;
+  }
+
+  private async disposeOwnedRuntime(): Promise<void> {
     await this.initializingSession?.catch(() => {});
     this.unsubscribeSession?.();
     this.unsubscribeSession = null;
@@ -279,6 +288,20 @@ export class DetachedSessionRegistry {
 
   getInitialSessionPath(): string | null {
     return this.initialSessionPath;
+  }
+
+  getReplacementSessionPath(excludedPath: string): string | null {
+    if (
+      this.initialSessionPath &&
+      this.initialSessionPath !== excludedPath &&
+      this.handles.has(this.initialSessionPath)
+    ) {
+      return this.initialSessionPath;
+    }
+    return (
+      [...this.handles.keys()].find(sessionPath => sessionPath !== excludedPath) ??
+      null
+    );
   }
 
   async adoptRuntime(
@@ -450,20 +473,21 @@ export class DetachedSessionRegistry {
   async removeSession(sessionPath: string): Promise<void> {
     const handle = this.handles.get(sessionPath);
     if (handle) {
-      await handle.dispose();
       this.handles.delete(sessionPath);
       if (this.initialSessionPath === sessionPath) {
         this.initialSessionPath = this.handles.keys().next().value ?? null;
       }
+      await handle.dispose();
     }
   }
 
   async dispose(): Promise<void> {
-    for (const handle of this.handles.values()) {
-      await handle.dispose();
-    }
+    const handles = [...this.handles.values()];
     this.handles.clear();
     this.initialSessionPath = null;
+    for (const handle of handles) {
+      await handle.dispose();
+    }
     this.listeners.clear();
   }
 

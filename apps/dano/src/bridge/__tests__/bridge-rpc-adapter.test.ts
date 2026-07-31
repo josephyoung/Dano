@@ -7654,6 +7654,103 @@ describe("BridgeRpcAdapter", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    it("returns to the initial runtime after deleting a selected history session", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-delete-history-"));
+      const initialManager = SessionManager.create(tmpDir, tmpDir);
+      const initialPath = initialManager.getSessionFile();
+      if (!initialPath) throw new Error("initial session path missing");
+      const initialSession = {
+        sessionFile: initialPath,
+        sessionId: initialManager.getSessionId(),
+        sessionManager: initialManager,
+        model: undefined,
+        thinkingLevel: "medium",
+        isStreaming: false,
+        isCompacting: false,
+        steeringMode: "all",
+        followUpMode: "all",
+        autoCompactionEnabled: false,
+        pendingMessageCount: 0,
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => {}),
+        abort: vi.fn().mockResolvedValue(undefined),
+        dispose: vi.fn().mockResolvedValue(undefined),
+      };
+      const registry = new DetachedSessionRegistry(
+        tmpDir,
+        context.askUserQuestion.tool,
+      );
+      await registry.adoptRuntime(
+        {
+          session: initialSession,
+          setRebindSession: vi.fn(),
+          dispose: initialSession.dispose,
+        } as never,
+      );
+
+      adapter.dispose();
+      adapter = new BridgeRpcAdapter(
+        client,
+        message => ws.send(JSON.stringify(message)),
+        context,
+        DEFAULT_BRIDGE_CONFIG,
+        eventBus,
+        emitEvent as never,
+        uploadRegistry as never,
+        registry,
+      );
+      (ws.send as ReturnType<typeof vi.fn>).mockClear();
+
+      const historyPath = path.join(tmpDir, "history.jsonl");
+      fs.writeFileSync(
+        historyPath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "history-session",
+          timestamp: new Date().toISOString(),
+          cwd: tmpDir,
+        })}\n`,
+      );
+      for (const payload of [
+        {
+          id: "switch-history",
+          type: "switch_session",
+          sessionPath: historyPath,
+        },
+        {
+          id: "delete-history",
+          type: "delete_session",
+          sessionPath: historyPath,
+        },
+      ] satisfies RpcCommand[]) {
+        ws.trigger(
+          "message",
+          Buffer.from(JSON.stringify({ type: "command", payload })),
+        );
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      const messages = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        call => JSON.parse(call[0] as string),
+      );
+      expect(
+        messages.find(message => message.payload?.id === "delete-history")
+          ?.payload,
+      ).toMatchObject({ success: true });
+      expect(
+        messages
+          .filter(message => message.payload?.type === "transcript_snapshot")
+          .at(-1)?.payload.sessionPath,
+      ).toBe(initialPath);
+      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(initialSession.dispose).not.toHaveBeenCalled();
+      expect(fs.existsSync(historyPath)).toBe(false);
+
+      await registry.dispose();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     it("should reject empty session name", async () => {
       const command: RpcCommand = {
         id: "cmd-1",

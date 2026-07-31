@@ -321,6 +321,21 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
     );
   });
 
+  it("shares disposal across concurrent session removal and registry shutdown", async () => {
+    const { registry, root } = createRegistry();
+    const running = createRunningSession(registry, root);
+    await registry.ensureSession(running.handle.sessionPath);
+
+    await Promise.all([
+      registry.removeSession(running.handle.sessionPath),
+      registry.dispose(),
+      running.handle.dispose(),
+    ]);
+
+    expect(running.disposeDanoLlmResilience).toHaveBeenCalledTimes(1);
+    expect(running.disposeSession).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans up a runtime when initial Extension UI binding fails", async () => {
     const { registry, root } = createRegistry();
     const handle = registry.createSession({ cwd: root, sessionDir: root });

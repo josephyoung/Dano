@@ -7173,8 +7173,13 @@ export class BridgeRpcAdapter {
 
         const deletingSelectedSession =
           this.sessionRuntime.currentDetachedSessionPath() === sessionPath;
+        const replacementPath = deletingSelectedSession
+          ? this.detachedSessionRegistry.getReplacementSessionPath(sessionPath)
+          : null;
         const replacement = deletingSelectedSession
-          ? await this.sessionRuntime.createDetachedSession()
+          ? replacementPath
+            ? await this.sessionRuntime.switchToStoredSession(replacementPath)
+            : await this.sessionRuntime.createDetachedSession()
           : undefined;
 
         await this.detachedSessionRegistry.removeSession(sessionPath);
