@@ -167,6 +167,30 @@ async function transcriptPositionMetrics(page) {
   });
 }
 
+async function centeredCardViewportMetrics(page) {
+  return page.evaluate(() => {
+    const shell = document.querySelector(".app-shell");
+    const card = document.querySelector(".center-focused-card");
+    if (!shell || !card) throw new Error("centered card viewport harness is missing");
+    const visualTop = window.visualViewport?.offsetTop ?? 0;
+    const visualBottom = visualTop +
+      (window.visualViewport?.height ?? window.innerHeight);
+    const shellRect = shell.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    return {
+      cardBottom: cardRect.bottom,
+      cardTop: cardRect.top,
+      cardWithinViewport:
+        cardRect.top >= visualTop - 1 && cardRect.bottom <= visualBottom + 1,
+      pageOverflow:
+        document.documentElement.scrollHeight >
+        document.documentElement.clientHeight + 1,
+      shellWithinViewport:
+        shellRect.top >= visualTop - 1 && shellRect.bottom <= visualBottom + 1,
+    };
+  });
+}
+
 async function returnedCardMetrics(page) {
   return page.evaluate(() => {
     const transcript = document.querySelector(".chat-transcript");
@@ -284,6 +308,35 @@ async function assertFocusLockAndNormalReturn(
       await page.locator(".chat-transcript").getAttribute("data-center-focus-locked"),
       "true",
     );
+    if (viewport.width < viewport.height) {
+      const closedCard = await centeredCardViewportMetrics(page);
+      assert.equal(closedCard.cardWithinViewport, true);
+      assert.equal(closedCard.shellWithinViewport, true);
+      assert.equal(closedCard.pageOverflow, false);
+
+      await page.setViewportSize({
+        width: viewport.width,
+        height: Math.round(viewport.height * 2 / 3),
+      });
+      await page.evaluate(() => new Promise(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+      const contentCard = await centeredCardViewportMetrics(page);
+      assert.equal(contentCard.cardWithinViewport, true);
+      assert.equal(contentCard.shellWithinViewport, true);
+      assert.equal(contentCard.pageOverflow, false);
+
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => new Promise(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      ));
+      const restoredCard = await centeredCardViewportMetrics(page);
+      assert.equal(restoredCard.cardWithinViewport, true);
+      assert.equal(restoredCard.shellWithinViewport, true);
+      assert.equal(restoredCard.pageOverflow, false);
+      assert.ok(Math.abs(restoredCard.cardTop - closedCard.cardTop) <= 1);
+      assert.ok(Math.abs(restoredCard.cardBottom - closedCard.cardBottom) <= 1);
+    }
     await page.mouse.move(2, Math.floor(viewport.height / 2));
     await page.mouse.wheel(0, -500);
     await page.evaluate(() => new Promise(resolve =>

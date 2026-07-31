@@ -229,6 +229,51 @@ async function setViewport(page, viewport) {
   }, "viewport layout did not settle");
 }
 
+async function assertResizesVisualControl(
+  browser,
+  frontendOrigin,
+  closedViewport,
+  contentViewport,
+) {
+  const controlPage = await browser.newPage();
+  try {
+    await controlPage.goto(frontendOrigin, { waitUntil: "domcontentloaded" });
+    const textarea = controlPage.locator("textarea.prompt-input");
+    await textarea.waitFor({ state: "visible" });
+    await waitFor(
+      () => textarea.isEnabled(),
+      "diagnostic control did not connect to the isolated backend",
+    );
+    await sendPrompt(controlPage, shortPrompt, shortCompletion);
+    await setViewport(controlPage, closedViewport);
+
+    const cdp = await controlPage.context().newCDPSession(controlPage);
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      ...closedViewport,
+      deviceScaleFactor: 1,
+      mobile: true,
+      dontSetVisibleSize: true,
+    });
+    await cdp.send("Emulation.setPageScaleFactor", {
+      pageScaleFactor: closedViewport.height / contentViewport.height,
+    });
+    await waitForLayout(controlPage);
+    const metrics = await layoutMetrics(controlPage);
+    assert.equal(
+      metrics.composerVisible,
+      false,
+      "resizes-visual control did not expose the original hidden Composer",
+    );
+    assert.equal(
+      metrics.shellVisible,
+      false,
+      "resizes-visual control did not expose the App Shell mismatch",
+    );
+  } finally {
+    await controlPage.close();
+  }
+}
+
 async function run() {
   const executablePath = findChromeExecutable();
   assert.ok(executablePath, "No system Chrome/Chromium found");
@@ -305,31 +350,15 @@ async function run() {
     "mobile keyboard restored",
   );
 
+  await assertResizesVisualControl(
+    browser,
+    frontendOrigin,
+    mobileClosedViewport,
+    mobileContentViewport,
+  );
+
   await sendPrompt(page, longPrompt, longCompletion);
   assertLongConversationLayout(await layoutMetrics(page), "mobile long conversation");
-
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Emulation.setDeviceMetricsOverride", {
-    ...mobileClosedViewport,
-    deviceScaleFactor: 1,
-    mobile: true,
-    dontSetVisibleSize: true,
-  });
-  await cdp.send("Emulation.setPageScaleFactor", {
-    pageScaleFactor: mobileClosedViewport.height / mobileContentViewport.height,
-  });
-  await waitForLayout(page);
-  const resizesVisualControl = await layoutMetrics(page);
-  assert.equal(
-    resizesVisualControl.composerVisible,
-    false,
-    "resizes-visual control did not expose the original hidden Composer",
-  );
-  assert.equal(
-    resizesVisualControl.shellVisible,
-    false,
-    "resizes-visual control did not expose the App Shell mismatch",
-  );
 }
 
 try {
