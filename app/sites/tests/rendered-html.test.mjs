@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -68,4 +68,19 @@ test("ships the complete production-demo flow and share metadata", async () => {
   assert.match(html, /property="og:image:width" content="1200"/);
   assert.match(html, /property="og:image:height" content="630"/);
   assert.match(html, /name="twitter:card" content="summary_large_image"/);
+});
+
+test("keeps top navigation as interruptible native anchors", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  for (const anchor of ["value", "workflow", "case", "scenes", "integration"]) {
+    assert.match(page, new RegExp(`href=["']#${anchor}["']`));
+  }
+
+  assert.doesNotMatch(page, /onClick|preventDefault|scrollIntoView/);
+  assert.doesNotMatch(css, /scroll-behavior\s*:\s*smooth/i);
+  assert.doesNotMatch(css, /(?:html|body)\s*\{[^}]*overflow(?:-y)?\s*:\s*hidden/is);
 });
