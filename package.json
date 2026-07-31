@@ -32,7 +32,7 @@
     "smoke:deploy": "node scripts/smoke-dano-deploy.mjs",
     "start": "pnpm -C apps/dano start",
     "test": "vitest run",
-    "test:browser": "pnpm run --sequential \"/^test:browser:(composer|header|theme-color|question-tool|multi-tab)$/\"",
+    "test:browser": "pnpm run --sequential \"/^test:browser:(composer|header|theme-color|question-tool|multi-tab|viewport)$/\"",
     "test:browser:composer": "node scripts/test-composer-autosize-browser.mjs",
     "test:browser:header": "node scripts/test-app-header-browser.mjs",
     "test:browser:demo-auth": "node scripts/test-demo-auth-browser.mjs",
