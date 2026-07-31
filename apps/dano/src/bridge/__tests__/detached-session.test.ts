@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   createAgentSessionFromServicesMock,
+  createAgentSessionRuntimeMock,
   createAgentSessionServicesMock,
   createCurlToolMock,
   createEditToolDefinitionMock,
@@ -12,6 +13,7 @@ const {
   createWriteToolDefinitionMock,
 } = vi.hoisted(() => ({
   createAgentSessionFromServicesMock: vi.fn(),
+  createAgentSessionRuntimeMock: vi.fn(),
   createAgentSessionServicesMock: vi.fn(),
   createCurlToolMock: vi.fn(),
   createEditToolDefinitionMock: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   return {
     ...actual,
     createAgentSessionFromServices: createAgentSessionFromServicesMock,
+    createAgentSessionRuntime: createAgentSessionRuntimeMock,
     createAgentSessionServices: createAgentSessionServicesMock,
     createEditToolDefinition: createEditToolDefinitionMock,
     createReadToolDefinition: createReadToolDefinitionMock,
@@ -38,7 +41,7 @@ vi.mock("../curl-tool.js", () => ({
   createCurlTool: createCurlToolMock,
 }));
 
-import { createDetachedAgentSession } from "../detached-session.js";
+import { createDetachedAgentSessionRuntime } from "../detached-session.js";
 import { danoVersionTool } from "../dano-version-tool.js";
 import { detectWorkspaceEnvironments } from "../workspace-environment.js";
 
@@ -48,6 +51,7 @@ describe("detached-session", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-detached-session-"));
     createAgentSessionFromServicesMock.mockReset();
+    createAgentSessionRuntimeMock.mockReset();
     createAgentSessionServicesMock.mockReset();
     createCurlToolMock.mockReset();
     createEditToolDefinitionMock.mockReset();
@@ -150,8 +154,17 @@ describe("detached-session", () => {
     createEditToolDefinitionMock.mockReturnValue(editToolDefinition);
     createWriteToolDefinitionMock.mockReturnValue(writeToolDefinition);
     createAgentSessionFromServicesMock.mockResolvedValue(sessionResult);
+    createAgentSessionRuntimeMock.mockImplementation(
+      async (factory: (options: object) => Promise<object>, options: object) => {
+        const created = (await factory(options)) as { session: object };
+        return {
+          session: created.session,
+          setBeforeSessionInvalidate: vi.fn(),
+        };
+      },
+    );
 
-    const result = await createDetachedAgentSession(
+    const result = await createDetachedAgentSessionRuntime(
       tmpDir,
       sessionManager as never,
       { askUserQuestionTool: configuredAskUserQuestionTool as never },
@@ -159,6 +172,7 @@ describe("detached-session", () => {
 
     expect(createAgentSessionServicesMock).toHaveBeenCalledWith({
       cwd: tmpDir,
+      agentDir: expect.any(String),
       resourceLoaderOptions: {
         additionalExtensionPaths: [
           expect.stringContaining("pi-heimdall/extensions/heimdall.ts"),
@@ -175,6 +189,7 @@ describe("detached-session", () => {
     expect(createAgentSessionFromServicesMock).toHaveBeenCalledWith({
       services,
       sessionManager,
+      sessionStartEvent: undefined,
       noTools: "builtin",
       customTools: [
         readToolDefinition,
@@ -185,7 +200,7 @@ describe("detached-session", () => {
         configuredAskUserQuestionTool,
       ],
     });
-    expect(result.session).toBe(sessionResult.session);
+    expect(result.runtime.session).toBe(sessionResult.session);
     expect(result.disposeDanoLlmResilience).toEqual(expect.any(Function));
 
     const overrideCallCount = applyOverrides.mock.calls.length;

@@ -665,10 +665,17 @@ async function runDanoMain(): Promise<number> {
     sessionDir: defaultSessionDir,
     danoConfig,
   });
-  const sessionRegistry = new DetachedSessionRegistry(
-    backend.context.state.cwd,
-    backend.context.askUserQuestion.tool,
-  );
+  const sessionRegistry =
+    backend.sessionRegistry ??
+    new DetachedSessionRegistry(
+      backend.context.state.cwd,
+      backend.context.askUserQuestion.tool,
+      {
+        modelRuntime: backend.session.modelRuntime,
+        settingsManager: backend.session.settingsManager,
+      },
+    );
+  const ownsSessionRegistry = !backend.sessionRegistry;
 
   try {
     while (true) {
@@ -705,7 +712,9 @@ async function runDanoMain(): Promise<number> {
       console.log("[dano] Dano server runtime reloaded.");
     }
   } finally {
-    sessionRegistry.dispose();
+    if (ownsSessionRegistry) {
+      await sessionRegistry.dispose();
+    }
     await backend.dispose();
   }
 }

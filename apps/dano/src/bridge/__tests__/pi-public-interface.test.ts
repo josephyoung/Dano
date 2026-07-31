@@ -158,4 +158,28 @@ describe("Pi 0.82.1 public interface baseline", () => {
       /\bcreateAgentSession\b|\bSessionManager\b|\bSettingsManager\b/,
     );
   });
+
+  it("keeps session lifecycle on the public AgentSessionRuntime boundary", () => {
+    const registrySource = readFileSync(
+      new URL("../session-registry.ts", import.meta.url),
+      "utf8",
+    );
+    const detachedSessionSource = readFileSync(
+      new URL("../detached-session.ts", import.meta.url),
+      "utf8",
+    );
+    const adapterSource = readFileSync(
+      new URL("../bridge-rpc-adapter.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(registrySource).toMatch(/\bAgentSessionRuntime\b/);
+    expect(detachedSessionSource).toContain("createAgentSessionRuntime");
+    expect(detachedSessionSource).not.toMatch(
+      /export async function createDetachedAgentSession\b/,
+    );
+    expect(adapterSource).not.toMatch(
+      /class SessionRuntime\b|\.createBranchedSession\(/,
+    );
+  });
 });

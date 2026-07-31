@@ -11,13 +11,13 @@ import {
   createAskUserQuestionRuntime,
   type AskUserQuestionRuntime,
 } from "./bridge/ask-user-question.js";
-import { createDetachedAgentSession } from "./bridge/detached-session.js";
+import { createDetachedAgentSessionRuntime } from "./bridge/detached-session.js";
 import {
   createFieldAssistService,
   createPiSdkFieldAssistClient,
 } from "./bridge/field-assist.js";
-import { createHeadlessUIContext } from "./bridge/headless-ui-context.js";
 import { interruptOpenFormInteractions } from "./bridge/form-interaction.js";
+import { DetachedSessionRegistry } from "./bridge/session-registry.js";
 import type {
   BridgeLiveEvent,
   BridgeSessionActions,
@@ -32,6 +32,7 @@ import type {
 export interface DanoBackend {
   readonly context: BridgeRpcAdapterContext;
   readonly session: AgentSession;
+  readonly sessionRegistry?: DetachedSessionRegistry;
   dispose(): Promise<void>;
 }
 
@@ -111,6 +112,8 @@ export function createDanoBackendFromSession(
     defaultTitle: danoConfig.askUserQuestion?.defaultTitle,
   }),
   disposeDanoLlmResilience: () => void = () => {},
+  disposeSession: () => void | Promise<void> = () => session.dispose(),
+  sessionRegistry?: DetachedSessionRegistry,
 ): DanoBackend {
   interruptOpenFormInteractions(session.sessionManager);
   const liveEventHandlers = new Set<(event: BridgeLiveEvent) => void>();
@@ -125,14 +128,16 @@ export function createDanoBackendFromSession(
     }
   };
 
-  const unsubscribeSession = session.subscribe(event => {
-    const liveEvent = toBridgeLiveEvent(event);
-    if (!liveEvent) {
-      return;
-    }
+  const unsubscribeSession = sessionRegistry
+    ? () => {}
+    : session.subscribe(event => {
+        const liveEvent = toBridgeLiveEvent(event);
+        if (!liveEvent) {
+          return;
+        }
 
-    emitLiveEvent(liveEvent);
-  });
+        emitLiveEvent(liveEvent);
+      });
 
   const events: BridgeSessionEvents = {
     subscribe(handler) {
@@ -226,10 +231,19 @@ export function createDanoBackendFromSession(
       session.setSessionName(name);
     },
 
-    getCommands() {
-      return listSessionCommands(session);
+    getCommands(selectedSession = session) {
+      return listSessionCommands(selectedSession);
     },
   };
+
+  const createFieldAssist = (selectedSession: AgentSession) =>
+    createFieldAssistService({
+      ai: createPiSdkFieldAssistClient({
+        modelRuntime: selectedSession.modelRuntime,
+      }),
+      getCurrentModel: () => selectedSession.model,
+      maxRetries: danoConfig.fieldAssist?.maxRetries,
+    });
 
   return {
     context: {
@@ -237,19 +251,15 @@ export function createDanoBackendFromSession(
       state,
       actions,
       askUserQuestion,
-      fieldAssist: createFieldAssistService({
-        ai: createPiSdkFieldAssistClient({
-          modelRuntime: session.modelRuntime,
-        }),
-        getCurrentModel: state.getCurrentModel,
-        maxRetries: danoConfig.fieldAssist?.maxRetries,
-      }),
+      fieldAssist: createFieldAssist(session),
+      createFieldAssist,
     },
     session,
+    sessionRegistry,
     async dispose() {
       unsubscribeSession();
       disposeDanoLlmResilience();
-      session.dispose();
+      await disposeSession();
     },
   };
 }
@@ -270,7 +280,7 @@ export async function createDanoBackend(
     maxRetries: danoConfig.askUserQuestion?.maxRetries,
     defaultTitle: danoConfig.askUserQuestion?.defaultTitle,
   });
-  const result = await createDetachedAgentSession(
+  const result = await createDetachedAgentSessionRuntime(
     sessionManager.getCwd() || cwd,
     sessionManager,
     {
@@ -278,21 +288,25 @@ export async function createDanoBackend(
     },
   );
 
-  await result.session.bindExtensions({
-      uiContext: createHeadlessUIContext(),
-      onError: error => {
-        console.error(
-          `Dano server extension error (${error.extensionPath}):`,
-          error.error,
-        );
+  const sessionRegistry = new DetachedSessionRegistry(
+    result.runtime.cwd,
+    askUserQuestion.tool,
+    {
+      modelRuntime: result.runtime.session.modelRuntime,
+      settingsManager: result.runtime.session.settingsManager,
     },
-    shutdownHandler: () => {},
-  });
+  );
+  await sessionRegistry.adoptRuntime(
+    result.runtime,
+    result.disposeDanoLlmResilience,
+  );
 
   return createDanoBackendFromSession(
-    result.session,
+    result.runtime.session,
     danoConfig,
     askUserQuestion,
-    result.disposeDanoLlmResilience,
+    () => {},
+    () => sessionRegistry.dispose(),
+    sessionRegistry,
   );
 }

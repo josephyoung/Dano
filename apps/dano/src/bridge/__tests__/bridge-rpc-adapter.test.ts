@@ -10,7 +10,68 @@ const { createAgentSessionMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../detached-session.js", () => ({
-  createDetachedAgentSession: createAgentSessionMock,
+  createDetachedAgentSessionRuntime: async (...args: unknown[]) => {
+    const sessionManager = args[1] as SessionManager;
+    const mocked = await createAgentSessionMock(...args);
+    const created =
+      mocked ??
+      {
+        session: {
+          sessionFile: sessionManager.getSessionFile(),
+          sessionId: sessionManager.getSessionId(),
+          isStreaming: false,
+          getSessionStats: vi.fn().mockReturnValue({
+            contextUsage: undefined,
+            totalMessages: 0,
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+          }),
+          bindExtensions: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn().mockReturnValue(() => {}),
+          dispose: vi.fn(),
+          abort: vi.fn().mockResolvedValue(undefined),
+          sessionManager,
+        },
+      };
+    let rebindSession:
+      | ((session: typeof created.session) => Promise<void>)
+      | undefined;
+    return {
+      runtime: {
+        session: created.session,
+        setRebindSession: vi.fn(callback => {
+          rebindSession = callback;
+        }),
+        fork: vi.fn(async (entryId: string) => {
+          const entry = created.session.sessionManager.getEntry(entryId);
+          const selectedText =
+            entry?.type === "message" && entry.message?.role === "user"
+              ? typeof entry.message.content === "string"
+                ? entry.message.content
+                : entry.message.content
+                    .filter((part: { type?: string }) => part.type === "text")
+                    .map((part: { text?: string }) => part.text ?? "")
+                    .join("")
+              : undefined;
+          const sessionPath =
+            created.session.sessionManager.createBranchedSession(entryId);
+          if (!sessionPath) throw new Error("Failed to create forked session");
+          created.session.sessionManager = SessionManager.open(sessionPath);
+          created.session.sessionFile = sessionPath;
+          await rebindSession?.(created.session);
+          return { cancelled: false, selectedText };
+        }),
+        dispose: created.session.dispose ?? vi.fn(),
+      },
+      disposeDanoLlmResilience:
+        created.disposeDanoLlmResilience ?? vi.fn(),
+    };
+  },
 }));
 import { BridgeEventBus } from "../bridge-event-bus.js";
 import {
@@ -257,6 +318,8 @@ describe("BridgeRpcAdapter", () => {
             getEntries: vi.fn().mockReturnValue([]),
             getBranch: vi.fn().mockReturnValue([]),
             getCwd: vi.fn().mockReturnValue(tmpDir),
+            getLeafId: vi.fn().mockReturnValue(null),
+            getTree: vi.fn().mockReturnValue([]),
           },
         },
       });
@@ -319,6 +382,8 @@ describe("BridgeRpcAdapter", () => {
           getEntries: vi.fn().mockReturnValue([]),
           getBranch: vi.fn().mockReturnValue([]),
           getCwd: vi.fn().mockReturnValue(tmpDir),
+          getLeafId: vi.fn().mockReturnValue(null),
+          getTree: vi.fn().mockReturnValue([]),
         },
       };
       createAgentSessionMock.mockResolvedValue({ session });
@@ -446,6 +511,8 @@ describe("BridgeRpcAdapter", () => {
             getEntries: vi.fn().mockReturnValue([]),
             getBranch: vi.fn().mockReturnValue([]),
             getCwd: vi.fn().mockReturnValue(tmpDir),
+            getLeafId: vi.fn().mockReturnValue(null),
+            getTree: vi.fn().mockReturnValue([]),
           },
         },
       });
@@ -6298,7 +6365,7 @@ describe("BridgeRpcAdapter", () => {
           (entry: { type: string }) => entry.type === "model_change",
         ),
       ).toBeUndefined();
-      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 
       const switchToLiveCommand: RpcCommand = {
         id: "cmd-switch-live",
@@ -7502,6 +7569,188 @@ describe("BridgeRpcAdapter", () => {
       expect(lastCall.payload.success).toBe(true);
     });
 
+    it("selects a fresh runtime before deleting the current session", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-delete-current-"));
+      const sourcePath = path.join(tmpDir, "source.jsonl");
+      fs.writeFileSync(
+        sourcePath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "delete-source",
+          timestamp: new Date().toISOString(),
+          cwd: tmpDir,
+        })}\n`,
+      );
+      (
+        context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
+      ).mockReturnValue(sourcePath);
+      (
+        context.state.sessionManager.getCwd as ReturnType<typeof vi.fn>
+      ).mockReturnValue(tmpDir);
+
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: {
+              id: "switch-before-delete",
+              type: "switch_session",
+              sessionPath: sourcePath,
+            },
+          }),
+        ),
+      );
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: {
+              id: "delete-current",
+              type: "delete_session",
+              sessionPath: sourcePath,
+            },
+          }),
+        ),
+      );
+      await vi.waitFor(() => {
+        const response = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "response" &&
+              call.payload.id === "delete-current",
+          );
+        expect(response?.payload).toMatchObject({ success: true });
+      });
+
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: { id: "state-after-delete", type: "get_state" },
+          }),
+        ),
+      );
+      await vi.waitFor(() => {
+        const response = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "response" &&
+              call.payload.id === "state-after-delete",
+          );
+        expect(response?.payload.success).toBe(true);
+        expect(response?.payload.data.sessionFile).not.toBe(sourcePath);
+      });
+
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("returns to the initial runtime after deleting a selected history session", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-delete-history-"));
+      const initialManager = SessionManager.create(tmpDir, tmpDir);
+      const initialPath = initialManager.getSessionFile();
+      if (!initialPath) throw new Error("initial session path missing");
+      const initialSession = {
+        sessionFile: initialPath,
+        sessionId: initialManager.getSessionId(),
+        sessionManager: initialManager,
+        model: undefined,
+        thinkingLevel: "medium",
+        isStreaming: false,
+        isCompacting: false,
+        steeringMode: "all",
+        followUpMode: "all",
+        autoCompactionEnabled: false,
+        pendingMessageCount: 0,
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => {}),
+        abort: vi.fn().mockResolvedValue(undefined),
+        dispose: vi.fn().mockResolvedValue(undefined),
+      };
+      const registry = new DetachedSessionRegistry(
+        tmpDir,
+        context.askUserQuestion.tool,
+      );
+      await registry.adoptRuntime(
+        {
+          session: initialSession,
+          setRebindSession: vi.fn(),
+          dispose: initialSession.dispose,
+        } as never,
+      );
+
+      adapter.dispose();
+      adapter = new BridgeRpcAdapter(
+        client,
+        message => ws.send(JSON.stringify(message)),
+        context,
+        DEFAULT_BRIDGE_CONFIG,
+        eventBus,
+        emitEvent as never,
+        uploadRegistry as never,
+        registry,
+      );
+      (ws.send as ReturnType<typeof vi.fn>).mockClear();
+
+      const historyPath = path.join(tmpDir, "history.jsonl");
+      fs.writeFileSync(
+        historyPath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "history-session",
+          timestamp: new Date().toISOString(),
+          cwd: tmpDir,
+        })}\n`,
+      );
+      for (const payload of [
+        {
+          id: "switch-history",
+          type: "switch_session",
+          sessionPath: historyPath,
+        },
+        {
+          id: "delete-history",
+          type: "delete_session",
+          sessionPath: historyPath,
+        },
+      ] satisfies RpcCommand[]) {
+        ws.trigger(
+          "message",
+          Buffer.from(JSON.stringify({ type: "command", payload })),
+        );
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      const messages = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        call => JSON.parse(call[0] as string),
+      );
+      expect(
+        messages.find(message => message.payload?.id === "delete-history")
+          ?.payload,
+      ).toMatchObject({ success: true });
+      expect(
+        messages
+          .filter(message => message.payload?.type === "transcript_snapshot")
+          .at(-1)?.payload.sessionPath,
+      ).toBe(initialPath);
+      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(initialSession.dispose).not.toHaveBeenCalled();
+      expect(fs.existsSync(historyPath)).toBe(false);
+
+      await registry.dispose();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     it("should reject empty session name", async () => {
       const command: RpcCommand = {
         id: "cmd-1",
@@ -7530,7 +7779,6 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(existingFile);
-
       const command: RpcCommand = { id: "cmd-1", type: "new_session" };
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }
@@ -7541,9 +7789,7 @@ describe("BridgeRpcAdapter", () => {
 
       await new Promise(r => setTimeout(r, 10));
 
-      // ctx.newSession should NOT be called (bridge creates session locally)
-      // createAgentSession should NOT be called eagerly
-      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 
       const sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
         call => JSON.parse(call[0] as string),
@@ -7570,32 +7816,37 @@ describe("BridgeRpcAdapter", () => {
         ),
       ).toBeUndefined();
 
-      const statsEvent = sendCalls.find(
-        call =>
-          call.type === "event" &&
-          call.payload.type === "session_stats" &&
-          call.payload.sessionPath === responseCall?.payload.data.sessionPath,
-      );
-      expect(statsEvent?.payload).toMatchObject({
-        type: "session_stats",
-        sessionPath: responseCall?.payload.data.sessionPath,
-        stats: {
-          tokens: null,
-          contextWindow: 0,
-          percent: null,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          cost: 0,
-        },
+      await vi.waitFor(() => {
+        const statsEvent = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "event" &&
+              call.payload.type === "session_stats" &&
+              call.payload.sessionPath ===
+                responseCall?.payload.data.sessionPath,
+          );
+        expect(statsEvent?.payload).toMatchObject({
+          type: "session_stats",
+          sessionPath: responseCall?.payload.data.sessionPath,
+          stats: {
+            tokens: null,
+            contextWindow: 0,
+            percent: null,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cost: 0,
+          },
+        });
       });
 
       // Clean up temp dir
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("projects Pi settings without creating a runtime or empty session jsonl", async () => {
+    it("projects Pi settings from the runtime-backed empty session", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-defaults-"));
       const sm = SessionManager.create(tmpDir, tmpDir);
       const existingFile = sm.getSessionFile()!;
@@ -7621,6 +7872,26 @@ describe("BridgeRpcAdapter", () => {
         context.state
           .getConfiguredDefaultThinkingLevel as ReturnType<typeof vi.fn>
       ).mockReturnValue("medium");
+      createAgentSessionMock.mockImplementationOnce(
+        async (_cwd: string, sessionManager: SessionManager) => ({
+          session: {
+            sessionFile: sessionManager.getSessionFile(),
+            sessionId: sessionManager.getSessionId(),
+            sessionManager,
+            model: xiaomiModel,
+            thinkingLevel: "medium",
+            isStreaming: false,
+            isCompacting: false,
+            steeringMode: "all",
+            followUpMode: "all",
+            autoCompactionEnabled: false,
+            pendingMessageCount: 0,
+            bindExtensions: vi.fn().mockResolvedValue(undefined),
+            subscribe: vi.fn().mockReturnValue(() => {}),
+            dispose: vi.fn(),
+          },
+        }),
+      );
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }
       ).trigger(
@@ -7653,7 +7924,7 @@ describe("BridgeRpcAdapter", () => {
       expect(newSessionResponse?.payload.data.thinkingLevel).toBe("medium");
       expect(typeof sessionPath).toBe("string");
       expect(fs.existsSync(sessionPath)).toBe(false);
-      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }
@@ -7813,6 +8084,17 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(existingFile);
+      createAgentSessionMock.mockResolvedValueOnce({
+        session: {
+          sessionFile: existingFile,
+          sessionId: sm.getSessionId(),
+          isStreaming: false,
+          bindExtensions: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn().mockReturnValue(() => {}),
+          dispose: vi.fn(),
+          sessionManager: sm,
+        },
+      });
 
       const command: RpcCommand = {
         id: "cmd-1",
@@ -7827,8 +8109,6 @@ describe("BridgeRpcAdapter", () => {
       );
 
       await new Promise(r => setTimeout(r, 10));
-
-      // ctx.fork should NOT be called (bridge creates fork locally)
 
       const sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
       const lastCall = JSON.parse(sendCalls[sendCalls.length - 1][0] as string);

@@ -3,13 +3,17 @@ import {
   SessionManager,
   type AgentSession,
   type AgentSessionEvent,
+  type AgentSessionRuntime,
   type ExtensionUIContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   askUserQuestionTool as defaultAskUserQuestionTool,
 } from "./ask-user-question.js";
-import { createDetachedAgentSession } from "./detached-session.js";
+import {
+  createDetachedAgentSessionRuntime,
+  type CreateDetachedAgentSessionOptions,
+} from "./detached-session.js";
 import { createHeadlessUIContext } from "./headless-ui-context.js";
 
 interface ViewerBinding {
@@ -23,7 +27,10 @@ export interface DetachedSessionRegistryEvent {
 }
 
 export class DetachedSessionHandle {
-  private session: AgentSession | null = null;
+  private runtime: AgentSessionRuntime | null = null;
+  private initializingSession: Promise<AgentSession> | null = null;
+  private disposePromise: Promise<void> | null = null;
+  private disposed = false;
   private unsubscribeSession: (() => void) | null = null;
   private disposeDanoLlmResilience: (() => void) | null = null;
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
@@ -34,21 +41,26 @@ export class DetachedSessionHandle {
     private sessionManager: SessionManager,
     private readonly fallbackCwd: string,
     private readonly askUserQuestionTool: ToolDefinition,
+    private readonly runtimeOptions: CreateDetachedAgentSessionOptions,
     private readonly onSessionEvent: (
       event: DetachedSessionRegistryEvent,
     ) => void,
   ) {}
 
   getSessionManager(): SessionManager {
-    return this.sessionManager;
+    return this.runtime?.session.sessionManager ?? this.sessionManager;
   }
 
   getSession(): AgentSession | null {
-    return this.session;
+    return this.runtime?.session ?? null;
+  }
+
+  getRuntime(): AgentSessionRuntime | null {
+    return this.runtime;
   }
 
   isActive(): boolean {
-    return this.session !== null;
+    return this.runtime !== null;
   }
 
   subscribe(listener: (event: AgentSessionEvent) => void): () => void {
@@ -61,8 +73,8 @@ export class DetachedSessionHandle {
   async bindViewer(binding: ViewerBinding): Promise<void> {
     this.viewerBindings.delete(binding.clientId);
     this.viewerBindings.set(binding.clientId, binding);
-    if (!this.session) return;
-    await this.bindSessionExtensions(this.session, binding.uiContext);
+    if (!this.runtime) return;
+    await this.bindSessionExtensions(this.runtime.session, binding.uiContext);
   }
 
   async releaseViewer(clientId: string): Promise<void> {
@@ -70,9 +82,9 @@ export class DetachedSessionHandle {
       return;
     }
 
-    if (!this.session) return;
+    if (!this.runtime) return;
     await this.bindSessionExtensions(
-      this.session,
+      this.runtime.session,
       this.latestViewer()?.uiContext ?? createHeadlessUIContext(),
     );
   }
@@ -82,18 +94,18 @@ export class DetachedSessionHandle {
       return;
     }
 
-    if (!this.session) return;
+    if (!this.runtime) return;
     const remainingViewer = this.latestViewer();
     if (remainingViewer) {
       await this.bindSessionExtensions(
-        this.session,
+        this.runtime.session,
         remainingViewer.uiContext,
       );
       return;
     }
 
     try {
-      await this.session.abort();
+      await this.runtime.session.abort();
     } catch (error) {
       console.error(
         `DetachedSessionHandle[${path.basename(this.sessionPath)}]: Failed to abort orphaned session:`,
@@ -101,55 +113,89 @@ export class DetachedSessionHandle {
       );
     }
 
-    await this.bindSessionExtensions(this.session, createHeadlessUIContext());
+    await this.bindSessionExtensions(
+      this.runtime.session,
+      this.latestViewer()?.uiContext ?? createHeadlessUIContext(),
+    );
   }
 
   async ensureSession(): Promise<AgentSession> {
-    if (this.session) {
-      return this.session;
+    if (this.disposed) {
+      throw new Error("Session handle is disposed");
+    }
+    if (this.runtime) {
+      return this.runtime.session;
+    }
+    if (this.initializingSession) {
+      return this.initializingSession;
     }
 
-    const created = await createDetachedAgentSession(
-      this.sessionManager.getCwd() || this.fallbackCwd,
-      this.sessionManager,
-      { askUserQuestionTool: this.askUserQuestionTool },
-    );
-
-    const session = created.session;
-    this.disposeDanoLlmResilience = created.disposeDanoLlmResilience;
-    const nextSessionPath = session.sessionFile ?? this.sessionPath;
-    this.sessionManager = session.sessionManager;
-
-    await this.bindSessionExtensions(
-      session,
-      this.latestViewer()?.uiContext ?? createHeadlessUIContext(),
-    );
-
-    this.unsubscribeSession = session.subscribe(event => {
-      this.onSessionEvent({
-        sessionPath: this.sessionPath,
-        event,
-      });
-      for (const listener of this.listeners) {
-        listener(event);
-      }
-    });
-    this.session = session;
-
-    if (nextSessionPath !== this.sessionPath) {
-      this.sessionPath = nextSessionPath;
+    this.initializingSession = this.createSessionRuntime();
+    try {
+      return await this.initializingSession;
+    } finally {
+      this.initializingSession = null;
     }
-
-    return session;
   }
 
-  dispose(): void {
+  private async createSessionRuntime(): Promise<AgentSession> {
+    const created = await createDetachedAgentSessionRuntime(
+      this.sessionManager.getCwd() || this.fallbackCwd,
+      this.sessionManager,
+      {
+        ...this.runtimeOptions,
+        askUserQuestionTool: this.askUserQuestionTool,
+      },
+    );
+    await this.adoptRuntime(
+      created.runtime,
+      created.disposeDanoLlmResilience,
+    );
+    return created.runtime.session;
+  }
+
+  async adoptRuntime(
+    runtime: AgentSessionRuntime,
+    disposeDanoLlmResilience: () => void = () => {},
+  ): Promise<void> {
+    if (this.disposed) {
+      disposeDanoLlmResilience();
+      await runtime.dispose();
+      throw new Error("Session handle is disposed");
+    }
+    if (this.runtime && this.runtime !== runtime) {
+      throw new Error("Session handle already owns a Pi runtime");
+    }
+    runtime.setRebindSession(session => this.bindRuntimeSession(session));
+    try {
+      await this.bindRuntimeSession(runtime.session);
+    } catch (error) {
+      runtime.setRebindSession(undefined);
+      disposeDanoLlmResilience();
+      await runtime.dispose();
+      throw error;
+    }
+    this.runtime = runtime;
+    this.disposeDanoLlmResilience = disposeDanoLlmResilience;
+  }
+
+  dispose(): Promise<void> {
+    if (this.disposePromise) {
+      return this.disposePromise;
+    }
+    this.disposed = true;
+    this.disposePromise = this.disposeOwnedRuntime();
+    return this.disposePromise;
+  }
+
+  private async disposeOwnedRuntime(): Promise<void> {
+    await this.initializingSession?.catch(() => {});
     this.unsubscribeSession?.();
     this.unsubscribeSession = null;
     this.disposeDanoLlmResilience?.();
     this.disposeDanoLlmResilience = null;
-    this.session?.dispose();
-    this.session = null;
+    await this.runtime?.dispose();
+    this.runtime = null;
     this.listeners.clear();
     this.viewerBindings.clear();
   }
@@ -173,6 +219,26 @@ export class DetachedSessionHandle {
       shutdownHandler: () => {},
     });
   }
+
+  private async bindRuntimeSession(session: AgentSession): Promise<void> {
+    await this.bindSessionExtensions(
+      session,
+      this.latestViewer()?.uiContext ?? createHeadlessUIContext(),
+    );
+    const unsubscribeSession = session.subscribe(event => {
+      this.onSessionEvent({
+        sessionPath: this.sessionPath,
+        event,
+      });
+      for (const listener of this.listeners) {
+        listener(event);
+      }
+    });
+    this.unsubscribeSession?.();
+    this.unsubscribeSession = unsubscribeSession;
+    this.sessionManager = session.sessionManager;
+    this.sessionPath = session.sessionFile ?? this.sessionPath;
+  }
 }
 
 export class DetachedSessionRegistry {
@@ -180,11 +246,13 @@ export class DetachedSessionRegistry {
   private readonly listeners = new Set<
     (event: DetachedSessionRegistryEvent) => void
   >();
+  private initialSessionPath: string | null = null;
 
   constructor(
     private readonly fallbackCwd: string,
     private readonly askUserQuestionTool: ToolDefinition =
       defaultAskUserQuestionTool,
+    private readonly newSessionRuntimeOptions: CreateDetachedAgentSessionOptions = {},
   ) {}
 
   createSession(options?: {
@@ -203,6 +271,9 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
+      path.resolve(cwd) === path.resolve(this.fallbackCwd)
+        ? this.newSessionRuntimeOptions
+        : {},
       event => {
         this.emit(event);
       },
@@ -213,6 +284,54 @@ export class DetachedSessionRegistry {
 
   hasSession(sessionPath: string): boolean {
     return this.handles.has(sessionPath);
+  }
+
+  getInitialSessionPath(): string | null {
+    return this.initialSessionPath;
+  }
+
+  getReplacementSessionPath(excludedPath: string): string | null {
+    if (
+      this.initialSessionPath &&
+      this.initialSessionPath !== excludedPath &&
+      this.handles.has(this.initialSessionPath)
+    ) {
+      return this.initialSessionPath;
+    }
+    return (
+      [...this.handles.keys()].find(sessionPath => sessionPath !== excludedPath) ??
+      null
+    );
+  }
+
+  async adoptRuntime(
+    runtime: AgentSessionRuntime,
+    disposeDanoLlmResilience: () => void = () => {},
+  ): Promise<DetachedSessionHandle> {
+    const sessionPath = runtime.session.sessionFile;
+    if (!sessionPath) {
+      throw new Error("Selected session file not found");
+    }
+    const existing = this.handles.get(sessionPath);
+    if (existing) {
+      await existing.adoptRuntime(runtime, disposeDanoLlmResilience);
+      this.initialSessionPath ??= sessionPath;
+      return existing;
+    }
+    const handle = new DetachedSessionHandle(
+      sessionPath,
+      runtime.session.sessionManager,
+      this.fallbackCwd,
+      this.askUserQuestionTool,
+      {},
+      event => {
+        this.emit(event);
+      },
+    );
+    await handle.adoptRuntime(runtime, disposeDanoLlmResilience);
+    this.handles.set(sessionPath, handle);
+    this.initialSessionPath ??= sessionPath;
+    return handle;
   }
 
   openSession(sessionPath: string): DetachedSessionHandle {
@@ -227,6 +346,7 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
+      {},
       event => {
         this.emit(event);
       },
@@ -289,19 +409,85 @@ export class DetachedSessionRegistry {
     return this.openSession(sessionPath).ensureSession();
   }
 
-  removeSession(sessionPath: string): void {
+  async forkSession(
+    sessionPath: string,
+    entryId: string,
+  ): Promise<{ sessionPath: string; selectedText?: string; cancelled: boolean }> {
+    const sourceManager = SessionManager.open(sessionPath);
+    const created = await createDetachedAgentSessionRuntime(
+      sourceManager.getCwd() || this.fallbackCwd,
+      sourceManager,
+      { askUserQuestionTool: this.askUserQuestionTool },
+    );
+    const handle = new DetachedSessionHandle(
+      sessionPath,
+      sourceManager,
+      this.fallbackCwd,
+      this.askUserQuestionTool,
+      {},
+      event => {
+        this.emit(event);
+      },
+    );
+    await handle.adoptRuntime(
+      created.runtime,
+      created.disposeDanoLlmResilience,
+    );
+    const runtime = handle.getRuntime();
+    if (!runtime) {
+      throw new Error("Selected session runtime not found");
+    }
+
+    let result: Awaited<ReturnType<AgentSessionRuntime["fork"]>>;
+    try {
+      result = await runtime.fork(entryId, { position: "at" });
+    } catch (error) {
+      await handle.dispose();
+      throw error;
+    }
+    if (result.cancelled) {
+      await handle.dispose();
+      return {
+        ...result,
+        sessionPath,
+      };
+    }
+
+    const nextPath = runtime.session.sessionFile ?? handle.sessionPath;
+    if (nextPath === sessionPath) {
+      await handle.dispose();
+      throw new Error("Fork did not create a new session");
+    }
+    const existing = this.handles.get(nextPath);
+    if (existing) {
+      await handle.dispose();
+      throw new Error("Forked session is already active");
+    }
+    this.handles.set(nextPath, handle);
+    return {
+      ...result,
+      sessionPath: nextPath,
+    };
+  }
+
+  async removeSession(sessionPath: string): Promise<void> {
     const handle = this.handles.get(sessionPath);
     if (handle) {
-      handle.dispose();
       this.handles.delete(sessionPath);
+      if (this.initialSessionPath === sessionPath) {
+        this.initialSessionPath = this.handles.keys().next().value ?? null;
+      }
+      await handle.dispose();
     }
   }
 
-  dispose(): void {
-    for (const handle of this.handles.values()) {
-      handle.dispose();
-    }
+  async dispose(): Promise<void> {
+    const handles = [...this.handles.values()];
     this.handles.clear();
+    this.initialSessionPath = null;
+    for (const handle of handles) {
+      await handle.dispose();
+    }
     this.listeners.clear();
   }
 

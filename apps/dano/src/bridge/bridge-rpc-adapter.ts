@@ -217,6 +217,7 @@ export interface BridgeRpcAdapterContext {
   actions: BridgeSessionActions;
   askUserQuestion: AskUserQuestionRuntime;
   fieldAssist?: FieldAssistService;
+  createFieldAssist?: (session: AgentSession) => FieldAssistService;
 }
 
 /**
@@ -3546,7 +3547,7 @@ function collapseWhitespace(value: string): string {
  * Session runtime
  * ========================================================================== */
 
-class SessionRuntime {
+class BrowserSessionView {
   private selectedSessionPath: string | null = null;
   private unsubscribeSelectedSession: (() => void) | undefined;
 
@@ -3556,7 +3557,27 @@ class SessionRuntime {
     private readonly registry: DetachedSessionRegistry,
     private readonly createExtensionUIContext: () => ExtensionUIContext,
     private readonly onDetachedSessionEvent: (event: AgentSessionEvent) => void,
-  ) {}
+  ) {
+    const initialSessionPath = this.registry.getInitialSessionPath();
+    if (!initialSessionPath) return;
+    this.selectedSessionPath = initialSessionPath;
+    this.unsubscribeSelectedSession = this.registry
+      .openSession(initialSessionPath)
+      .subscribe(event => {
+        this.onDetachedSessionEvent(event);
+      });
+    void this.registry
+      .bindViewer(initialSessionPath, {
+        clientId: this.clientId,
+        uiContext: this.createExtensionUIContext(),
+      })
+      .catch(error => {
+        console.error(
+          `BridgeRpcAdapter[${this.clientId}]: Failed to bind initial session viewer:`,
+          error,
+        );
+      });
+  }
 
   hasDetachedSelection(): boolean {
     return this.selectedSessionPath !== null;
@@ -3800,10 +3821,11 @@ class SessionRuntime {
 
     const handle = this.registry.createSession({ cwd: targetCwd, sessionDir });
     await this.selectSessionPath(handle.sessionPath);
+    const session = await handle.ensureSession();
 
     return this.buildSessionSummary(
-      handle.getSessionManager(),
-      handle.sessionPath,
+      session.sessionManager,
+      session.sessionFile ?? handle.sessionPath,
       options.transcriptLimit,
     );
   }
@@ -3812,6 +3834,8 @@ class SessionRuntime {
     sessionPath: string,
     transcriptLimit?: number,
   ): Promise<SessionSummary> {
+    // A browser switch selects another registry handle; it must not rebind the
+    // source runtime because that session may still be running for other viewers.
     const isActiveDetachedSession = this.registry.isSessionActive(sessionPath);
     const handle = this.registry.openSession(sessionPath);
     const liveSessionPath = this.context.state.sessionManager.getSessionFile();
@@ -3851,13 +3875,6 @@ class SessionRuntime {
 
     await this.selectSessionPath(liveSessionPath);
     return this.ensureDetachedSession(options);
-  }
-
-  clearSelection(): void {
-    const selectedSessionPath = this.detachSelectedSession();
-    if (selectedSessionPath) {
-      void this.registry.releaseViewer(selectedSessionPath, this.clientId);
-    }
   }
 
   dispose(): void {
@@ -5196,7 +5213,7 @@ export class BridgeRpcAdapter {
   private emitEvent: (event: BridgeEvent) => void;
   private uploadRegistry: UploadRegistry;
 
-  private readonly sessionRuntime: SessionRuntime;
+  private readonly sessionRuntime: BrowserSessionView;
   private readonly transcriptProjector: TranscriptProjector;
   private readonly uiBridge: ExtensionUIBridge;
   private readonly sessionStatsPusher: SessionStatsPusher;
@@ -5254,7 +5271,7 @@ export class BridgeRpcAdapter {
     this.uiBridge = new ExtensionUIBridge(client.id, config, message => {
       this.sendResponse(message);
     });
-    this.sessionRuntime = new SessionRuntime(
+    this.sessionRuntime = new BrowserSessionView(
       context,
       client.id,
       this.detachedSessionRegistry,
@@ -5291,6 +5308,10 @@ export class BridgeRpcAdapter {
    */
   subscribeToEvents(): void {
     void this.eventBus;
+
+    if (this.detachedSessionRegistry.getInitialSessionPath()) {
+      return;
+    }
 
     this.context.events.subscribe(event => {
       switch (event.type) {
@@ -6421,10 +6442,18 @@ export class BridgeRpcAdapter {
       }
 
       case "field_assist": {
-        if (!this.context.fieldAssist) {
+        let fieldAssist = this.context.fieldAssist;
+        if (
+          this.context.createFieldAssist &&
+          this.sessionRuntime.hasDetachedSelection()
+        ) {
+          const session = await this.sessionRuntime.ensureDetachedSession();
+          fieldAssist = this.context.createFieldAssist(session);
+        }
+        if (!fieldAssist) {
           throw new Error("FIELD_ASSIST_DISABLED");
         }
-        const result = await this.context.fieldAssist.assist(command, {
+        const result = await fieldAssist.assist(command, {
           clientId: this.client.id,
         });
         return {
@@ -7106,7 +7135,12 @@ export class BridgeRpcAdapter {
             error: "Session name cannot be empty",
           };
         }
-        this.context.actions.setSessionName(name);
+        if (this.sessionRuntime.hasDetachedSelection()) {
+          const session = await this.sessionRuntime.ensureDetachedSession();
+          session.setSessionName(name);
+        } else {
+          this.context.actions.setSessionName(name);
+        }
         return {
           id: correlationId,
           type: "response",
@@ -7137,19 +7171,24 @@ export class BridgeRpcAdapter {
           };
         }
 
-        if (this.sessionRuntime.currentDetachedSessionPath() === sessionPath) {
-          this.sessionRuntime.clearSelection();
-          this.sendTranscriptSnapshot({
-            sessionPath: undefined,
-            messages: [],
-            hasOlder: false,
-            hasNewer: false,
-          });
-          this.sessionStatsPusher.queue(null);
-        }
+        const deletingSelectedSession =
+          this.sessionRuntime.currentDetachedSessionPath() === sessionPath;
+        const replacementPath = deletingSelectedSession
+          ? this.detachedSessionRegistry.getReplacementSessionPath(sessionPath)
+          : null;
+        const replacement = deletingSelectedSession
+          ? replacementPath
+            ? await this.sessionRuntime.switchToStoredSession(replacementPath)
+            : await this.sessionRuntime.createDetachedSession()
+          : undefined;
 
-        this.detachedSessionRegistry.removeSession(sessionPath);
+        await this.detachedSessionRegistry.removeSession(sessionPath);
         fs.unlinkSync(sessionPath);
+
+        if (replacement) {
+          this.transcriptProjector.syncPage(replacement.transcript);
+          this.sendTranscriptSnapshot(replacement.transcript);
+        }
 
         return {
           id: correlationId,
@@ -7173,33 +7212,32 @@ export class BridgeRpcAdapter {
           };
         }
 
-        const sourceSm = openSessionManager(currentSessionFile);
-        const newSessionPath = sourceSm.createBranchedSession(command.entryId);
-        if (!newSessionPath) {
+        if (!this.sessionRuntime.hasDetachedSelection()) {
+          await this.sessionRuntime.ensureDetachedSessionFromLive();
+        } else {
+          await this.sessionRuntime.ensureDetachedSession();
+        }
+        const forked = await this.detachedSessionRegistry.forkSession(
+          currentSessionFile,
+          command.entryId,
+        );
+        if (forked.cancelled) {
           return {
             id: correlationId,
             type: "response",
             command: "fork",
-            success: false,
-            error: "Failed to create forked session",
+            success: true,
+            data: { text: forked.selectedText ?? "", cancelled: true },
           };
         }
-
-        const selected =
-          await this.sessionRuntime.switchToStoredSession(newSessionPath);
-        const forkedSm = selected.sessionManager;
-        const entry = forkedSm.getEntry(command.entryId);
-        const text =
-          entry && "message" in entry
-            ? ((entry.message as { content?: string }).content ?? "")
-            : "";
+        await this.sessionRuntime.switchToStoredSession(forked.sessionPath);
 
         return {
           id: correlationId,
           type: "response",
           command: "fork",
           success: true,
-          data: { text, cancelled: false },
+          data: { text: forked.selectedText ?? "", cancelled: false },
         };
       }
 
@@ -7278,8 +7316,11 @@ export class BridgeRpcAdapter {
        * ------------------------------------------------------------------ */
 
       case "get_commands": {
+        const session = this.sessionRuntime.hasDetachedSelection()
+          ? await this.sessionRuntime.ensureDetachedSession()
+          : undefined;
         const commands = this.slashCommandsAndMentionsEnabled
-          ? this.context.actions.getCommands()
+          ? this.context.actions.getCommands(session)
           : [];
         const rpcCommands: RpcSlashCommand[] = commands.map(command => ({
           ...command,
