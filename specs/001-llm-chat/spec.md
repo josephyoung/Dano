@@ -85,7 +85,7 @@ As a browser user, I receive clear feedback when a message cannot be answered, a
 - **FR-011**: System MUST make unsupported business-action requests visibly non-executing, either by answering conversationally or by stating that business execution is outside P0 scope.
 - **FR-012**: System MUST support at least five verification cases before P0 is considered ready: normal first message, multi-turn follow-up, empty input, failed LLM response, and business-action request with no execution.
 - **FR-013**: System MUST load LLM access credentials only from server-side environment configuration, including local `.env` and Docker-provided environment or secret values; it MUST NOT accept, persist, or display LLM API keys through the browser UI.
-- **FR-014**: System MUST render assistant tool-call and tool-result blocks when the server-side LLM runtime emits them, using the same inline collapsed/expandable presentation model as `references/pi-web-main`.
+- **FR-014**: System MUST render assistant tool-call and tool-result blocks when the server-side LLM runtime emits them, using the same inline collapsed/expandable presentation model as the original [woxQAQ/pi-web](https://github.com/woxQAQ/pi-web) project.
 
 ### Key Entities
 
