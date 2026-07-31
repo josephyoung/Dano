@@ -90,6 +90,7 @@ function createRunningSession(registry: DetachedSessionRegistry, root: string) {
   });
   return {
     handle,
+    session,
     abort,
     abortRetry,
     calls,
@@ -217,6 +218,93 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
 
     expect(abortRetry).not.toHaveBeenCalled();
     expect(abort).not.toHaveBeenCalled();
+  });
+
+  it("shares one in-flight runtime initialization across viewers", async () => {
+    const { registry, root } = createRegistry();
+    const running = createRunningSession(registry, root);
+
+    const [first, second] = await Promise.all([
+      registry.ensureSession(running.handle.sessionPath),
+      registry.ensureSession(running.handle.sessionPath),
+    ]);
+
+    expect(first).toBe(second);
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a viewer that reconnects while orphan abort is pending", async () => {
+    const { registry, root } = createRegistry();
+    const running = createRunningSession(registry, root);
+    const firstUi = { id: "first" } as never;
+    const reconnectedUi = { id: "reconnected" } as never;
+    let finishAbort: (() => void) | undefined;
+    running.abort.mockImplementationOnce(
+      () => new Promise<void>(resolve => {
+        finishAbort = resolve;
+      }),
+    );
+
+    await registry.bindViewer(running.handle.sessionPath, {
+      clientId: "client-a",
+      uiContext: firstUi,
+    });
+    await registry.ensureSession(running.handle.sessionPath);
+    const destroy = registry.destroyViewer(
+      running.handle.sessionPath,
+      "client-a",
+    );
+    await vi.waitFor(() => expect(running.abort).toHaveBeenCalledTimes(1));
+
+    await registry.bindViewer(running.handle.sessionPath, {
+      clientId: "client-b",
+      uiContext: reconnectedUi,
+    });
+    finishAbort?.();
+    await destroy;
+
+    expect(running.session.bindExtensions).toHaveBeenLastCalledWith(
+      expect.objectContaining({ uiContext: reconnectedUi }),
+    );
+  });
+
+  it("rebuilds cwd-bound services for a new workspace", async () => {
+    const { registry: _unused, root } = createRegistry();
+    const otherRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-session-registry-other-"),
+    );
+    roots.push(otherRoot);
+    const modelRuntime = {} as never;
+    const settingsManager = {} as never;
+    const registry = new DetachedSessionRegistry(root, undefined, {
+      modelRuntime,
+      settingsManager,
+    });
+    const handle = registry.createSession({
+      cwd: otherRoot,
+      sessionDir: otherRoot,
+    });
+    const session = {
+      sessionFile: handle.sessionPath,
+      sessionId: "other-workspace",
+      isStreaming: false,
+      bindExtensions: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn().mockReturnValue(() => {}),
+      dispose: vi.fn(),
+      sessionManager: handle.getSessionManager(),
+    };
+    createAgentSessionMock.mockResolvedValueOnce({
+      session,
+      disposeDanoLlmResilience: vi.fn(),
+    });
+
+    await registry.ensureSession(handle.sessionPath);
+
+    expect(createAgentSessionMock).toHaveBeenCalledWith(
+      otherRoot,
+      handle.getSessionManager(),
+      expect.not.objectContaining({ modelRuntime, settingsManager }),
+    );
   });
 
   it("clears Dano Assistant Turn resources before disposing the Pi session", async () => {

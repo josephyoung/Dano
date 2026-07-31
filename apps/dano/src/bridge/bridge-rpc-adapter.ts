@@ -3877,13 +3877,6 @@ class BrowserSessionView {
     return this.ensureDetachedSession(options);
   }
 
-  clearSelection(): void {
-    const selectedSessionPath = this.detachSelectedSession();
-    if (selectedSessionPath) {
-      void this.registry.releaseViewer(selectedSessionPath, this.clientId);
-    }
-  }
-
   dispose(): void {
     const selectedSessionPath = this.detachSelectedSession();
     if (selectedSessionPath) {
@@ -7178,19 +7171,19 @@ export class BridgeRpcAdapter {
           };
         }
 
-        if (this.sessionRuntime.currentDetachedSessionPath() === sessionPath) {
-          this.sessionRuntime.clearSelection();
-          this.sendTranscriptSnapshot({
-            sessionPath: undefined,
-            messages: [],
-            hasOlder: false,
-            hasNewer: false,
-          });
-          this.sessionStatsPusher.queue(null);
-        }
+        const deletingSelectedSession =
+          this.sessionRuntime.currentDetachedSessionPath() === sessionPath;
+        const replacement = deletingSelectedSession
+          ? await this.sessionRuntime.createDetachedSession()
+          : undefined;
 
         await this.detachedSessionRegistry.removeSession(sessionPath);
         fs.unlinkSync(sessionPath);
+
+        if (replacement) {
+          this.transcriptProjector.syncPage(replacement.transcript);
+          this.sendTranscriptSnapshot(replacement.transcript);
+        }
 
         return {
           id: correlationId,

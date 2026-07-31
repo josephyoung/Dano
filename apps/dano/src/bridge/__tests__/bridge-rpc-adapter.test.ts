@@ -7569,6 +7569,91 @@ describe("BridgeRpcAdapter", () => {
       expect(lastCall.payload.success).toBe(true);
     });
 
+    it("selects a fresh runtime before deleting the current session", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-delete-current-"));
+      const sourcePath = path.join(tmpDir, "source.jsonl");
+      fs.writeFileSync(
+        sourcePath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "delete-source",
+          timestamp: new Date().toISOString(),
+          cwd: tmpDir,
+        })}\n`,
+      );
+      (
+        context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
+      ).mockReturnValue(sourcePath);
+      (
+        context.state.sessionManager.getCwd as ReturnType<typeof vi.fn>
+      ).mockReturnValue(tmpDir);
+
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: {
+              id: "switch-before-delete",
+              type: "switch_session",
+              sessionPath: sourcePath,
+            },
+          }),
+        ),
+      );
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: {
+              id: "delete-current",
+              type: "delete_session",
+              sessionPath: sourcePath,
+            },
+          }),
+        ),
+      );
+      await vi.waitFor(() => {
+        const response = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "response" &&
+              call.payload.id === "delete-current",
+          );
+        expect(response?.payload).toMatchObject({ success: true });
+      });
+
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: { id: "state-after-delete", type: "get_state" },
+          }),
+        ),
+      );
+      await vi.waitFor(() => {
+        const response = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "response" &&
+              call.payload.id === "state-after-delete",
+          );
+        expect(response?.payload.success).toBe(true);
+        expect(response?.payload.data.sessionFile).not.toBe(sourcePath);
+      });
+
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     it("should reject empty session name", async () => {
       const command: RpcCommand = {
         id: "cmd-1",

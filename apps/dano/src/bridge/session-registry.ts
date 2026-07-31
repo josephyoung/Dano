@@ -28,6 +28,8 @@ export interface DetachedSessionRegistryEvent {
 
 export class DetachedSessionHandle {
   private runtime: AgentSessionRuntime | null = null;
+  private initializingSession: Promise<AgentSession> | null = null;
+  private disposed = false;
   private unsubscribeSession: (() => void) | null = null;
   private disposeDanoLlmResilience: (() => void) | null = null;
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
@@ -112,15 +114,30 @@ export class DetachedSessionHandle {
 
     await this.bindSessionExtensions(
       this.runtime.session,
-      createHeadlessUIContext(),
+      this.latestViewer()?.uiContext ?? createHeadlessUIContext(),
     );
   }
 
   async ensureSession(): Promise<AgentSession> {
+    if (this.disposed) {
+      throw new Error("Session handle is disposed");
+    }
     if (this.runtime) {
       return this.runtime.session;
     }
+    if (this.initializingSession) {
+      return this.initializingSession;
+    }
 
+    this.initializingSession = this.createSessionRuntime();
+    try {
+      return await this.initializingSession;
+    } finally {
+      this.initializingSession = null;
+    }
+  }
+
+  private async createSessionRuntime(): Promise<AgentSession> {
     const created = await createDetachedAgentSessionRuntime(
       this.sessionManager.getCwd() || this.fallbackCwd,
       this.sessionManager,
@@ -129,7 +146,6 @@ export class DetachedSessionHandle {
         askUserQuestionTool: this.askUserQuestionTool,
       },
     );
-
     await this.adoptRuntime(
       created.runtime,
       created.disposeDanoLlmResilience,
@@ -141,6 +157,11 @@ export class DetachedSessionHandle {
     runtime: AgentSessionRuntime,
     disposeDanoLlmResilience: () => void = () => {},
   ): Promise<void> {
+    if (this.disposed) {
+      disposeDanoLlmResilience();
+      await runtime.dispose();
+      throw new Error("Session handle is disposed");
+    }
     if (this.runtime && this.runtime !== runtime) {
       throw new Error("Session handle already owns a Pi runtime");
     }
@@ -158,6 +179,8 @@ export class DetachedSessionHandle {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.initializingSession?.catch(() => {});
     this.unsubscribeSession?.();
     this.unsubscribeSession = null;
     this.disposeDanoLlmResilience?.();
@@ -239,7 +262,9 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
-      this.newSessionRuntimeOptions,
+      path.resolve(cwd) === path.resolve(this.fallbackCwd)
+        ? this.newSessionRuntimeOptions
+        : {},
       event => {
         this.emit(event);
       },
