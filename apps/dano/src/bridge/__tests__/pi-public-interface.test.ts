@@ -102,6 +102,9 @@ describe("Pi 0.82.1 public interface baseline", () => {
         source: readFileSync(new URL(name, bridgeDirectory), "utf8"),
       }));
     const allBridgeSources = bridgeSources.map(({ source }) => source).join("\n");
+    const adapterSource = bridgeSources.find(
+      ({ name }) => name === "bridge-rpc-adapter.ts",
+    )?.source;
     const danoConfigSource = readFileSync(
       new URL("../dano-config.ts", import.meta.url),
       "utf8",
@@ -135,14 +138,30 @@ describe("Pi 0.82.1 public interface baseline", () => {
     );
     expect(storedSessionStateSource).not.toMatch(/pendingMessageCount|queue_update/);
 
-    // Queue item editing/cancellation and in-process RPC projection are the
-    // explicit #386 deferred exception; no other bridge module may mirror it.
+    // Queue editing/cancellation is the only #386 exception allowed to touch
+    // Pi's private queue storage. Keep that exception inside its helper block.
+    expect(adapterSource).toBeDefined();
+    const queueCompatibilityStart = adapterSource!.indexOf(
+      "function queuedAgentMessages(",
+    );
+    const queueCompatibilityEnd = adapterSource!.indexOf(
+      "function describeMessage(",
+    );
+    expect(queueCompatibilityStart).toBeGreaterThanOrEqual(0);
+    expect(queueCompatibilityEnd).toBeGreaterThan(queueCompatibilityStart);
+    const adapterWithoutQueueCompatibility =
+      adapterSource!.slice(0, queueCompatibilityStart) +
+      adapterSource!.slice(queueCompatibilityEnd);
+    const privateFieldAccess =
+      /\.\s*_[A-Za-z]\w*|\[\s*["']_[A-Za-z]\w*["']\s*\]/;
     for (const { name, source } of bridgeSources) {
-      if (name === "bridge-rpc-adapter.ts") continue;
-      expect(source).not.toMatch(
-        /_steeringMessages|_followUpMessages|steeringQueue|followUpQueue|queue_update/,
-      );
+      expect(
+        name === "bridge-rpc-adapter.ts"
+          ? adapterWithoutQueueCompatibility
+          : source,
+      ).not.toMatch(privateFieldAccess);
     }
+    expect(backendSource).not.toMatch(privateFieldAccess);
     expect(backendSource).toContain("session.pendingMessageCount");
     expect(backendSource).not.toContain('event.type === "queue_update"');
   });
@@ -172,7 +191,6 @@ describe("Pi 0.82.1 public interface baseline", () => {
       new URL("../bridge-rpc-adapter.ts", import.meta.url),
       "utf8",
     );
-
     expect(registrySource).toMatch(/\bAgentSessionRuntime\b/);
     expect(detachedSessionSource).toContain("createAgentSessionRuntime");
     expect(detachedSessionSource).not.toMatch(
@@ -181,5 +199,153 @@ describe("Pi 0.82.1 public interface baseline", () => {
     expect(adapterSource).not.toMatch(
       /class SessionRuntime\b|\.createBranchedSession\(/,
     );
+  });
+
+  it("derives shared browser runtime protocol semantics from Pi package roots", () => {
+    const protocolSource = readFileSync(
+      new URL("../../../types/protocol.ts", import.meta.url),
+      "utf8",
+    );
+    const liveSessionSource = readFileSync(
+      new URL("../live-session.ts", import.meta.url),
+      "utf8",
+    );
+    const adapterSource = readFileSync(
+      new URL("../bridge-rpc-adapter.ts", import.meta.url),
+      "utf8",
+    );
+    const projectorSource = readFileSync(
+      new URL("../pi-protocol-projector.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(protocolSource).toContain('from "@earendil-works/pi-ai"');
+    expect(protocolSource).toContain(
+      'from "@earendil-works/pi-coding-agent"',
+    );
+    expect(protocolSource).toMatch(/type PiRpcCommandPayload</);
+    expect(protocolSource).toMatch(/type PiRpcResponseData</);
+    expect(protocolSource).not.toMatch(/export interface RpcModel\b/);
+    expect(protocolSource).toMatch(
+      /export type RpcModel = Pick<PiModel<Api>, "id" \| "provider">/,
+    );
+    expect(protocolSource).not.toMatch(
+      /export type RpcThinkingLevel\s*=\s*\n\s*\|/,
+    );
+    expect(protocolSource).toMatch(
+      /export type RpcThinkingLevel = Exclude<\s*AgentSession\["thinkingLevel"\]/,
+    );
+    expect(protocolSource).not.toMatch(
+      /export interface RpcAgent(?:Text|Thinking|Usage|User|Assistant|ToolResult)/,
+    );
+    expect(protocolSource).toContain(
+      'type PiAgentMessage = PiAgentEndEvent["messages"][number]',
+    );
+    expect(protocolSource).toMatch(
+      /export type RpcSessionState = Omit<\s*PiRpcSessionState/,
+    );
+    expect(protocolSource).toContain(
+      'export type RpcBashResult = PiRpcResponseData<"bash">',
+    );
+    expect(protocolSource).toContain(
+      "export type RpcExtensionUIRequest = PiRpcExtensionUIRequest",
+    );
+    expect(protocolSource).toContain(
+      "export type RpcExtensionUIResponse = PiRpcExtensionUIResponse",
+    );
+    expect(adapterSource).not.toMatch(/type PiModel\s*=\s*\{/);
+    expect(liveSessionSource).not.toMatch(
+      /getAvailableModels\(\): Array<\{/,
+    );
+    expect(projectorSource).not.toMatch(/type PiModel\w*\s*=/);
+
+    for (const command of [
+      "prompt",
+      "steer",
+      "follow_up",
+      "abort",
+      "new_session",
+      "get_state",
+      "set_model",
+      "cycle_model",
+      "get_available_models",
+      "set_thinking_level",
+      "cycle_thinking_level",
+      "set_steering_mode",
+      "set_follow_up_mode",
+      "compact",
+      "set_auto_compaction",
+      "set_auto_retry",
+      "abort_retry",
+      "bash",
+      "abort_bash",
+      "export_html",
+      "set_session_name",
+      "switch_session",
+      "fork",
+      "get_fork_messages",
+      "get_last_assistant_text",
+      "get_commands",
+    ]) {
+      expect(protocolSource).toContain(`PiRpcCommandPayload<"${command}">`);
+    }
+
+    for (const command of [
+      "prompt",
+      "steer",
+      "follow_up",
+      "abort",
+      "set_thinking_level",
+      "set_steering_mode",
+      "set_follow_up_mode",
+      "set_auto_compaction",
+      "set_auto_retry",
+      "abort_retry",
+      "abort_bash",
+      "export_html",
+      "fork",
+      "get_fork_messages",
+      "get_last_assistant_text",
+      "set_session_name",
+    ]) {
+      expect(protocolSource).toContain(
+        `${command}: PiRpcResponseData<"${command}">`,
+      );
+    }
+    for (const command of ["new_session", "switch_session"]) {
+      expect(protocolSource).toContain(
+        `${command}: PiRpcResponseData<"${command}"> &`,
+      );
+    }
+    for (const command of [
+      "cycle_model",
+      "get_available_models",
+      "cycle_thinking_level",
+      "get_commands",
+    ]) {
+      expect(protocolSource).toContain(`PiRpcResponseData<"${command}">`);
+    }
+    expect(protocolSource).toContain(
+      'type PiCompactionResult = PiRpcResponseData<"compact">',
+    );
+  });
+
+  it("uses only declared Pi package-root imports in Dano production sources", () => {
+    const sourceRoots = [
+      new URL("../..", import.meta.url),
+      new URL("../../../types", import.meta.url),
+      new URL("../../../web/src", import.meta.url),
+    ];
+    const sourceFiles = sourceRoots.flatMap(root =>
+      readdirSync(root, { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile() && /\.(?:ts|svelte)$/.test(entry.name))
+        .map(entry => readFileSync(entry.parentPath + "/" + entry.name, "utf8")),
+    );
+
+    for (const source of sourceFiles) {
+      expect(source).not.toMatch(
+        /from\s+["']@earendil-works\/pi-(?:ai|coding-agent)\//,
+      );
+    }
   });
 });

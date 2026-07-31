@@ -1,21 +1,43 @@
 /**
- * Bridge type definitions for the Pi Web Bridge extension.
- *
- * Defines RPC protocol types (mirrored from the coding-agent's internal
- * rpc-types module, which is not exported from the npm package) and
- * bridge-specific types for server configuration, runtime state, and
- * HTTP/SSE client tracking.
+ * Browser-safe HTTP/SSE protocol derived from Pi's public runtime types and
+ * composed with Dano-owned workspace, form, transcript, safety, and client
+ * semantics.
  */
+
+import type {
+  Api,
+  ImageContent as PiImageContent,
+  Model as PiModel,
+} from "@earendil-works/pi-ai";
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  RpcCommand as PiRpcCommand,
+  RpcExtensionUIRequest as PiRpcExtensionUIRequest,
+  RpcExtensionUIResponse as PiRpcExtensionUIResponse,
+  RpcResponse as PiRpcResponse,
+  RpcSessionState as PiRpcSessionState,
+} from "@earendil-works/pi-coding-agent";
+
+type PiRpcCommandPayload<T extends PiRpcCommand["type"]> = Omit<
+  Extract<PiRpcCommand, { type: T }>,
+  "id" | "type"
+>;
+
+type PiRpcSuccessResponse = Extract<PiRpcResponse, { success: true }>;
+type PiRpcResponseData<T extends PiRpcSuccessResponse["command"]> = Extract<
+  PiRpcSuccessResponse,
+  { command: T }
+> extends { data: infer TData }
+  ? TData
+  : void;
+type PiRpcSlashCommand = PiRpcResponseData<"get_commands">["commands"][number];
 
 // ============================================================================
 // RPC Commands (client → server)
 // ============================================================================
 
-export interface RpcImageContent {
-  type: "image";
-  data: string;
-  mimeType: string;
-}
+export type RpcImageContent = PiImageContent;
 
 export interface RpcUploadedFileRef {
   id: string;
@@ -72,24 +94,20 @@ export interface RpcGitRepoState {
   branches: RpcGitBranch[];
 }
 
-/** Map of RPC command types to their specific payload shapes. */
-export interface RpcModel {
-  id: string;
-  provider: string;
-  name?: string;
-  api?: string;
-  reasoning?: boolean;
-  contextWindow?: number;
-  maxTokens?: number;
-}
+/** Browser-safe subset of Pi's model catalog entry. */
+export type RpcModel = Pick<PiModel<Api>, "id" | "provider"> &
+  Partial<
+    Pick<
+      PiModel<Api>,
+      "name" | "api" | "reasoning" | "contextWindow" | "maxTokens"
+    >
+  >;
 
-export type RpcThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+/** Dano's existing browser controls intentionally do not expose Pi's `max`. */
+export type RpcThinkingLevel = Exclude<
+  AgentSession["thinkingLevel"],
+  "max"
+>;
 
 export type RpcJsonValue =
   | string
@@ -428,124 +446,116 @@ export interface FieldAssistResult {
   metadata: FieldAssistMetadata;
 }
 
-export interface RpcCompactionResult {
-  summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
-  details?: unknown;
-}
+type PiCompactionEndEvent = Extract<
+  AgentSessionEvent,
+  { type: "compaction_end" }
+>;
+type PiCompactionResult = PiRpcResponseData<"compact">;
+type PiAgentEndEvent = Extract<AgentSessionEvent, { type: "agent_end" }>;
+type PiAgentMessage = PiAgentEndEvent["messages"][number];
+type PiAgentUserMessage = Extract<PiAgentMessage, { role: "user" }>;
+type PiAgentAssistantMessage = Extract<PiAgentMessage, { role: "assistant" }>;
+type PiAgentToolResultMessage = Extract<PiAgentMessage, { role: "toolResult" }>;
+type PiAgentUserContentBlock = Exclude<
+  PiAgentUserMessage["content"],
+  string
+>[number];
+type PiAgentAssistantContentBlock = PiAgentAssistantMessage["content"][number];
+type PiAgentToolResultContentBlock = PiAgentToolResultMessage["content"][number];
 
-export interface RpcBashResult {
-  output: string;
-  exitCode: number | undefined;
-  cancelled: boolean;
-  truncated: boolean;
-  fullOutputPath?: string;
-}
+export type RpcCompactionResult = Pick<
+  PiCompactionResult,
+  "summary" | "firstKeptEntryId" | "tokensBefore" | "details"
+>;
 
-export interface RpcAgentTextContent {
-  type: "text";
-  text: string;
-  textSignature?: string;
-}
+export type RpcBashResult = PiRpcResponseData<"bash">;
 
-export interface RpcAgentThinkingContent {
-  type: "thinking";
-  thinking: string;
-  thinkingSignature?: string;
-  redacted?: boolean;
-}
+export type RpcAgentTextContent = Pick<
+  Extract<PiAgentUserContentBlock, { type: "text" }>,
+  "type" | "text" | "textSignature"
+>;
 
-export interface RpcAgentToolCall {
-  type: "toolCall";
-  id: string;
-  name: string;
+export type RpcAgentThinkingContent = Pick<
+  Extract<PiAgentAssistantContentBlock, { type: "thinking" }>,
+  "type" | "thinking" | "thinkingSignature" | "redacted"
+>;
+
+export type RpcAgentToolCall = Pick<
+  Extract<PiAgentAssistantContentBlock, { type: "toolCall" }>,
+  "type" | "id" | "name" | "thoughtSignature"
+> & {
   arguments: RpcJsonObject;
   questionRequest?: AskUserQuestionCardRequest;
   questionState?: AskUserQuestionLifecycleState;
   questionError?: AskUserQuestionErrorProjection;
   formInteraction?: FormInteractionProjection;
-  thoughtSignature?: string;
-}
+};
 
-export interface RpcAgentUsageCost {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  total: number;
-}
+export type RpcAgentUsageCost = Pick<
+  PiAgentAssistantMessage["usage"]["cost"],
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
 
-export interface RpcAgentUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: RpcAgentUsageCost;
-}
+export type RpcAgentUsage = Pick<
+  PiAgentAssistantMessage["usage"],
+  "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens"
+> & { cost: RpcAgentUsageCost };
 
-export type RpcAgentStopReason =
-  | "stop"
-  | "length"
-  | "toolUse"
-  | "error"
-  | "aborted";
+export type RpcAgentStopReason = PiAgentAssistantMessage["stopReason"];
 
-export interface RpcAgentUserMessage {
-  role: "user";
+export type RpcAgentUserMessage = Pick<
+  PiAgentUserMessage,
+  "role" | "timestamp"
+> & {
   content: string | Array<RpcAgentTextContent | RpcImageContent>;
-  timestamp: number;
-}
+};
 
-export interface RpcAgentAssistantMessage {
-  role: "assistant";
+export type RpcAgentAssistantMessage = Pick<
+  PiAgentAssistantMessage,
+  | "role"
+  | "api"
+  | "provider"
+  | "model"
+  | "responseId"
+  | "stopReason"
+  | "errorMessage"
+  | "timestamp"
+> & {
   content: Array<
     RpcAgentTextContent | RpcAgentThinkingContent | RpcAgentToolCall
   >;
-  api: string;
-  provider: string;
-  model: string;
-  responseId?: string;
   usage: RpcAgentUsage;
-  stopReason: RpcAgentStopReason;
-  errorMessage?: string;
-  timestamp: number;
-}
+};
 
-export interface RpcAgentToolResultMessage {
-  role: "toolResult";
-  toolCallId: string;
-  toolName: string;
+export type RpcAgentToolResultMessage = Pick<
+  PiAgentToolResultMessage,
+  "role" | "toolCallId" | "toolName" | "isError" | "timestamp"
+> & {
   content: Array<RpcAgentTextContent | RpcImageContent>;
   details?: unknown;
-  isError: boolean;
-  timestamp: number;
-}
+};
 
 export type RpcAgentMessage =
   | RpcAgentUserMessage
   | RpcAgentAssistantMessage
   | RpcAgentToolResultMessage;
 
-export interface RpcAgentStartEvent {
-  type: "agent_start";
-  sessionPath?: string;
-}
+export type RpcAgentStartEvent = Pick<
+  Extract<AgentSessionEvent, { type: "agent_start" }>,
+  "type"
+> & { sessionPath?: string };
 
-export interface RpcAgentEndEvent {
-  type: "agent_end";
+export type RpcAgentEndEvent = Pick<PiAgentEndEvent, "type"> & {
   sessionPath?: string;
   messages?: RpcAgentMessage[];
-}
+};
 
-export interface RpcAutoRetryStartEvent {
-  type: "auto_retry_start";
+export type RpcAutoRetryStartEvent = Pick<
+  Extract<AgentSessionEvent, { type: "auto_retry_start" }>,
+  "type" | "attempt" | "maxAttempts" | "delayMs"
+> & {
   sessionPath?: string;
-  attempt: number;
-  maxAttempts: number;
-  delayMs: number;
-}
+};
 
 export interface RpcModelSelectEvent {
   type: "model_select";
@@ -554,41 +564,35 @@ export interface RpcModelSelectEvent {
   source: "set" | "cycle" | "restore";
 }
 
-export type RpcCompactionReason = "manual" | "threshold" | "overflow";
+export type RpcCompactionReason = Extract<
+  AgentSessionEvent,
+  { type: "compaction_start" }
+>["reason"];
 
-export interface RpcCompactionStartEvent {
-  type: "compaction_start";
-  reason: RpcCompactionReason;
-}
+export type RpcCompactionStartEvent = Pick<
+  Extract<AgentSessionEvent, { type: "compaction_start" }>,
+  "type" | "reason"
+>;
 
-export interface RpcCompactionEndEvent {
-  type: "compaction_end";
-  reason: RpcCompactionReason;
+export type RpcCompactionEndEvent = Pick<
+  PiCompactionEndEvent,
+  "type" | "reason" | "aborted" | "willRetry" | "errorMessage"
+> & {
   result: RpcCompactionResult | null;
-  aborted: boolean;
-  willRetry: boolean;
-  errorMessage?: string;
-}
+};
 
 export interface RpcCommandMap {
   /** Prompting */
-  prompt: {
-    message: string;
-    images?: RpcImageContent[];
-    files?: RpcUploadedFileRef[];
-    streamingBehavior?: "steer" | "followUp";
-  };
-  steer: {
-    message: string;
-    images?: RpcImageContent[];
+  prompt: PiRpcCommandPayload<"prompt"> & {
     files?: RpcUploadedFileRef[];
   };
-  follow_up: {
-    message: string;
-    images?: RpcImageContent[];
+  steer: PiRpcCommandPayload<"steer"> & {
     files?: RpcUploadedFileRef[];
   };
-  abort: {};
+  follow_up: PiRpcCommandPayload<"follow_up"> & {
+    files?: RpcUploadedFileRef[];
+  };
+  abort: PiRpcCommandPayload<"abort">;
   field_assist: FieldAssistCommandPayload;
   present_question: { toolCallId: string };
   answer_question:
@@ -608,8 +612,7 @@ export interface RpcCommandMap {
     expectedRevision: number;
     answers: Record<string, Record<string, AskUserQuestionAnswerInput>>;
   };
-  new_session: {
-    parentSession?: string;
+  new_session: PiRpcCommandPayload<"new_session"> & {
     limit?: number;
     workspacePath?: string;
   };
@@ -618,37 +621,40 @@ export interface RpcCommandMap {
   };
 
   /** State */
-  get_state: {};
+  get_state: PiRpcCommandPayload<"get_state">;
 
   /** Model */
-  set_model: { provider: string; modelId: string };
-  cycle_model: {};
-  get_available_models: {};
+  set_model: PiRpcCommandPayload<"set_model">;
+  cycle_model: PiRpcCommandPayload<"cycle_model">;
+  get_available_models: PiRpcCommandPayload<"get_available_models">;
 
   /** Thinking */
-  set_thinking_level: { level: RpcThinkingLevel };
-  cycle_thinking_level: {};
+  set_thinking_level: Omit<
+    PiRpcCommandPayload<"set_thinking_level">,
+    "level"
+  > & { level: RpcThinkingLevel };
+  cycle_thinking_level: PiRpcCommandPayload<"cycle_thinking_level">;
 
   /** Queue modes */
-  set_steering_mode: { mode: "all" | "one-at-a-time" };
-  set_follow_up_mode: { mode: "all" | "one-at-a-time" };
+  set_steering_mode: PiRpcCommandPayload<"set_steering_mode">;
+  set_follow_up_mode: PiRpcCommandPayload<"set_follow_up_mode">;
 
   /** Compaction */
-  compact: { customInstructions?: string };
-  set_auto_compaction: { enabled: boolean };
+  compact: PiRpcCommandPayload<"compact">;
+  set_auto_compaction: PiRpcCommandPayload<"set_auto_compaction">;
 
   /** Retry */
-  set_auto_retry: { enabled: boolean };
-  abort_retry: {};
+  set_auto_retry: PiRpcCommandPayload<"set_auto_retry">;
+  abort_retry: PiRpcCommandPayload<"abort_retry">;
 
   /** Bash */
-  bash: { command: string };
-  abort_bash: {};
+  bash: Pick<PiRpcCommandPayload<"bash">, "command">;
+  abort_bash: PiRpcCommandPayload<"abort_bash">;
 
   /** Session */
-  export_html: { outputPath?: string };
-  set_session_name: { name: string };
-  switch_session: { sessionPath: string; limit?: number };
+  export_html: PiRpcCommandPayload<"export_html">;
+  set_session_name: PiRpcCommandPayload<"set_session_name">;
+  switch_session: PiRpcCommandPayload<"switch_session"> & { limit?: number };
   select_tree_entry: { entryId: string };
   navigate_tree: {
     entryId: string;
@@ -657,9 +663,9 @@ export interface RpcCommandMap {
     replaceInstructions?: boolean;
     label?: string;
   };
-  fork: { entryId: string };
-  get_fork_messages: {};
-  get_last_assistant_text: {};
+  fork: PiRpcCommandPayload<"fork">;
+  get_fork_messages: PiRpcCommandPayload<"get_fork_messages">;
+  get_last_assistant_text: PiRpcCommandPayload<"get_last_assistant_text">;
   delete_session: { sessionPath: string };
 
   /** Messages / Commands */
@@ -669,7 +675,7 @@ export interface RpcCommandMap {
     cursor?: string;
     limit?: number;
   };
-  get_commands: {};
+  get_commands: PiRpcCommandPayload<"get_commands">;
 
   /** Discovery */
   list_workspaces: {};
@@ -718,30 +724,22 @@ export interface RpcWorkspaceEnvironment {
   detail?: string;
 }
 
-export interface RpcSessionState {
+export type RpcSessionState = Omit<
+  PiRpcSessionState,
+  "model" | "thinkingLevel"
+> & {
   model?: RpcModel;
   thinkingLevel: RpcThinkingLevel;
-  isStreaming: boolean;
-  isCompacting: boolean;
-  steeringMode: "all" | "one-at-a-time";
-  followUpMode: "all" | "one-at-a-time";
-  sessionFile?: string;
-  sessionId: string;
-  sessionName?: string;
   workspacePath?: string;
   workspaceEnvironments?: RpcWorkspaceEnvironment[];
   gitBranch?: string;
-  autoCompactionEnabled: boolean;
-  messageCount: number;
-  pendingMessageCount: number;
-}
+};
 
 /** A command available for invocation via prompt. */
-export interface RpcSlashCommand {
-  name: string;
-  description?: string;
-  source: "extension" | "prompt" | "skill";
-}
+export type RpcSlashCommand = Pick<
+  PiRpcSlashCommand,
+  "name" | "description" | "source"
+>;
 
 export type RpcTreeTrackColumn = "blank" | "line" | "branch" | "branch-last";
 
@@ -990,17 +988,17 @@ export interface RpcCommandErrorEvent {
 
 /** Map of RPC command types to their success response data shapes. */
 export interface RpcResponseMap {
-  prompt: void;
-  steer: void;
-  follow_up: void;
-  abort: void;
+  prompt: PiRpcResponseData<"prompt">;
+  steer: PiRpcResponseData<"steer">;
+  follow_up: PiRpcResponseData<"follow_up">;
+  abort: PiRpcResponseData<"abort">;
   field_assist: FieldAssistResult;
   present_question: FormInteractionProjection | null;
   answer_question: AskUserQuestionResult;
   revise_question: FormInteractionProjection;
   cancel_question_revision: FormInteractionProjection;
   submit_question_revision: FormInteractionProjection;
-  new_session: {
+  new_session: PiRpcResponseData<"new_session"> & {
     transcript: RpcTranscriptPage;
     treeEntries: RpcTreeEntry[];
     model?: RpcModel;
@@ -1009,7 +1007,6 @@ export interface RpcResponseMap {
     sessionName: string;
     sessionPath: string;
     workspacePath?: string;
-    cancelled: boolean;
   };
   register_workspace: {
     workspaceId: string;
@@ -1020,31 +1017,42 @@ export interface RpcResponseMap {
   };
   get_state: RpcSessionState;
   set_model: RpcModel;
-  cycle_model: {
-    model: RpcModel;
-    thinkingLevel: RpcThinkingLevel;
-    isScoped: boolean;
-  } | null;
-  get_available_models: { models: RpcModel[] };
-  set_thinking_level: void;
-  cycle_thinking_level: { level: RpcThinkingLevel } | null;
-  set_steering_mode: void;
-  set_follow_up_mode: void;
+  cycle_model:
+    | (Omit<
+        NonNullable<PiRpcResponseData<"cycle_model">>,
+        "model" | "thinkingLevel"
+      > & {
+        model: RpcModel;
+        thinkingLevel: RpcThinkingLevel;
+      })
+    | null;
+  get_available_models: Omit<
+    PiRpcResponseData<"get_available_models">,
+    "models"
+  > & { models: RpcModel[] };
+  set_thinking_level: PiRpcResponseData<"set_thinking_level">;
+  cycle_thinking_level:
+    | (Omit<
+        NonNullable<PiRpcResponseData<"cycle_thinking_level">>,
+        "level"
+      > & { level: RpcThinkingLevel })
+    | null;
+  set_steering_mode: PiRpcResponseData<"set_steering_mode">;
+  set_follow_up_mode: PiRpcResponseData<"set_follow_up_mode">;
   compact: RpcCompactionResult;
-  set_auto_compaction: void;
-  set_auto_retry: void;
-  abort_retry: void;
+  set_auto_compaction: PiRpcResponseData<"set_auto_compaction">;
+  set_auto_retry: PiRpcResponseData<"set_auto_retry">;
+  abort_retry: PiRpcResponseData<"abort_retry">;
   bash: RpcBashResult;
-  abort_bash: void;
-  export_html: { path: string };
-  switch_session: {
+  abort_bash: PiRpcResponseData<"abort_bash">;
+  export_html: PiRpcResponseData<"export_html">;
+  switch_session: PiRpcResponseData<"switch_session"> & {
     transcript: RpcTranscriptPage;
     treeEntries: RpcTreeEntry[];
     sessionId: string;
     sessionName: string;
     sessionPath: string;
     workspacePath?: string;
-    cancelled: boolean;
   };
   select_tree_entry: {
     transcript: RpcTranscriptPage;
@@ -1056,13 +1064,15 @@ export interface RpcResponseMap {
     cancelled: boolean;
   };
   navigate_tree: { cancelled: boolean };
-  fork: { text: string; cancelled: boolean };
-  get_fork_messages: { messages: Array<{ entryId: string; text: string }> };
-  get_last_assistant_text: { text: string | null };
+  fork: PiRpcResponseData<"fork">;
+  get_fork_messages: PiRpcResponseData<"get_fork_messages">;
+  get_last_assistant_text: PiRpcResponseData<"get_last_assistant_text">;
   delete_session: void;
-  set_session_name: void;
+  set_session_name: PiRpcResponseData<"set_session_name">;
   get_messages: RpcTranscriptPage & { direction: "latest" | "older" };
-  get_commands: { commands: RpcSlashCommand[] };
+  get_commands: Omit<PiRpcResponseData<"get_commands">, "commands"> & {
+    commands: RpcSlashCommand[];
+  };
   list_workspaces: { workspaces: RpcWorkspaceSummary[] };
   list_sessions: {
     sessions: Array<{
@@ -1116,79 +1126,9 @@ export type RpcResponse =
 // Extension UI (routed over HTTP/SSE)
 // ============================================================================
 
-/** UI request forwarded from Pi to a specific browser client. */
-export type RpcExtensionUIRequest =
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "select";
-      title: string;
-      options: string[];
-      timeout?: number;
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "confirm";
-      title: string;
-      message: string;
-      timeout?: number;
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "input";
-      title: string;
-      placeholder?: string;
-      timeout?: number;
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "editor";
-      title: string;
-      prefill?: string;
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "notify";
-      message: string;
-      notifyType?: "info" | "warning" | "error";
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "setStatus";
-      statusKey: string;
-      statusText: string | undefined;
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "setWidget";
-      widgetKey: string;
-      widgetLines: string[] | undefined;
-      widgetPlacement?: "aboveEditor" | "belowEditor";
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "setTitle";
-      title: string;
-    }
-  | {
-      type: "extension_ui_request";
-      id: string;
-      method: "set_editor_text";
-      text: string;
-    };
-
-/** Response from the browser client resolving a UI request. */
-export type RpcExtensionUIResponse =
-  | { type: "extension_ui_response"; id: string; value: string }
-  | { type: "extension_ui_response"; id: string; confirmed: boolean }
-  | { type: "extension_ui_response"; id: string; cancelled: true };
+/** Existing in-process Extension UI bridge, typed from Pi's root contract. */
+export type RpcExtensionUIRequest = PiRpcExtensionUIRequest;
+export type RpcExtensionUIResponse = PiRpcExtensionUIResponse;
 
 // ============================================================================
 // Bridge Configuration

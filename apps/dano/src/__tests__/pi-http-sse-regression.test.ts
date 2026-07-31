@@ -803,6 +803,19 @@ describe("Pi 0.82.1 HTTP/SSE regression baseline", () => {
           pendingMessageCount: 0,
         },
       });
+      const defaultModel = provider.getModel("default");
+      expect(defaultModel).toBeDefined();
+      expect(
+        (initial.payload as { data?: { model?: unknown } }).data?.model,
+      ).toEqual({
+        id: defaultModel!.id,
+        provider: defaultModel!.provider,
+        name: defaultModel!.name,
+        api: defaultModel!.api,
+        reasoning: defaultModel!.reasoning,
+        contextWindow: defaultModel!.contextWindow,
+        maxTokens: defaultModel!.maxTokens,
+      });
 
       await command({
         id: "select-model",

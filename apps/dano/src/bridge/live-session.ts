@@ -11,8 +11,11 @@
 
 import type {
   AgentSession,
+  AgentSessionEvent,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { RpcSlashCommand } from "../../types/protocol.js";
 
 // ============================================================================
@@ -20,28 +23,40 @@ import type { RpcSlashCommand } from "../../types/protocol.js";
 // ============================================================================
 
 /** Discriminated-union event type for Pi agent session events. */
+type PiLiveEventType =
+  | "agent_start"
+  | "agent_end"
+  | "auto_retry_start"
+  | "auto_retry_end"
+  | "message_start"
+  | "message_update"
+  | "message_end";
+
+type PiLiveEvent = Extract<AgentSessionEvent, { type: PiLiveEventType }>;
+type PiAgentEndEvent = Extract<PiLiveEvent, { type: "agent_end" }>;
+type PiAutoRetryStartEvent = Extract<
+  PiLiveEvent,
+  { type: "auto_retry_start" }
+>;
+type PiAutoRetryEndEvent = Extract<PiLiveEvent, { type: "auto_retry_end" }>;
+
 export type BridgeLiveEvent =
-  | { type: "agent_start" }
-  | { type: "agent_end"; messages?: unknown[]; willRetry?: boolean }
-  | {
-      type: "auto_retry_start";
-      attempt: number;
-      maxAttempts: number;
-      delayMs: number;
-    }
-  | {
-      type: "auto_retry_end";
-      success: boolean;
-    }
-  | {
-      type: "message_start" | "message_update" | "message_end";
-      [key: string]: unknown;
-    }
+  | Exclude<
+      PiLiveEvent,
+      PiAgentEndEvent | PiAutoRetryStartEvent | PiAutoRetryEndEvent
+    >
+  | (Pick<PiAgentEndEvent, "type"> &
+      Partial<Pick<PiAgentEndEvent, "messages" | "willRetry">>)
+  | Pick<
+      PiAutoRetryStartEvent,
+      "type" | "attempt" | "maxAttempts" | "delayMs"
+    >
+  | Pick<PiAutoRetryEndEvent, "type" | "success">
   | { type: "session_compact" }
   | {
       type: "model_select";
-      model: { id: string; provider: string };
-      previousModel?: { id: string; provider: string };
+      model: Model<Api>;
+      previousModel?: Model<Api>;
       source: "set" | "cycle" | "restore";
     };
 
@@ -70,38 +85,24 @@ export interface BridgeSessionState {
   getPendingMessageCount(): number;
 
   /** Available model registry. */
-  getAvailableModels(): Array<{
-    id: string;
-    provider: string;
-    name?: string;
-    api?: string;
-    reasoning?: boolean;
-    contextWindow?: number;
-    maxTokens?: number;
-  }>;
+  getAvailableModels(): Model<Api>[];
 
   /** The currently-selected model (from the live session). */
-  getCurrentModel: () =>
-    | { id: string; provider: string; name?: string }
-    | undefined;
+  getCurrentModel: () => Model<Api> | undefined;
 
   /** Default model configured by Pi SettingsManager, when resolvable. */
-  getConfiguredDefaultModel():
-    | { id: string; provider: string; name?: string }
-    | undefined;
+  getConfiguredDefaultModel(): Model<Api> | undefined;
 
   /** Default thinking level configured by Pi SettingsManager. */
-  getConfiguredDefaultThinkingLevel(): string | undefined;
+  getConfiguredDefaultThinkingLevel(): ReturnType<
+    SettingsManager["getDefaultThinkingLevel"]
+  >;
 
   /** Current thinking level. */
-  getThinkingLevel(): string;
+  getThinkingLevel(): AgentSession["thinkingLevel"];
 
   /** Context-usage stats (tokens, contextWindow, percent). */
-  getContextUsage(): {
-    tokens: number | null;
-    contextWindow: number;
-    percent: number | null;
-  } | null;
+  getContextUsage(): ReturnType<AgentSession["getContextUsage"]> | null;
 }
 
 // ============================================================================
@@ -109,12 +110,9 @@ export interface BridgeSessionState {
 // ============================================================================
 
 /** Content for a user message sent through the live session. */
-export type BridgeUserMessageContent =
-  | string
-  | Array<
-      | { type: "text"; text: string }
-      | { type: "image"; data: string; mimeType: string }
-    >;
+export type BridgeUserMessageContent = Parameters<
+  AgentSession["sendUserMessage"]
+>[0];
 
 export interface BridgeSessionActions {
   /** Send a user message to the live session (steer or follow-up). */
@@ -127,13 +125,15 @@ export interface BridgeSessionActions {
   abort(): void;
 
   /** Set the active model. */
-  setModel(model: { id: string; provider: string }): Promise<void>;
+  setModel(
+    model: Pick<Parameters<AgentSession["setModel"]>[0], "id" | "provider">,
+  ): Promise<void>;
 
   /** Set the thinking level. */
-  setThinkingLevel(level: string): void;
+  setThinkingLevel(level: Parameters<AgentSession["setThinkingLevel"]>[0]): void;
 
   /** Set the session display name. */
-  setSessionName(name: string): void;
+  setSessionName(name: Parameters<AgentSession["setSessionName"]>[0]): void;
 
   /** List registered slash commands. */
   getCommands(session?: AgentSession): RpcSlashCommand[];

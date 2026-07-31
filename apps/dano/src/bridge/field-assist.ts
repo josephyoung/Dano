@@ -10,6 +10,7 @@ import type {
   FieldAssistWarning,
   RpcModel,
 } from "./types.js";
+import { projectRpcModel } from "./pi-protocol-projector.js";
 
 export type FieldAssistErrorCode =
   | "EMPTY_POLISH_INPUT"
@@ -123,7 +124,7 @@ export function createFieldAssistService(options: {
         inputLength: input.currentValue.length,
         outputLength: value.length,
         elapsedMs: Date.now() - startedAt,
-        model,
+        model: model ? projectRpcModel(model) : undefined,
       };
       const warnings = getFieldAssistWarnings(input);
       if (warnings.length) metadata.warnings = warnings;
