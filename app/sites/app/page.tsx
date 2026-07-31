@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { siteAssetPath } from "../build/site-base-path";
 
 const valueSteps = [
   ["说明需求", "自然语言说清办理目标"],
@@ -41,7 +42,7 @@ export default function Home() {
     <main>
       <nav className="nav shell" aria-label="主导航">
         <Link className="brand" href="/" aria-label="小络助手首页">
-          <img src="/xiaoluo-logo.png" alt="" />
+          <img src={siteAssetPath("xiaoluo-logo.png")} alt="" />
           <span>小络助手</span>
         </Link>
         <div className="nav-links">
@@ -79,7 +80,7 @@ export default function Home() {
           <div className="visual-glow" />
           <article className="assistant-card">
             <header>
-              <img src="/xiaoluo-logo.png" alt="" />
+              <img src={siteAssetPath("xiaoluo-logo.png")} alt="" />
               <div><small>小络助手</small><strong>正在整理酒店申请</strong></div>
               <span>办理中</span>
             </header>
@@ -175,19 +176,19 @@ export default function Home() {
         </article>
         <div className="case-grid">
           <figure className="case-step wide">
-            <div className="image-frame"><img src="/start-input.jpg" alt="小络助手生产环境对话输入框与酒店申请快捷入口" /></div>
+            <div className="image-frame"><img src={siteAssetPath("start-input.jpg")} alt="小络助手生产环境对话输入框与酒店申请快捷入口" /></div>
             <figcaption><b>01</b><span><strong>员工发起</strong><small>直接输入目标，或点击“申请酒店”快捷入口</small></span></figcaption>
           </figure>
           <figure className="case-step">
-            <div className="image-frame tall"><img src="/application-form.jpg" alt="小络助手根据员工需求生成酒店申请表" /></div>
+            <div className="image-frame tall"><img src={siteAssetPath("application-form.jpg")} alt="小络助手根据员工需求生成酒店申请表" /></div>
             <figcaption><b>02</b><span><strong>申请信息自动生成</strong><small>自然语言需求转成完整业务字段</small></span></figcaption>
           </figure>
           <figure className="case-step">
-            <div className="image-frame"><img src="/confirm.jpg" alt="员工提交酒店申请前集中确认关键信息" /></div>
+            <div className="image-frame"><img src={siteAssetPath("confirm.jpg")} alt="员工提交酒店申请前集中确认关键信息" /></div>
             <figcaption><b>03</b><span><strong>员工核对并确认</strong><small>关键内容清晰可见，确认后再提交</small></span></figcaption>
           </figure>
           <figure className="case-step result-step">
-            <div className="image-frame"><img src="/result.jpg" alt="酒店申请提交后返回单号、状态和原系统入口" /></div>
+            <div className="image-frame"><img src={siteAssetPath("result.jpg")} alt="酒店申请提交后返回单号、状态和原系统入口" /></div>
             <figcaption><b>04</b><span><strong>结果回到对话</strong><small>持续查询当前状态并直达原系统</small></span></figcaption>
           </figure>
         </div>
@@ -272,7 +273,7 @@ export default function Home() {
       </section>
 
       <section className="cta-section">
-        <div className="cta-mark"><img src="/xiaoluo-logo.png" alt="" /></div>
+        <div className="cta-mark"><img src={siteAssetPath("xiaoluo-logo.png")} alt="" /></div>
         <div>
           <span>从下一项员工业务开始</span>
           <h2>让员工直接说出要办的事</h2>
@@ -282,7 +283,7 @@ export default function Home() {
       </section>
 
       <footer className="footer shell">
-        <Link className="brand" href="/"><img src="/xiaoluo-logo.png" alt="" /><span>小络助手</span></Link>
+        <Link className="brand" href="/"><img src={siteAssetPath("xiaoluo-logo.png")} alt="" /><span>小络助手</span></Link>
         <p>面向企业员工的智能业务办理入口</p>
         <span>© 2026 小络助手</span>
       </footer>

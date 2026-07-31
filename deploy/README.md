@@ -2,6 +2,52 @@
 
 This directory contains deployment-specific defaults and proxy config.
 
+## Product Site Sidecar
+
+`app/sites` is released independently from the Dano application and is served
+at `/web/`. Its source of truth is the current repository commit; production
+must not deploy a copied or separately maintained site tree.
+
+Build a revision-labelled image from the repository root:
+
+```bash
+revision="$(git rev-parse HEAD)"
+short_revision="$(git rev-parse --short=12 HEAD)"
+version="$(node -p "require('./package.json').version")"
+
+docker build --no-cache \
+  --build-arg DANO_SITE_BASE_PATH=/web \
+  --build-arg DANO_SITE_REVISION="$revision" \
+  --build-arg DANO_SITE_VERSION="$version" \
+  -t "dano-site:$short_revision" \
+  -f app/sites/Dockerfile app/sites
+```
+
+`deploy/compose/site.yml` is an optional overlay. Starting only its
+`dano-site` service leaves the Dano app, runtime volumes, nginx, TLS, and
+adjacent services untouched:
+
+```bash
+export DANO_SITE_IMAGE="dano-site:$short_revision"
+docker compose \
+  -f docker-compose.yml \
+  -f deploy/compose/site.yml \
+  --env-file .env \
+  up -d --no-build --no-deps dano-site
+```
+
+The shared nginx proxy keeps `/web` as a permanent redirect to `/web/`, routes
+the product site to the optional `dano-site` container, and strips `/web` only
+for Vinext's generated `/assets/` files. Runtime DNS resolution lets nginx and
+the Dano app start when the optional site is absent.
+
+Before switching images, retain the previous healthy site container or image
+tag as the rollback point. Validate `/web/`, every emitted JS/CSS resource,
+the logo and four case screenshots, then verify anchor navigation in the real
+production browser. Once accepted, remove only obsolete site rollback
+containers/images and temporary build artifacts. Never remove Dano runtime
+volumes as part of a site release.
+
 ## Runtime Layout
 
 - Source runtime defaults live in `deploy/runtime-defaults/`.
