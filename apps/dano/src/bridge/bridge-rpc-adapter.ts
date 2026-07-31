@@ -107,6 +107,7 @@ import {
   normalizeLlmErrorMessage,
   normalizeLlmTranscriptMessage,
 } from "./llm-error.js";
+import { projectRpcModel } from "./pi-protocol-projector.js";
 
 type RpcTranscriptToolCallBlock = Extract<
   RpcTranscriptContentBlock,
@@ -151,16 +152,6 @@ type SubmittedFormProjection = {
   answer: Record<string, AskUserQuestionAnswer>;
 };
 
-/** Model shape mirrored from Pi — used in shaping helpers below. */
-type PiModel = {
-  id: string;
-  provider: string;
-  name?: string;
-  api?: string;
-  reasoning?: boolean;
-  contextWindow?: number;
-  maxTokens?: number;
-};
 type UserMessageContent =
   | string
   | Array<
@@ -202,8 +193,8 @@ type RpcAgentTextOrImageContentBlock =
   | RpcAgentUserContentBlock
   | RpcAgentToolResultContentBlock;
 type PiModelSelectEventLike = {
-  model: PiModel;
-  previousModel?: PiModel;
+  model: RpcModel;
+  previousModel?: RpcModel;
   source: RpcModelSelectEvent["source"];
 };
 
@@ -459,19 +450,7 @@ function toRpcAgentAssistantContentBlock(
   }
 }
 
-function toRpcModel(model: PiModel): RpcModel {
-  return {
-    id: model.id,
-    provider: model.provider,
-    name: model.name,
-    api: model.api,
-    reasoning: model.reasoning,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-  };
-}
-
-function isPiModel(value: unknown): value is PiModel {
+function isRpcModelProjectionInput(value: unknown): value is RpcModel {
   if (!value || typeof value !== "object") return false;
   const typedValue = value as { id?: unknown; provider?: unknown };
   return (
@@ -495,23 +474,23 @@ function isPiModelSelectEventLike(
     source?: unknown;
   };
   return (
-    isPiModel(typedValue.model) &&
+    isRpcModelProjectionInput(typedValue.model) &&
     (typedValue.previousModel === undefined ||
-      isPiModel(typedValue.previousModel)) &&
+      isRpcModelProjectionInput(typedValue.previousModel)) &&
     isModelSelectSource(typedValue.source)
   );
 }
 
 function toRpcModelSelectEvent(event: {
-  model: PiModel;
-  previousModel?: PiModel;
+  model: RpcModel;
+  previousModel?: RpcModel;
   source: string;
 }): RpcModelSelectEvent {
   return {
     type: "model_select",
-    model: toRpcModel(event.model),
+    model: projectRpcModel(event.model),
     previousModel: event.previousModel
-      ? toRpcModel(event.previousModel)
+      ? projectRpcModel(event.previousModel)
       : undefined,
     source: event.source as RpcModelSelectEvent["source"],
   };
@@ -3720,7 +3699,9 @@ class BrowserSessionView {
         const workspaceEnvironments =
           detectWorkspaceEnvironments(workspacePath);
         return {
-          model: activeSession.model,
+          model: activeSession.model
+            ? projectRpcModel(activeSession.model)
+            : undefined,
           thinkingLevel: normalizeThinkingLevel(activeSession.thinkingLevel),
           isStreaming: activeSession.isStreaming,
           isCompacting: activeSession.isCompacting,
@@ -3758,7 +3739,9 @@ class BrowserSessionView {
     const sessionFile = this.context.state.sessionManager.getSessionFile();
     const currentModel = this.context.state.getCurrentModel();
     const branch = this.context.state.sessionManager.getBranch();
-    const model = currentModel ?? findLatestModelInfo(branch) ?? undefined;
+    const model = currentModel
+      ? projectRpcModel(currentModel)
+      : (findLatestModelInfo(branch) ?? undefined);
     const thinkingLevel = model
       ? (findLatestThinkingLevelInfo(branch) ??
         normalizeThinkingLevel(this.context.state.getThinkingLevel()))
@@ -3935,8 +3918,9 @@ class BrowserSessionView {
     RpcSessionState,
     "model" | "thinkingLevel"
   > {
+    const model = this.context.state.getConfiguredDefaultModel();
     return {
-      model: this.context.state.getConfiguredDefaultModel(),
+      model: model ? projectRpcModel(model) : undefined,
       thinkingLevel: normalizeThinkingLevel(
         this.context.state.getConfiguredDefaultThinkingLevel() ?? "off",
       ),
@@ -6732,7 +6716,7 @@ export class BridgeRpcAdapter {
           type: "response",
           command: "set_model",
           success: true,
-          data: model,
+          data: projectRpcModel(model),
         };
       }
 
@@ -6746,7 +6730,7 @@ export class BridgeRpcAdapter {
           type: "response",
           command: "get_available_models",
           success: true,
-          data: { models },
+          data: { models: models.map(projectRpcModel) },
         };
       }
 

@@ -110,6 +110,34 @@ describe("field assist", () => {
     expect(ai.generateText).toHaveBeenCalledTimes(1);
   });
 
+  it("projects Pi model metadata to the browser-safe model shape", async () => {
+    const provider = fauxProvider({ provider: "field-assist-projection" });
+    const model = provider.getModel();
+    const service = createFieldAssistService({
+      ai: { generateText: vi.fn().mockResolvedValue("可用内容") },
+      getCurrentModel: () => model,
+    });
+
+    const result = await service.assist({
+      requestId: "req-model-projection",
+      action: "regenerate",
+      fieldType: "input",
+      requestMethod: "input",
+      title: "说明",
+      currentValue: "",
+    });
+
+    expect(result.metadata.model).toEqual({
+      id: model.id,
+      provider: model.provider,
+      name: model.name,
+      api: model.api,
+      reasoning: model.reasoning,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+    });
+  });
+
   it("retries when model output asks a follow-up question", async () => {
     const ai = {
       generateText: vi.fn()

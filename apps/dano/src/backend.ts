@@ -208,7 +208,9 @@ export function createDanoBackendFromSession(
 
     async setModel(model) {
       const previousModel = session.model;
-      await session.setModel(model as Parameters<typeof session.setModel>[0]);
+      await session.setModel(
+        model as Parameters<typeof session.setModel>[0],
+      );
       if (!session.model) {
         return;
       }
@@ -222,9 +224,7 @@ export function createDanoBackendFromSession(
     },
 
     setThinkingLevel(level) {
-      session.setThinkingLevel(
-        level as Parameters<typeof session.setThinkingLevel>[0],
-      );
+      session.setThinkingLevel(level);
     },
 
     setSessionName(name) {
