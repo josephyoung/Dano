@@ -128,14 +128,16 @@ export function createDanoBackendFromSession(
     }
   };
 
-  const unsubscribeSession = session.subscribe(event => {
-    const liveEvent = toBridgeLiveEvent(event);
-    if (!liveEvent) {
-      return;
-    }
+  const unsubscribeSession = sessionRegistry
+    ? () => {}
+    : session.subscribe(event => {
+        const liveEvent = toBridgeLiveEvent(event);
+        if (!liveEvent) {
+          return;
+        }
 
-    emitLiveEvent(liveEvent);
-  });
+        emitLiveEvent(liveEvent);
+      });
 
   const events: BridgeSessionEvents = {
     subscribe(handler) {
@@ -229,10 +231,19 @@ export function createDanoBackendFromSession(
       session.setSessionName(name);
     },
 
-    getCommands() {
-      return listSessionCommands(session);
+    getCommands(selectedSession = session) {
+      return listSessionCommands(selectedSession);
     },
   };
+
+  const createFieldAssist = (selectedSession: AgentSession) =>
+    createFieldAssistService({
+      ai: createPiSdkFieldAssistClient({
+        modelRuntime: selectedSession.modelRuntime,
+      }),
+      getCurrentModel: () => selectedSession.model,
+      maxRetries: danoConfig.fieldAssist?.maxRetries,
+    });
 
   return {
     context: {
@@ -240,13 +251,8 @@ export function createDanoBackendFromSession(
       state,
       actions,
       askUserQuestion,
-      fieldAssist: createFieldAssistService({
-        ai: createPiSdkFieldAssistClient({
-          modelRuntime: session.modelRuntime,
-        }),
-        getCurrentModel: state.getCurrentModel,
-        maxRetries: danoConfig.fieldAssist?.maxRetries,
-      }),
+      fieldAssist: createFieldAssist(session),
+      createFieldAssist,
     },
     session,
     sessionRegistry,
@@ -285,6 +291,10 @@ export async function createDanoBackend(
   const sessionRegistry = new DetachedSessionRegistry(
     result.runtime.cwd,
     askUserQuestion.tool,
+    {
+      modelRuntime: result.runtime.session.modelRuntime,
+      settingsManager: result.runtime.session.settingsManager,
+    },
   );
   await sessionRegistry.adoptRuntime(
     result.runtime,

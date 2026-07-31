@@ -9,6 +9,7 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   type CreateAgentSessionFromServicesOptions,
+  type CreateAgentSessionServicesOptions,
   type SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -37,6 +38,8 @@ const HEIMDALL_EXTENSION_PATH = resolveHeimdallExtensionPath();
 export interface CreateDetachedAgentSessionOptions {
   model?: CreateAgentSessionFromServicesOptions["model"];
   thinkingLevel?: CreateAgentSessionFromServicesOptions["thinkingLevel"];
+  modelRuntime?: CreateAgentSessionServicesOptions["modelRuntime"];
+  settingsManager?: CreateAgentSessionServicesOptions["settingsManager"];
   askUserQuestionTool?: ToolDefinition;
 }
 
@@ -55,6 +58,8 @@ export async function createDetachedAgentSessionRuntime(
     const services = await createAgentSessionServices({
       cwd: runtimeOptions.cwd,
       agentDir: runtimeOptions.agentDir,
+      modelRuntime: options.modelRuntime,
+      settingsManager: options.settingsManager,
       resourceLoaderOptions: {
         additionalExtensionPaths: [HEIMDALL_EXTENSION_PATH],
       },

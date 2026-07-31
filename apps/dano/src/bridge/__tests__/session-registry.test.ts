@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createAgentSessionMock } = vi.hoisted(() => ({
@@ -10,10 +11,22 @@ const { createAgentSessionMock } = vi.hoisted(() => ({
 vi.mock("../detached-session.js", () => ({
   createDetachedAgentSessionRuntime: async (...args: unknown[]) => {
     const created = await createAgentSessionMock(...args);
+    let rebindSession:
+      | ((session: typeof created.session) => Promise<void>)
+      | undefined;
     return {
       runtime: {
         session: created.session,
-        setRebindSession: vi.fn(),
+        setRebindSession: vi.fn(callback => {
+          rebindSession = callback;
+        }),
+        fork: created.fork
+          ? vi.fn(async (...forkArgs: unknown[]) => {
+              const result = await created.fork(...forkArgs);
+              await rebindSession?.(created.session);
+              return result;
+            })
+          : vi.fn(),
         dispose: created.session.dispose,
       },
       disposeDanoLlmResilience: created.disposeDanoLlmResilience,
@@ -211,12 +224,82 @@ describe("DetachedSessionRegistry terminal viewer teardown", () => {
     const running = createRunningSession(registry, root);
     await registry.ensureSession(running.handle.sessionPath);
 
-    registry.removeSession(running.handle.sessionPath);
+    await registry.removeSession(running.handle.sessionPath);
 
     expect(running.disposeDanoLlmResilience).toHaveBeenCalledTimes(1);
     expect(running.disposeSession).toHaveBeenCalledTimes(1);
     expect(running.disposeDanoLlmResilience.mock.invocationCallOrder[0]).toBeLessThan(
       running.disposeSession.mock.invocationCallOrder[0],
     );
+  });
+
+  it("cleans up a runtime when initial Extension UI binding fails", async () => {
+    const { registry, root } = createRegistry();
+    const handle = registry.createSession({ cwd: root, sessionDir: root });
+    const dispose = vi.fn();
+    const disposeDanoLlmResilience = vi.fn();
+    createAgentSessionMock.mockResolvedValueOnce({
+      session: {
+        sessionFile: handle.sessionPath,
+        sessionId: "failed-bind",
+        isStreaming: false,
+        bindExtensions: vi.fn().mockRejectedValue(new Error("bind failed")),
+        subscribe: vi.fn().mockReturnValue(() => {}),
+        dispose,
+        sessionManager: handle.getSessionManager(),
+      },
+      disposeDanoLlmResilience,
+    });
+
+    await expect(registry.ensureSession(handle.sessionPath)).rejects.toThrow(
+      "bind failed",
+    );
+    expect(disposeDanoLlmResilience).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(handle.getRuntime()).toBeNull();
+  });
+
+  it("forks into a new handle without mutating viewers of the source handle", async () => {
+    const { registry, root } = createRegistry();
+    const source = createRunningSession(registry, root);
+    await registry.ensureSession(source.handle.sessionPath);
+    const sourcePath = source.handle.sessionPath;
+    const sourceManager = source.handle.getSessionManager();
+    sourceManager.appendMessage({
+      role: "user",
+      content: "fork me",
+      timestamp: Date.now(),
+    } as never);
+    const entryId = sourceManager.getLeafId();
+    if (!entryId) throw new Error("source entry missing");
+
+    const cloneSession = {
+      sessionFile: sourcePath,
+      sessionId: sourceManager.getSessionId(),
+      isStreaming: false,
+      bindExtensions: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn().mockReturnValue(() => {}),
+      dispose: vi.fn(),
+      sessionManager: sourceManager,
+    };
+    createAgentSessionMock.mockResolvedValueOnce({
+      session: cloneSession,
+      disposeDanoLlmResilience: vi.fn(),
+      fork: vi.fn(async () => {
+        const forkPath = sourceManager.createBranchedSession(entryId);
+        if (!forkPath) throw new Error("fork path missing");
+        cloneSession.sessionFile = forkPath;
+        cloneSession.sessionManager = SessionManager.open(forkPath);
+        return { cancelled: false, selectedText: "fork me" };
+      }),
+    });
+
+    const result = await registry.forkSession(sourcePath, entryId);
+
+    expect(result.cancelled).toBe(false);
+    expect(result.sessionPath).not.toBe(sourcePath);
+    expect(registry.getHandle(sourcePath)).toBe(source.handle);
+    expect(source.handle.getSession()?.sessionFile).toBe(sourcePath);
+    expect(registry.getHandle(result.sessionPath)).not.toBe(source.handle);
   });
 });

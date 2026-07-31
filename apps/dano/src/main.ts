@@ -670,6 +670,10 @@ async function runDanoMain(): Promise<number> {
     new DetachedSessionRegistry(
       backend.context.state.cwd,
       backend.context.askUserQuestion.tool,
+      {
+        modelRuntime: backend.session.modelRuntime,
+        settingsManager: backend.session.settingsManager,
+      },
     );
   const ownsSessionRegistry = !backend.sessionRegistry;
 

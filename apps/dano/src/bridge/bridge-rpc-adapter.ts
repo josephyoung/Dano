@@ -217,6 +217,7 @@ export interface BridgeRpcAdapterContext {
   actions: BridgeSessionActions;
   askUserQuestion: AskUserQuestionRuntime;
   fieldAssist?: FieldAssistService;
+  createFieldAssist?: (session: AgentSession) => FieldAssistService;
 }
 
 /**
@@ -3820,10 +3821,11 @@ class BrowserSessionView {
 
     const handle = this.registry.createSession({ cwd: targetCwd, sessionDir });
     await this.selectSessionPath(handle.sessionPath);
+    const session = await handle.ensureSession();
 
     return this.buildSessionSummary(
-      handle.getSessionManager(),
-      handle.sessionPath,
+      session.sessionManager,
+      session.sessionFile ?? handle.sessionPath,
       options.transcriptLimit,
     );
   }
@@ -3832,6 +3834,8 @@ class BrowserSessionView {
     sessionPath: string,
     transcriptLimit?: number,
   ): Promise<SessionSummary> {
+    // A browser switch selects another registry handle; it must not rebind the
+    // source runtime because that session may still be running for other viewers.
     const isActiveDetachedSession = this.registry.isSessionActive(sessionPath);
     const handle = this.registry.openSession(sessionPath);
     const liveSessionPath = this.context.state.sessionManager.getSessionFile();
@@ -6445,10 +6449,18 @@ export class BridgeRpcAdapter {
       }
 
       case "field_assist": {
-        if (!this.context.fieldAssist) {
+        let fieldAssist = this.context.fieldAssist;
+        if (
+          this.context.createFieldAssist &&
+          this.sessionRuntime.hasDetachedSelection()
+        ) {
+          const session = await this.sessionRuntime.ensureDetachedSession();
+          fieldAssist = this.context.createFieldAssist(session);
+        }
+        if (!fieldAssist) {
           throw new Error("FIELD_ASSIST_DISABLED");
         }
-        const result = await this.context.fieldAssist.assist(command, {
+        const result = await fieldAssist.assist(command, {
           clientId: this.client.id,
         });
         return {
@@ -7130,7 +7142,12 @@ export class BridgeRpcAdapter {
             error: "Session name cannot be empty",
           };
         }
-        this.context.actions.setSessionName(name);
+        if (this.sessionRuntime.hasDetachedSelection()) {
+          const session = await this.sessionRuntime.ensureDetachedSession();
+          session.setSessionName(name);
+        } else {
+          this.context.actions.setSessionName(name);
+        }
         return {
           id: correlationId,
           type: "response",
@@ -7301,8 +7318,11 @@ export class BridgeRpcAdapter {
        * ------------------------------------------------------------------ */
 
       case "get_commands": {
+        const session = this.sessionRuntime.hasDetachedSelection()
+          ? await this.sessionRuntime.ensureDetachedSession()
+          : undefined;
         const commands = this.slashCommandsAndMentionsEnabled
-          ? this.context.actions.getCommands()
+          ? this.context.actions.getCommands(session)
           : [];
         const rpcCommands: RpcSlashCommand[] = commands.map(command => ({
           ...command,

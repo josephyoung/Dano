@@ -11,7 +11,33 @@ const { createAgentSessionMock } = vi.hoisted(() => ({
 
 vi.mock("../detached-session.js", () => ({
   createDetachedAgentSessionRuntime: async (...args: unknown[]) => {
-    const created = await createAgentSessionMock(...args);
+    const sessionManager = args[1] as SessionManager;
+    const mocked = await createAgentSessionMock(...args);
+    const created =
+      mocked ??
+      {
+        session: {
+          sessionFile: sessionManager.getSessionFile(),
+          sessionId: sessionManager.getSessionId(),
+          isStreaming: false,
+          getSessionStats: vi.fn().mockReturnValue({
+            contextUsage: undefined,
+            totalMessages: 0,
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+          }),
+          bindExtensions: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn().mockReturnValue(() => {}),
+          dispose: vi.fn(),
+          abort: vi.fn().mockResolvedValue(undefined),
+          sessionManager,
+        },
+      };
     let rebindSession:
       | ((session: typeof created.session) => Promise<void>)
       | undefined;
@@ -292,6 +318,8 @@ describe("BridgeRpcAdapter", () => {
             getEntries: vi.fn().mockReturnValue([]),
             getBranch: vi.fn().mockReturnValue([]),
             getCwd: vi.fn().mockReturnValue(tmpDir),
+            getLeafId: vi.fn().mockReturnValue(null),
+            getTree: vi.fn().mockReturnValue([]),
           },
         },
       });
@@ -354,6 +382,8 @@ describe("BridgeRpcAdapter", () => {
           getEntries: vi.fn().mockReturnValue([]),
           getBranch: vi.fn().mockReturnValue([]),
           getCwd: vi.fn().mockReturnValue(tmpDir),
+          getLeafId: vi.fn().mockReturnValue(null),
+          getTree: vi.fn().mockReturnValue([]),
         },
       };
       createAgentSessionMock.mockResolvedValue({ session });
@@ -481,6 +511,8 @@ describe("BridgeRpcAdapter", () => {
             getEntries: vi.fn().mockReturnValue([]),
             getBranch: vi.fn().mockReturnValue([]),
             getCwd: vi.fn().mockReturnValue(tmpDir),
+            getLeafId: vi.fn().mockReturnValue(null),
+            getTree: vi.fn().mockReturnValue([]),
           },
         },
       });
@@ -6333,7 +6365,7 @@ describe("BridgeRpcAdapter", () => {
           (entry: { type: string }) => entry.type === "model_change",
         ),
       ).toBeUndefined();
-      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 
       const switchToLiveCommand: RpcCommand = {
         id: "cmd-switch-live",
@@ -7565,18 +7597,6 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(existingFile);
-      createAgentSessionMock.mockResolvedValueOnce({
-        session: {
-          sessionFile: existingFile,
-          sessionId: sm.getSessionId(),
-          isStreaming: false,
-          bindExtensions: vi.fn().mockResolvedValue(undefined),
-          subscribe: vi.fn().mockReturnValue(() => {}),
-          dispose: vi.fn(),
-          sessionManager: sm,
-        },
-      });
-
       const command: RpcCommand = { id: "cmd-1", type: "new_session" };
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }
@@ -7587,9 +7607,7 @@ describe("BridgeRpcAdapter", () => {
 
       await new Promise(r => setTimeout(r, 10));
 
-      // ctx.newSession should NOT be called (bridge creates session locally)
-      // createAgentSession should NOT be called eagerly
-      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 
       const sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
         call => JSON.parse(call[0] as string),
@@ -7616,32 +7634,37 @@ describe("BridgeRpcAdapter", () => {
         ),
       ).toBeUndefined();
 
-      const statsEvent = sendCalls.find(
-        call =>
-          call.type === "event" &&
-          call.payload.type === "session_stats" &&
-          call.payload.sessionPath === responseCall?.payload.data.sessionPath,
-      );
-      expect(statsEvent?.payload).toMatchObject({
-        type: "session_stats",
-        sessionPath: responseCall?.payload.data.sessionPath,
-        stats: {
-          tokens: null,
-          contextWindow: 0,
-          percent: null,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          cost: 0,
-        },
+      await vi.waitFor(() => {
+        const statsEvent = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "event" &&
+              call.payload.type === "session_stats" &&
+              call.payload.sessionPath ===
+                responseCall?.payload.data.sessionPath,
+          );
+        expect(statsEvent?.payload).toMatchObject({
+          type: "session_stats",
+          sessionPath: responseCall?.payload.data.sessionPath,
+          stats: {
+            tokens: null,
+            contextWindow: 0,
+            percent: null,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cost: 0,
+          },
+        });
       });
 
       // Clean up temp dir
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("projects Pi settings without creating a runtime or empty session jsonl", async () => {
+    it("projects Pi settings from the runtime-backed empty session", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-defaults-"));
       const sm = SessionManager.create(tmpDir, tmpDir);
       const existingFile = sm.getSessionFile()!;
@@ -7667,6 +7690,26 @@ describe("BridgeRpcAdapter", () => {
         context.state
           .getConfiguredDefaultThinkingLevel as ReturnType<typeof vi.fn>
       ).mockReturnValue("medium");
+      createAgentSessionMock.mockImplementationOnce(
+        async (_cwd: string, sessionManager: SessionManager) => ({
+          session: {
+            sessionFile: sessionManager.getSessionFile(),
+            sessionId: sessionManager.getSessionId(),
+            sessionManager,
+            model: xiaomiModel,
+            thinkingLevel: "medium",
+            isStreaming: false,
+            isCompacting: false,
+            steeringMode: "all",
+            followUpMode: "all",
+            autoCompactionEnabled: false,
+            pendingMessageCount: 0,
+            bindExtensions: vi.fn().mockResolvedValue(undefined),
+            subscribe: vi.fn().mockReturnValue(() => {}),
+            dispose: vi.fn(),
+          },
+        }),
+      );
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }
       ).trigger(
@@ -7699,7 +7742,7 @@ describe("BridgeRpcAdapter", () => {
       expect(newSessionResponse?.payload.data.thinkingLevel).toBe("medium");
       expect(typeof sessionPath).toBe("string");
       expect(fs.existsSync(sessionPath)).toBe(false);
-      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 
       (
         ws as unknown as { trigger: (event: string, data: Buffer) => void }

@@ -10,7 +10,10 @@ import {
 import {
   askUserQuestionTool as defaultAskUserQuestionTool,
 } from "./ask-user-question.js";
-import { createDetachedAgentSessionRuntime } from "./detached-session.js";
+import {
+  createDetachedAgentSessionRuntime,
+  type CreateDetachedAgentSessionOptions,
+} from "./detached-session.js";
 import { createHeadlessUIContext } from "./headless-ui-context.js";
 
 interface ViewerBinding {
@@ -35,6 +38,7 @@ export class DetachedSessionHandle {
     private sessionManager: SessionManager,
     private readonly fallbackCwd: string,
     private readonly askUserQuestionTool: ToolDefinition,
+    private readonly runtimeOptions: CreateDetachedAgentSessionOptions,
     private readonly onSessionEvent: (
       event: DetachedSessionRegistryEvent,
     ) => void,
@@ -120,7 +124,10 @@ export class DetachedSessionHandle {
     const created = await createDetachedAgentSessionRuntime(
       this.sessionManager.getCwd() || this.fallbackCwd,
       this.sessionManager,
-      { askUserQuestionTool: this.askUserQuestionTool },
+      {
+        ...this.runtimeOptions,
+        askUserQuestionTool: this.askUserQuestionTool,
+      },
     );
 
     await this.adoptRuntime(
@@ -137,10 +144,17 @@ export class DetachedSessionHandle {
     if (this.runtime && this.runtime !== runtime) {
       throw new Error("Session handle already owns a Pi runtime");
     }
+    runtime.setRebindSession(session => this.bindRuntimeSession(session));
+    try {
+      await this.bindRuntimeSession(runtime.session);
+    } catch (error) {
+      runtime.setRebindSession(undefined);
+      disposeDanoLlmResilience();
+      await runtime.dispose();
+      throw error;
+    }
     this.runtime = runtime;
     this.disposeDanoLlmResilience = disposeDanoLlmResilience;
-    this.runtime.setRebindSession(session => this.bindRuntimeSession(session));
-    await this.bindRuntimeSession(this.runtime.session);
   }
 
   async dispose(): Promise<void> {
@@ -175,15 +189,11 @@ export class DetachedSessionHandle {
   }
 
   private async bindRuntimeSession(session: AgentSession): Promise<void> {
-    this.unsubscribeSession?.();
-    this.unsubscribeSession = null;
-    this.sessionManager = session.sessionManager;
-    this.sessionPath = session.sessionFile ?? this.sessionPath;
     await this.bindSessionExtensions(
       session,
       this.latestViewer()?.uiContext ?? createHeadlessUIContext(),
     );
-    this.unsubscribeSession = session.subscribe(event => {
+    const unsubscribeSession = session.subscribe(event => {
       this.onSessionEvent({
         sessionPath: this.sessionPath,
         event,
@@ -192,6 +202,10 @@ export class DetachedSessionHandle {
         listener(event);
       }
     });
+    this.unsubscribeSession?.();
+    this.unsubscribeSession = unsubscribeSession;
+    this.sessionManager = session.sessionManager;
+    this.sessionPath = session.sessionFile ?? this.sessionPath;
   }
 }
 
@@ -206,6 +220,7 @@ export class DetachedSessionRegistry {
     private readonly fallbackCwd: string,
     private readonly askUserQuestionTool: ToolDefinition =
       defaultAskUserQuestionTool,
+    private readonly newSessionRuntimeOptions: CreateDetachedAgentSessionOptions = {},
   ) {}
 
   createSession(options?: {
@@ -224,6 +239,7 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
+      this.newSessionRuntimeOptions,
       event => {
         this.emit(event);
       },
@@ -259,6 +275,7 @@ export class DetachedSessionRegistry {
       runtime.session.sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
+      {},
       event => {
         this.emit(event);
       },
@@ -281,6 +298,7 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
+      {},
       event => {
         this.emit(event);
       },
@@ -347,48 +365,59 @@ export class DetachedSessionRegistry {
     sessionPath: string,
     entryId: string,
   ): Promise<{ sessionPath: string; selectedText?: string; cancelled: boolean }> {
-    const handle = this.openSession(sessionPath);
-    await handle.ensureSession();
+    const sourceManager = SessionManager.open(sessionPath);
+    const created = await createDetachedAgentSessionRuntime(
+      sourceManager.getCwd() || this.fallbackCwd,
+      sourceManager,
+      { askUserQuestionTool: this.askUserQuestionTool },
+    );
+    const handle = new DetachedSessionHandle(
+      sessionPath,
+      sourceManager,
+      this.fallbackCwd,
+      this.askUserQuestionTool,
+      {},
+      event => {
+        this.emit(event);
+      },
+    );
+    await handle.adoptRuntime(
+      created.runtime,
+      created.disposeDanoLlmResilience,
+    );
     const runtime = handle.getRuntime();
     if (!runtime) {
       throw new Error("Selected session runtime not found");
     }
 
-    const selectedEntry = runtime.session.sessionManager.getEntry(entryId);
-    const selectedContent =
-      selectedEntry?.type === "message" && "content" in selectedEntry.message
-        ? selectedEntry.message.content
-        : undefined;
-    const selectedText =
-      typeof selectedContent === "string"
-        ? selectedContent
-        : Array.isArray(selectedContent)
-          ? selectedContent
-              .filter(
-                (part): part is { type: "text"; text: string } =>
-                  typeof part === "object" &&
-                  part !== null &&
-                  "type" in part &&
-                  part.type === "text" &&
-                  "text" in part &&
-                  typeof part.text === "string",
-              )
-              .map(part => part.text)
-              .join("")
-          : undefined;
-    const previousPath = handle.sessionPath;
-    const result = await runtime.fork(entryId, { position: "at" });
-    const nextPath = runtime.session.sessionFile ?? handle.sessionPath;
-    if (!result.cancelled && nextPath !== previousPath) {
-      this.handles.delete(previousPath);
-      this.handles.set(nextPath, handle);
-      if (this.initialSessionPath === previousPath) {
-        this.initialSessionPath = nextPath;
-      }
+    let result: Awaited<ReturnType<AgentSessionRuntime["fork"]>>;
+    try {
+      result = await runtime.fork(entryId, { position: "at" });
+    } catch (error) {
+      await handle.dispose();
+      throw error;
     }
+    if (result.cancelled) {
+      await handle.dispose();
+      return {
+        ...result,
+        sessionPath,
+      };
+    }
+
+    const nextPath = runtime.session.sessionFile ?? handle.sessionPath;
+    if (nextPath === sessionPath) {
+      await handle.dispose();
+      throw new Error("Fork did not create a new session");
+    }
+    const existing = this.handles.get(nextPath);
+    if (existing) {
+      await handle.dispose();
+      throw new Error("Forked session is already active");
+    }
+    this.handles.set(nextPath, handle);
     return {
       ...result,
-      selectedText: result.selectedText ?? selectedText,
       sessionPath: nextPath,
     };
   }

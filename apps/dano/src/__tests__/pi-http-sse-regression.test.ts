@@ -620,7 +620,7 @@ describe("Pi 0.82.1 HTTP/SSE regression baseline", () => {
     }
   });
 
-  it("projects Pi settings for a lazy new session without creating its runtime", async () => {
+  it("projects Pi settings for a runtime-backed new session", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-pi-settings-"));
     const provider = fauxProvider({
       provider: "dano-settings",

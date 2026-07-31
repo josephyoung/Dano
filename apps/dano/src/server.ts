@@ -55,6 +55,10 @@ export async function startDanoServer(
     new DetachedSessionRegistry(
       backend.context.state.cwd,
       backend.context.askUserQuestion.tool,
+      {
+        modelRuntime: backend.session.modelRuntime,
+        settingsManager: backend.session.settingsManager,
+      },
     );
   const ownsSessionRegistry =
     !options.sessionRegistry && !backend.sessionRegistry;

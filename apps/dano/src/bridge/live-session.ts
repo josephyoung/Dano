@@ -9,7 +9,10 @@
  * would provide its own implementation.
  */
 
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSession,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import type { RpcSlashCommand } from "../../types/protocol.js";
 
 // ============================================================================
@@ -133,5 +136,5 @@ export interface BridgeSessionActions {
   setSessionName(name: string): void;
 
   /** List registered slash commands. */
-  getCommands(): RpcSlashCommand[];
+  getCommands(session?: AgentSession): RpcSlashCommand[];
 }
