@@ -1,6 +1,6 @@
 {
   "name": "@dano/dano",
-  "version": "0.1.150",
+  "version": "0.1.151",
   "private": true,
   "description": "Dano P0 web LLM chat",
   "type": "module",
@@ -39,6 +39,7 @@
     "test:browser:theme-color": "node scripts/test-theme-color-browser.mjs",
     "test:browser:question-tool": "node scripts/test-question-tool-card-browser.mjs",
     "test:browser:multi-tab": "node scripts/test-multi-tab-prompt-browser.mjs",
+    "test:browser:viewport": "node scripts/test-app-viewport-browser.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {
