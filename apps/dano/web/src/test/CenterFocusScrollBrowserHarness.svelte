@@ -227,38 +227,40 @@
   ]);
 </script>
 
-<div class="harness-controls" aria-label="浏览器测试控制">
-  <button data-testid="open-focus-card" onclick={() => phase = "pending"}>
-    打开卡片
-  </button>
-  <button data-testid="grow-focused-background" onclick={() => backgroundGrown = true}>
-    增长背景内容
-  </button>
-  <button data-testid="resolve-focus-card" onclick={() => phase = "terminal"}>
-    恢复卡片
-  </button>
-  <button data-testid="return-to-revision" onclick={() => phase = "revising"}>
-    返回修改
-  </button>
-  <button data-testid="save-revision" onclick={() => phase = "pending"}>
-    保存并返回确认
-  </button>
-  <button data-testid="grow-final-response" onclick={() => phase = "grown"}>
-    增长回复
-  </button>
-  <button data-testid="continue-final-response" onclick={() => phase = "continued"}>
-    继续增长回复
-  </button>
-</div>
+<div class="app-shell">
+  <div class="harness-controls" aria-label="浏览器测试控制">
+    <button data-testid="open-focus-card" onclick={() => phase = "pending"}>
+      打开卡片
+    </button>
+    <button data-testid="grow-focused-background" onclick={() => backgroundGrown = true}>
+      增长背景内容
+    </button>
+    <button data-testid="resolve-focus-card" onclick={() => phase = "terminal"}>
+      恢复卡片
+    </button>
+    <button data-testid="return-to-revision" onclick={() => phase = "revising"}>
+      返回修改
+    </button>
+    <button data-testid="save-revision" onclick={() => phase = "pending"}>
+      保存并返回确认
+    </button>
+    <button data-testid="grow-final-response" onclick={() => phase = "grown"}>
+      增长回复
+    </button>
+    <button data-testid="continue-final-response" onclick={() => phase = "continued"}>
+      继续增长回复
+    </button>
+  </div>
 
-<AppMainContent
-  activeSessionPath="browser-focus-scroll"
-  transcript={transcript as never}
-  isStreaming={true}
-  isEmptyConversation={false}
-  connectionStatus="connected"
-  presentQuestionAction={async () => ({ success: true } as never)}
-/>
+  <AppMainContent
+    activeSessionPath="browser-focus-scroll"
+    transcript={transcript as never}
+    isStreaming={true}
+    isEmptyConversation={false}
+    connectionStatus="connected"
+    presentQuestionAction={async () => ({ success: true } as never)}
+  />
+</div>
 
 <style>
   :global(html),
@@ -272,6 +274,14 @@
   :global(#app) {
     display: flex;
     min-height: 0;
+  }
+
+  .app-shell {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .harness-controls {
