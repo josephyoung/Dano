@@ -10,22 +10,24 @@ path for a production sidecar deployment.
 
 ## Quick Start
 
+From the repository root:
+
 ```bash
-npm install
-npm run dev
-npm run build
+pnpm install
+pnpm -C apps/sites dev
+pnpm -C apps/sites build
 ```
 
-Production builds for Dano use `/web`:
+From the repository root, production builds for Dano use `/web`:
 
 ```bash
-DANO_SITE_BASE_PATH=/web npm run build
+DANO_SITE_BASE_PATH=/web pnpm -C apps/sites build
 docker build \
   --build-arg DANO_SITE_BASE_PATH=/web \
   --build-arg DANO_SITE_REVISION="$(git rev-parse HEAD)" \
-  --build-arg DANO_SITE_VERSION="$(node -p "require('../../package.json').version")" \
+  --build-arg DANO_SITE_VERSION="$(node -p "require('./package.json').version")" \
   -t "dano-site:$(git rev-parse --short=12 HEAD)" \
-  app/sites
+  -f apps/sites/Dockerfile .
 ```
 
 `DANO_SITE_BASE_PATH` must be set at build time because it controls both Vinext
@@ -105,11 +107,11 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 ## Useful Commands
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the `/web` production shape and verify rendered routes,
+- `pnpm -C apps/sites dev`: start local development
+- `pnpm -C apps/sites build`: verify the vinext build output
+- `pnpm -C apps/sites test`: build the `/web` production shape and verify rendered routes,
   assets, metadata, and navigation behavior
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+- `pnpm -C apps/sites db:generate`: generate Drizzle migrations after schema changes
 
 ## Learn More
 

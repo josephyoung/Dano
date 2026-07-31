@@ -4,7 +4,7 @@ This directory contains deployment-specific defaults and proxy config.
 
 ## Product Site Sidecar
 
-`app/sites` is released independently from the Dano application and is served
+`apps/sites` is released independently from the Dano application and is served
 at `/web/`. Its source of truth is the current repository commit; production
 must not deploy a copied or separately maintained site tree.
 
@@ -20,7 +20,7 @@ docker build --no-cache \
   --build-arg DANO_SITE_REVISION="$revision" \
   --build-arg DANO_SITE_VERSION="$version" \
   -t "dano-site:$short_revision" \
-  -f app/sites/Dockerfile app/sites
+  -f apps/sites/Dockerfile .
 ```
 
 `deploy/compose/site.yml` is an optional overlay. Starting only its
