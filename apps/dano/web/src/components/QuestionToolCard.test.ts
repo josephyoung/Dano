@@ -231,6 +231,86 @@ function answeredSingleDateQuestionBlock(): ToolContentBlock {
   };
 }
 
+function answeredGroupedFormWithEveryControlBlock(): ToolContentBlock {
+  return {
+    kind: "tool",
+    toolName: "ask_user_question",
+    toolCallId: "all-controls-form",
+    toolArgs: {},
+    argumentsText: "",
+    toolStatus: "success",
+    questionRequest: {
+      batch: true,
+      title: "完整控件表单",
+      questions: [
+        { id: "summary", kind: "text", question: "摘要", fieldAssist: false },
+        {
+          id: "details",
+          kind: "text",
+          question: "详情",
+          inputType: "textarea",
+          fieldAssist: true,
+        },
+        {
+          id: "date",
+          kind: "date",
+          question: "日期",
+          dateFormat: "yyyy-MM-dd",
+        },
+        {
+          id: "type",
+          kind: "single",
+          question: "类型",
+          options: [
+            { id: "leave", label: "请假" },
+            { id: "travel", label: "出差" },
+          ],
+        },
+        {
+          id: "systems",
+          kind: "multiple",
+          question: "系统",
+          options: [
+            { id: "hr", label: "人事" },
+            { id: "finance", label: "财务" },
+          ],
+        },
+        {
+          id: "department",
+          kind: "select",
+          question: "部门",
+          options: [
+            { id: "sales", label: "销售" },
+            { id: "finance", label: "财务" },
+          ],
+        },
+        {
+          id: "region",
+          kind: "treeSelect",
+          question: "区域",
+          options: [
+            { id: "east", label: "华东" },
+            { id: "west", label: "华西" },
+          ],
+        },
+      ],
+    },
+    resultDetails: {
+      status: "answered",
+      formId: "all-controls-form",
+      answer: {
+        summary: "出差申请",
+        details: "拜访客户",
+        date: "2026-08-06",
+        type: "travel",
+        systems: ["hr"],
+        department: "sales",
+        region: "east",
+      },
+    },
+  };
+}
+
 describe("QuestionToolCard", () => {
   it("uses one answered-card structure at every responsive width", () => {
     expect(questionToolCardSource).not.toContain("mobile-answered-result");
@@ -536,6 +616,36 @@ describe("QuestionToolCard", () => {
     expect(input?.disabled).toBe(true);
     expect(target.textContent).toContain("已提交");
     expect(target.querySelector(".mobile-answered-result")).toBeNull();
+    expect(response).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("disables every form control after a grouped form is submitted", async () => {
+    const response = vi.fn(async () => {
+      throw new Error("an answered form must not issue RPCs");
+    });
+    const target = document.createElement("div");
+    const component = mount(QuestionToolCard, {
+      target,
+      props: {
+        block: answeredGroupedFormWithEveryControlBlock(),
+        active: false,
+        onPresent: response,
+        onRespond: response,
+        onRevise: response,
+        onSubmitRevision: response,
+        onFieldAssist: response,
+      },
+    });
+    await tick();
+    await tick();
+
+    const controls = target.querySelectorAll<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement
+    >("form input, form textarea, form select, form button");
+    expect(controls).toHaveLength(12);
+    expect([...controls].every(control => control.disabled)).toBe(true);
     expect(response).not.toHaveBeenCalled();
 
     unmount(component);

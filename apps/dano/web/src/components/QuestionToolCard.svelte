@@ -965,7 +965,7 @@
                 <legend class="sr-only">{item.question}</legend>
                 {#each itemOptions(item) as option}
                   <label class="question-option">
-                    <input type="radio" name={`question-${block.toolCallId}-${item.id}`} value={optionKey(option.id)} bind:group={selectedOption[item.id]} />
+                    <input type="radio" name={`question-${block.toolCallId}-${item.id}`} value={optionKey(option.id)} bind:group={selectedOption[item.id]} disabled={!formEnabled || submitting} />
                     <span>{option.label}</span>
                   </label>
                 {/each}
@@ -1046,7 +1046,7 @@
                 <legend class="sr-only">{item.question}</legend>
                 {#each itemOptions(item) as option}
                   <label class="question-option">
-                    <input type="checkbox" value={optionKey(option.id)} bind:group={selectedOptions[item.id]} />
+                    <input type="checkbox" value={optionKey(option.id)} bind:group={selectedOptions[item.id]} disabled={!formEnabled || submitting} />
                     <span>{option.label}</span>
                   </label>
                 {/each}
@@ -1334,9 +1334,14 @@
     transition: color 0.12s ease;
   }
 
-  .question-option:hover,
+  .question-option:not(:has(input:disabled)):hover,
   .question-option:has(input:checked) {
     color: var(--accent);
+  }
+
+  .question-option:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   .question-option input { accent-color: var(--accent); }
