@@ -103,12 +103,50 @@ const confirmation: ToolContentBlock = {
   },
 };
 
-const longSubmittedFormQuestions = Array.from({ length: 12 }, (_, index) => ({
-  id: `field-${index + 1}`,
-  kind: "text" as const,
-  question: `字段 ${index + 1}`,
-  fieldAssist: false,
-}));
+const longSubmittedFormQuestions = [
+  ...Array.from({ length: 12 }, (_, index) => ({
+    id: `field-${index + 1}`,
+    kind: "text" as const,
+    question: `字段 ${index + 1}`,
+    fieldAssist: false,
+  })),
+  {
+    id: "type",
+    kind: "single" as const,
+    question: "类型",
+    options: [
+      { id: "leave", label: "请假" },
+      { id: "travel", label: "出差" },
+    ],
+  },
+  {
+    id: "systems",
+    kind: "multiple" as const,
+    question: "同步系统",
+    options: [
+      { id: "hr", label: "人事" },
+      { id: "finance", label: "财务" },
+    ],
+  },
+  {
+    id: "department",
+    kind: "select" as const,
+    question: "部门",
+    options: [
+      { id: "sales", label: "销售" },
+      { id: "finance", label: "财务" },
+    ],
+  },
+  {
+    id: "region",
+    kind: "treeSelect" as const,
+    question: "区域",
+    options: [
+      { id: "east", label: "华东" },
+      { id: "west", label: "华西" },
+    ],
+  },
+];
 const longSubmittedForm: ToolContentBlock = {
   kind: "tool",
   toolName: "ask_user_question",
@@ -125,10 +163,16 @@ const longSubmittedForm: ToolContentBlock = {
     status: "answered",
     formId: "question-browser-long-submitted-form",
     answer: Object.fromEntries(
-      longSubmittedFormQuestions.map((question, index) => [
-        question.id,
-        `回答 ${index + 1}`,
-      ]),
+      [
+        ...longSubmittedFormQuestions.slice(0, 12).map((question, index) => [
+          question.id,
+          `回答 ${index + 1}`,
+        ]),
+        ["type", "travel"],
+        ["systems", ["hr"]],
+        ["department", "sales"],
+        ["region", "east"],
+      ],
     ),
   },
 };
