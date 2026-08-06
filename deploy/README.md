@@ -375,6 +375,29 @@ operation not permitted
 the failure is in Compose's machine enumeration. Fix the lockfile permission or
 run Compose from a shell that can write Podman's machine state.
 
+On macOS, keep the shell that started the Podman machine alive until the build
+and Compose acceptance finish. Some local setups keep the API forwarding
+process attached to that shell; closing it mid-run can surface misleading
+overlay-storage errors on the next build.
+
+When GitHub access requires the host proxy, pass the proxy into the image build
+explicitly. The container cannot reach the host proxy through `127.0.0.1`; use
+`host.containers.internal` and keep the configured package mirrors out of the
+proxy path:
+
+```bash
+podman build \
+  --build-arg HTTP_PROXY=http://host.containers.internal:7897 \
+  --build-arg HTTPS_PROXY=http://host.containers.internal:7897 \
+  --build-arg ALL_PROXY=socks5h://host.containers.internal:7897 \
+  --build-arg NO_PROXY=localhost,127.0.0.1,::1,mirrors.cloud.tencent.com,mirrors.aliyun.com \
+  -t dano-app:local .
+```
+
+Verify the actual host proxy port before reusing this example. These build
+arguments affect dependency installation only; configure `OPEN_WEBSEARCH_*`
+separately when the running search daemon itself needs a proxy.
+
 Do not use a plain `podman run` as a Compose-equivalent secret test. Compose
 loads `.env` and passes variables such as `XIAOMI_TOKEN_PLAN_CN_API_KEY`; a
 manual `podman run` only receives the environment values explicitly passed with
