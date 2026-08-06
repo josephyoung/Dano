@@ -5,7 +5,8 @@ runtime_root="${DANO_RUNTIME_DIR:-/opt/dano/runtime-data}"
 agent_dir="${PI_CODING_AGENT_DIR:-$runtime_root/.pi/agent}"
 export PI_CODING_AGENT_DIR="$agent_dir"
 runtime_defaults_dir="${DANO_RUNTIME_DEFAULTS_DIR:-/app/deploy/runtime-defaults}"
-pi_package_seed_dir="${DANO_PI_PACKAGE_SEED_DIR:-/app/pi-agent-seed}"
+skill_seed_dir="${DANO_SKILL_SEED_DIR:-/app/open-websearch-skill-seed/.agents/skills}"
+agent_skills_dir="${DANO_SKILLS_DIR:-$agent_dir/skills}"
 entrypoint_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 npm_registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-${DANO_DEFAULT_NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}}}"
 
@@ -49,9 +50,9 @@ fi
 
 copy_default_if_missing "settings.json"
 copy_default_if_missing "heimdall.json"
-node "$entrypoint_dir/activate-pi-package-seed.mjs" \
-  "$pi_package_seed_dir" \
-  "$agent_dir"
+node "$entrypoint_dir/activate-skill-seed.mjs" \
+  "$skill_seed_dir" \
+  "$agent_skills_dir"
 
 run_with_open_websearch() {
   open_websearch_host="${OPEN_WEBSEARCH_HOST:-127.0.0.1}"

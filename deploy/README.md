@@ -54,10 +54,13 @@ volumes as part of a site release.
 - The runtime root is `${DANO_RUNTIME_DIR:-/opt/dano/runtime-data}`.
 - The Pi agent config directory is
   `${PI_CODING_AGENT_DIR:-$DANO_RUNTIME_DIR/.pi/agent}`.
-- Runtime skills stay under `/opt/dano/runtime-data/.agents/skills`.
-- The image globally installs the pinned `open-websearch` CLI and uses Pi's own
-  package installer to seed the matching `open-websearch` skill under
-  `/app/pi-agent-seed` during the image build.
+- Deployment-managed runtime skills stay under
+  `/opt/dano/runtime-data/.agents/skills`.
+- The image activates `open-websearch` under Pi's native global skill directory
+  `/opt/dano/runtime-data/.pi/agent/skills`.
+- The image globally installs the pinned `open-websearch` CLI and runs the
+  upstream `skills` installer during the image build to seed the matching skill
+  under `/app/open-websearch-skill-seed/.agents/skills`.
 
 `productName` in `dano.config.json` is the default assistant name used by the
 browser title, empty state, composer prompt, and the initial system-prompt
@@ -107,10 +110,11 @@ initialization additionally uses a no-clobber hard-link publication so a
 concurrent host-created file is preserved. The entrypoint does not copy defaults
 into a Runtime Workspace `.pi` directory.
 
-The entrypoint also activates image-seeded Pi packages in the persistent Agent
-Config Directory. It adds a missing package registration and links the matching
-image-owned package checkout without downloading anything at container startup.
-An operator-managed package with the same Pi package identity is preserved.
+The entrypoint copies a missing image-seeded skill into Pi's persistent global
+skill directory. Pi discovers it natively without a `settings.skills` entry, and
+the startup performs no download. Existing settings and an operator-managed
+skill with the same name are preserved. Heimdall exposes this directory to model
+tools as read-only while keeping the rest of the Agent Config Directory hidden.
 
 On every normal Dano app start, the entrypoint starts `open-websearch serve` on
 `127.0.0.1:3210`, waits for `open-websearch status` to succeed, and then starts

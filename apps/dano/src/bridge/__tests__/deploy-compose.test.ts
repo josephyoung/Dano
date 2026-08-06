@@ -650,8 +650,15 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
       "npm install --global open-websearch@2.1.11",
     );
     expect(dockerfileText).toContain(
-      "pi install git:github.com/Aas-ee/open-webSearch@v2.1.11",
+      "npx --yes skills@1.5.9 add",
     );
+    expect(dockerfileText).toContain(
+      "https://github.com/Aas-ee/open-webSearch/tree/v2.1.11",
+    );
+    expect(dockerfileText).toContain("--skill open-websearch");
+    expect(dockerfileText).toContain("--agent universal");
+    expect(dockerfileText).toContain("--copy");
+    expect(dockerfileText).not.toContain("pi install");
   });
 
   it("keeps local package stores out of the Docker build context", () => {
@@ -1089,7 +1096,7 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
         DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
         DANO_RUNTIME_DIR: runtimeDir,
         DANO_PRODUCT_NAME: "测试助手",
-        DANO_PI_PACKAGE_SEED_DIR: join(cwd, "missing-seed"),
+        DANO_SKILL_SEED_DIR: join(cwd, "missing-seed"),
         DANO_TEST_DAEMON_STARTED: daemonStarted,
         DANO_TEST_DAEMON_STOPPED: daemonStopped,
         DANO_TEST_APP_STARTED: appStarted,
