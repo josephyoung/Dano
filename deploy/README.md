@@ -386,17 +386,29 @@ explicitly. The container cannot reach the host proxy through `127.0.0.1`; use
 proxy path:
 
 ```bash
-podman build \
+podman build --http-proxy=false \
   --build-arg HTTP_PROXY=http://host.containers.internal:7897 \
   --build-arg HTTPS_PROXY=http://host.containers.internal:7897 \
-  --build-arg ALL_PROXY=socks5h://host.containers.internal:7897 \
+  --build-arg http_proxy=http://host.containers.internal:7897 \
+  --build-arg https_proxy=http://host.containers.internal:7897 \
   --build-arg NO_PROXY=localhost,127.0.0.1,::1,mirrors.cloud.tencent.com,mirrors.aliyun.com \
+  --build-arg no_proxy=localhost,127.0.0.1,::1,mirrors.cloud.tencent.com,mirrors.aliyun.com \
   -t dano-app:local .
 ```
 
-Verify the actual host proxy port before reusing this example. These build
-arguments affect dependency installation only; configure `OPEN_WEBSEARCH_*`
-separately when the running search daemon itself needs a proxy.
+Podman's automatic HTTP proxy injection can override explicit lowercase
+variables from the machine configuration. Keep `--http-proxy=false`, then pass
+both uppercase and lowercase arguments so package mirrors bypass the proxy while
+GitHub downloads use the verified host proxy port. These build arguments affect
+dependency installation only; configure `OPEN_WEBSEARCH_*` separately when the
+running search daemon itself needs a proxy.
+
+Interrupting the host `podman build` client does not always stop the matching
+Buildah RUN process inside the Podman machine. Before retrying an interrupted
+build, check the VM for abandoned `pnpm install` or `buildah-oci-runtime`
+processes; otherwise multiple installers can keep retrying in parallel and make
+the new build look hung. Clean only the abandoned build process, or restart the
+machine after confirming that no required containers are running.
 
 Do not use a plain `podman run` as a Compose-equivalent secret test. Compose
 loads `.env` and passes variables such as `XIAOMI_TOKEN_PLAN_CN_API_KEY`; a
