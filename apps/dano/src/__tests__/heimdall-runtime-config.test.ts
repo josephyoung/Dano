@@ -23,9 +23,7 @@ describe("Dano Heimdall runtime config", () => {
     const config = normalizeSandboxConfig({
       enabled: true,
       paths: {
-        "/opt": {
-          path: "/opt/dano/runtime-data/.agents/skills",
-        },
+        "/opt/dano/runtime-data/.pi/agent/skills": {},
         "/opt/dano/runtime-data/.pi": { mode: "deny" },
       },
     });
@@ -60,7 +58,7 @@ describe("Dano Heimdall runtime config", () => {
       runtimePi = join(runtimeDir, ".pi");
       agentDir = join(runtimePi, "agent");
       workspace = join(runtimeDir, "workspaces/session");
-      skillsDir = join(runtimeDir, ".agents/skills");
+      skillsDir = join(agentDir, "skills");
       syntheticDir = join(root, "synthetic");
       const home = join(root, "home/node");
 
@@ -70,6 +68,7 @@ describe("Dano Heimdall runtime config", () => {
       for (const file of ["SYSTEM.md", "settings.json", "heimdall.json"]) {
         writeFileSync(join(agentDir, file), `${file} secret\n`);
       }
+      writeFileSync(join(skillsDir, "SKILL.md"), "read-only skill\n");
 
       previousEnv = Object.fromEntries(
         [
@@ -120,7 +119,21 @@ describe("Dano Heimdall runtime config", () => {
       ).toBe("none");
     });
 
-    it("mounts only the writable workspace and read-only runtime skills under runtime data", () => {
+    it("allows skill reads while write and edit remain denied", () => {
+      const skillFile = join(skillsDir, "SKILL.md");
+
+      expect(getSandboxPathAccess(config, workspace, skillsDir).access).toBe(
+        "read",
+      );
+      expect(getSandboxPathAccess(config, workspace, skillFile).access).toBe(
+        "read",
+      );
+      expect(getSandboxPathAccess(config, workspace, skillFile).access).not.toBe(
+        "write",
+      );
+    });
+
+    it("mounts only the writable workspace and read-only global skills", () => {
       const serializedArgs = args.join("\0");
 
       expect(serializedArgs).toContain(
@@ -129,8 +142,16 @@ describe("Dano Heimdall runtime config", () => {
       expect(serializedArgs).toContain(
         ["--ro-bind", skillsDir, skillsDir].join("\0"),
       );
+      expect(serializedArgs).not.toContain(
+        ["--bind", skillsDir, skillsDir].join("\0"),
+      );
       expect(args).not.toContain("/proc");
-      expect(serializedArgs).not.toContain(runtimePi);
+      expect(serializedArgs).not.toContain(
+        ["--ro-bind", runtimePi, runtimePi].join("\0"),
+      );
+      expect(serializedArgs).not.toContain(
+        ["--bind", runtimePi, runtimePi].join("\0"),
+      );
     });
 
     it("keeps workspace Heimdall config protected after hiding runtime config", () => {

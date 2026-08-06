@@ -10,6 +10,7 @@
       "/opt": [
         { "path": "$DANO_RUNTIME_DIR/.agents/skills" }
       ],
+      "$PI_CODING_AGENT_DIR/skills": {},
       "$DANO_RUNTIME_DIR/.pi": { "mode": "deny" },
       "$PI_CODING_AGENT_DIR": { "mode": "deny" },
       "~/.pi": {}

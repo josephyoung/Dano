@@ -77,6 +77,9 @@ describe("Dano main", () => {
     expect(heimdall.sandbox?.paths?.["/opt"]).toEqual([
       { path: "$DANO_RUNTIME_DIR/.agents/skills" },
     ]);
+    expect(
+      heimdall.sandbox?.paths?.["$PI_CODING_AGENT_DIR/skills"],
+    ).toEqual({});
     expect(heimdall.sandbox?.paths?.["$DANO_RUNTIME_DIR/.pi"]).toEqual({
       mode: "deny",
     });

@@ -32,10 +32,11 @@ ENV DANO_DEFAULT_NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/
 ARG NPM_REGISTRY=
 ARG NPM_CONFIG_REGISTRY=
 RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
-  && npm config set registry "$registry"
+  && npm config set registry "$registry" \
+  && npm_config_registry="$registry" npm install --global open-websearch@2.1.11
 RUN sed -i 's|https\?://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g; s|https\?://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
   && apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates bubblewrap curl fd-find python3 ripgrep \
+  && apt-get install -y --no-install-recommends ca-certificates bubblewrap curl fd-find git python3 ripgrep \
   && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
   && chmod 4755 /usr/bin/bwrap \
   && rm -rf /var/lib/apt/lists/*
@@ -54,9 +55,24 @@ COPY --from=build /prod/dano/node_modules ./node_modules
 COPY --from=build /app/apps/dano/dist ./dist
 COPY --from=build /app/dano.config.json ./dano.config.json
 COPY deploy/runtime-defaults ./deploy/runtime-defaults
+COPY deploy/activate-skill-seed.mjs ./deploy/activate-skill-seed.mjs
 COPY deploy/docker-entrypoint.sh ./deploy/docker-entrypoint.sh
 COPY deploy/render-system-prompt.mjs ./deploy/render-system-prompt.mjs
+COPY apps/dano/runtime/skill-seed.mjs ./apps/dano/runtime/skill-seed.mjs
 COPY apps/dano/runtime/system-prompt.mjs ./apps/dano/runtime/system-prompt.mjs
+RUN mkdir -p /app/open-websearch-skill-seed \
+  && cd /app/open-websearch-skill-seed \
+  && registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
+  && npm_config_registry="$registry" \
+  GIT_TERMINAL_PROMPT=0 \
+  DISABLE_TELEMETRY=1 \
+  npx --yes skills@1.5.9 add \
+    https://github.com/Aas-ee/open-webSearch/tree/v2.1.11 \
+    --skill open-websearch \
+    --agent universal \
+    --copy \
+    --yes \
+  && test -f .agents/skills/open-websearch/SKILL.md
 RUN chmod +x ./deploy/docker-entrypoint.sh \
   && mkdir -p /opt/dano/runtime-data \
   && chown -R node:node /opt/dano /home/node

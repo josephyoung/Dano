@@ -54,7 +54,13 @@ volumes as part of a site release.
 - The runtime root is `${DANO_RUNTIME_DIR:-/opt/dano/runtime-data}`.
 - The Pi agent config directory is
   `${PI_CODING_AGENT_DIR:-$DANO_RUNTIME_DIR/.pi/agent}`.
-- Runtime skills stay under `/opt/dano/runtime-data/.agents/skills`.
+- Deployment-managed runtime skills stay under
+  `/opt/dano/runtime-data/.agents/skills`.
+- The image activates `open-websearch` under Pi's native global skill directory
+  `/opt/dano/runtime-data/.pi/agent/skills`.
+- The image globally installs the pinned `open-websearch` CLI and runs the
+  upstream `skills` installer during the image build to seed the matching skill
+  under `/app/open-websearch-skill-seed/.agents/skills`.
 
 `productName` in `dano.config.json` is the default assistant name used by the
 browser title, empty state, composer prompt, and the initial system-prompt
@@ -103,6 +109,23 @@ temporary-file writes followed by atomic publication. Missing-file
 initialization additionally uses a no-clobber hard-link publication so a
 concurrent host-created file is preserved. The entrypoint does not copy defaults
 into a Runtime Workspace `.pi` directory.
+
+The entrypoint copies a missing image-seeded skill into Pi's persistent global
+skill directory. Pi discovers it natively without a `settings.skills` entry, and
+the startup performs no download. Existing settings and an operator-managed
+skill with the same name are preserved. Heimdall exposes this directory to model
+tools as read-only while keeping the rest of the Agent Config Directory hidden.
+
+On every normal Dano app start, the entrypoint starts `open-websearch serve` on
+`127.0.0.1:3210`, waits for `open-websearch status` to succeed, and then starts
+the Dano server. The daemon is not published by Compose. The app and daemon are
+one runtime lifecycle: app exit stops the daemon, while daemon exit stops the
+app so the container restart policy can recover both together.
+
+The default search engine is DuckDuckGo with `SEARCH_MODE=auto`. Deployment
+operators can set the `OPEN_WEBSEARCH_*` values documented in `.env.example` to
+restrict engines or configure an explicit runtime proxy. Package-install proxy
+or registry settings remain separate from these runtime network settings.
 
 ## Authenticated User Context
 
@@ -355,6 +378,41 @@ operation not permitted
 `podman info` can still work in that state because the remote socket is valid;
 the failure is in Compose's machine enumeration. Fix the lockfile permission or
 run Compose from a shell that can write Podman's machine state.
+
+On macOS, keep the shell that started the Podman machine alive until the build
+and Compose acceptance finish. Some local setups keep the API forwarding
+process attached to that shell; closing it mid-run can surface misleading
+overlay-storage errors on the next build.
+
+When GitHub access requires the host proxy, pass the proxy into the image build
+explicitly. The container cannot reach the host proxy through `127.0.0.1`; use
+`host.containers.internal` and keep the configured package mirrors out of the
+proxy path:
+
+```bash
+podman build --http-proxy=false \
+  --build-arg HTTP_PROXY=http://host.containers.internal:7897 \
+  --build-arg HTTPS_PROXY=http://host.containers.internal:7897 \
+  --build-arg http_proxy=http://host.containers.internal:7897 \
+  --build-arg https_proxy=http://host.containers.internal:7897 \
+  --build-arg NO_PROXY=localhost,127.0.0.1,::1,mirrors.cloud.tencent.com,mirrors.aliyun.com \
+  --build-arg no_proxy=localhost,127.0.0.1,::1,mirrors.cloud.tencent.com,mirrors.aliyun.com \
+  -t dano-app:local .
+```
+
+Podman's automatic HTTP proxy injection can override explicit lowercase
+variables from the machine configuration. Keep `--http-proxy=false`, then pass
+both uppercase and lowercase arguments so package mirrors bypass the proxy while
+GitHub downloads use the verified host proxy port. These build arguments affect
+dependency installation only; configure `OPEN_WEBSEARCH_*` separately when the
+running search daemon itself needs a proxy.
+
+Interrupting the host `podman build` client does not always stop the matching
+Buildah RUN process inside the Podman machine. Before retrying an interrupted
+build, check the VM for abandoned `pnpm install` or `buildah-oci-runtime`
+processes; otherwise multiple installers can keep retrying in parallel and make
+the new build look hung. Clean only the abandoned build process, or restart the
+machine after confirming that no required containers are running.
 
 Do not use a plain `podman run` as a Compose-equivalent secret test. Compose
 loads `.env` and passes variables such as `XIAOMI_TOKEN_PLAN_CN_API_KEY`; a
