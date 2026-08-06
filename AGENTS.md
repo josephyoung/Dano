@@ -72,10 +72,10 @@ PATH=/Users/joseph/.cache/codex-runtimes/codex-primary-runtime/dependencies/node
 
 - Use `pnpm run check` for type and Svelte diagnostics.
 - Use `pnpm test` for Vitest coverage.
-- Use `pnpm run test:browser` for the self-contained system Chrome browser acceptance suite when validating UI changes; browser tests remain separate from the fast Vitest suite. Deployment-dependent browser acceptance, such as `test:browser:demo-auth`, stays in its documented deploy workflow.
 - Use `pnpm run build` before validating the built server.
 - For UI changes, verify the rendered app in a browser against the relevant flow and capture a screenshot as validation evidence.
 - For browser validation, use the Codex in-app Browser against the relevant flow. Use another browser surface only when the user explicitly requests it or the in-app Browser cannot exercise the required flow.
+- Do not add or run repository scripts that launch system Chrome or Chromium headlessly for browser acceptance. Keep deterministic logic and component behavior in Vitest, and use the Codex in-app Browser for rendered interaction and visual evidence.
 - When browser validation temporarily changes the theme, record the initial theme before testing and restore it before handoff. Do not leave a test theme preference in the user's browser, including when the current UI does not expose the theme selector.
 - For Podman/deploy/runtime/Heimdall/bash/upload validation, `smoke:deploy` alone is not enough. Also verify in a browser: plain text chat, image upload with model read/description, and a model-triggered `bash ls` tool call.
 - If `podman ps` works but `podman compose` or `podman machine list` fails with `podman-machine-default.lock: operation not permitted` or `could not find a matching machine`, treat it as local Podman machine metadata being blocked by the sandbox, not a Dano bug. Re-run the same Compose command outside the sandbox/escalated instead of changing Dano code.
