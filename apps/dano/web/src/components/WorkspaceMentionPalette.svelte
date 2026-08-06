@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "../i18n";
   import type { WorkspaceMentionSuggestion } from "../utils/workspaceMentions";
+  import * as Command from "./ui/command";
 
   let {
     items = [] as readonly WorkspaceMentionSuggestion[],
@@ -77,41 +78,50 @@
   }
 </script>
 
-<div class="workspace-palette">
+<Command.Root
+  class="workspace-palette"
+  shouldFilter={false}
+  value={items[highlightedIndex]?.path ?? ""}
+>
   {#if loading}
     <div class="workspace-palette-empty">
       <span class="workspace-empty-text">{t("workspaceMentionPalette.indexing")}</span>
     </div>
   {:else if hasItems}
-    <ul bind:this={listRef} class="workspace-list">
+    <Command.List bind:ref={listRef} class="workspace-list">
       {#each items as item, idx (`${item.kind}:${item.path}`)}
-        <li
-          class="workspace-item"
-          class:highlighted={idx === highlightedIndex}
+        <Command.Item
+          class={`workspace-item${idx === highlightedIndex ? " highlighted" : ""}`}
+          value={`${item.kind}:${item.path}`}
+          showIndicator={false}
+          onSelect={() => onSelect(item)}
+          onpointermove={() => (highlightedIndex = idx)}
         >
           <button
             class="workspace-item-btn"
             type="button"
-            onclick={() => onSelect(item)}
-            onmouseenter={() => (highlightedIndex = idx)}
+            onclick={(event) => {
+              event.stopPropagation();
+              onSelect(item);
+            }}
           >
             <div class="workspace-copy">
               <span class="workspace-name">{item.label}</span>
               <span class="workspace-path">{item.description}</span>
             </div>
           </button>
-        </li>
+        </Command.Item>
       {/each}
-    </ul>
+    </Command.List>
   {:else}
     <div class="workspace-palette-empty">
       <span class="workspace-empty-text">{emptyText}</span>
     </div>
   {/if}
-</div>
+</Command.Root>
 
 <style>
-  .workspace-palette {
+  :global(.workspace-palette) {
     position: absolute;
     left: 0;
     right: 0;
@@ -126,17 +136,17 @@
     scrollbar-width: none;
   }
 
-  .workspace-palette::-webkit-scrollbar {
+  :global(.workspace-palette::-webkit-scrollbar) {
     display: none;
   }
 
-  .workspace-list {
+  :global(.workspace-list) {
     list-style: none;
     margin: 0;
     padding: 6px;
   }
 
-  .workspace-item {
+  :global(.workspace-item) {
     display: flex;
     align-items: center;
     min-height: 42px;
@@ -160,8 +170,8 @@
     text-align: left;
   }
 
-  .workspace-item:hover,
-  .workspace-item.highlighted {
+  :global(.workspace-item:hover),
+  :global(.workspace-item.highlighted) {
     background: var(--panel-2);
   }
 

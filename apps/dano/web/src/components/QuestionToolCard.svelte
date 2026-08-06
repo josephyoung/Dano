@@ -36,10 +36,10 @@
   import QuestionFieldLabel from "./QuestionFieldLabel.svelte";
   import QuestionRemoteCombobox from "./QuestionRemoteCombobox.svelte";
   import SubmittedAnswerValue from "./SubmittedAnswerValue.svelte";
-  import ChevronDown from "lucide-svelte/icons/chevron-down";
-  import Check from "lucide-svelte/icons/check";
-  import RefreshCw from "lucide-svelte/icons/refresh-cw";
-  import Sparkle from "lucide-svelte/icons/sparkle";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Check from "@lucide/svelte/icons/check";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Sparkle from "@lucide/svelte/icons/sparkle";
   import "./questionToolControls.css";
   import type { QuestionFocusChange } from "./questionFocus";
 

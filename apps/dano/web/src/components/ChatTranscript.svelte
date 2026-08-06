@@ -7,13 +7,13 @@
     RpcTranscriptContent,
     RpcTranscriptContentBlock,
   } from "@dano/types/protocol";
-  import ArrowDown from "lucide-svelte/icons/arrow-down";
-  import ChevronRight from "lucide-svelte/icons/chevron-right";
-  import Copy from "lucide-svelte/icons/copy";
-  import FileText from "lucide-svelte/icons/file-text";
-  import Pencil from "lucide-svelte/icons/pencil";
-  import Sparkle from "lucide-svelte/icons/sparkle";
-  import X from "lucide-svelte/icons/x";
+  import ArrowDown from "@lucide/svelte/icons/arrow-down";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import Copy from "@lucide/svelte/icons/copy";
+  import FileText from "@lucide/svelte/icons/file-text";
+  import Pencil from "@lucide/svelte/icons/pencil";
+  import Sparkle from "@lucide/svelte/icons/sparkle";
+  import X from "@lucide/svelte/icons/x";
   import { slide } from "svelte/transition";
   import {
     abortGeneration,

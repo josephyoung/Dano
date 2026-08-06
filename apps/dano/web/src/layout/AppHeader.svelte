@@ -1,9 +1,10 @@
 <script lang="ts">
-  import CircleUserRound from "lucide-svelte/icons/circle-user-round";
-  import Menu from "lucide-svelte/icons/menu";
-  import Palette from "lucide-svelte/icons/palette";
-  import SquarePen from "lucide-svelte/icons/square-pen";
+  import CircleUserRound from "@lucide/svelte/icons/circle-user-round";
+  import Menu from "@lucide/svelte/icons/menu";
+  import Palette from "@lucide/svelte/icons/palette";
+  import SquarePen from "@lucide/svelte/icons/square-pen";
   import type { BridgeUserSummary } from "@dano/types/protocol";
+  import { Button } from "../components/ui/button";
   import * as Popover from "../components/ui/popover";
   import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
   import { t } from "../i18n";
@@ -73,10 +74,10 @@
         collisionPadding={10}
         trapFocus={false}
       >
-        <button class="theme-menu-item" type="button" onclick={openTheme}>
+        <Button class="theme-menu-item" variant="ghost" type="button" onclick={openTheme}>
           <Palette size={16} aria-hidden="true" />
           <span>{t("appHeader.themeColor")}</span>
-        </button>
+        </Button>
         <div class="header-menu-separator" role="separator"></div>
         <div class="header-user-summary">
           {#if currentUser?.avatarUrl && currentUser.avatarUrl !== failedAvatarUrl}
@@ -99,8 +100,9 @@
         </div>
       </Popover.Content>
     </Popover.Root>
-    <button
+    <Button
       class={`connection-status ${statusMeta.className}`}
+      variant="ghost"
       type="button"
       title={title}
       onclick={() => {
@@ -109,12 +111,13 @@
     >
       <span class="status-dot" aria-hidden="true"></span>
       <span>{statusMeta.label}</span>
-    </button>
+    </Button>
   </div>
   <div class="header-trailing">
     {#if showNewSession}
-      <button
+      <Button
         class="new-session-button"
+        variant="outline"
         type="button"
         aria-label={t("appHeader.newSession")}
         title={t("appHeader.newSession")}
@@ -123,7 +126,7 @@
       >
         <SquarePen size={18} strokeWidth={2.5} aria-hidden="true" />
         <span>{t("appHeader.newSession")}</span>
-      </button>
+      </Button>
     {/if}
   </div>
 </header>
@@ -147,7 +150,7 @@
     z-index: 20;
   }
 
-  .new-session-button {
+  :global(.new-session-button) {
     box-sizing: border-box;
     display: inline-flex;
     align-items: center;
@@ -170,20 +173,20 @@
       transform 150ms ease;
   }
 
-  .new-session-button:hover:not(:disabled) {
+  :global(.new-session-button:hover:not(:disabled)) {
     background: var(--panel-2);
   }
 
-  .new-session-button:active:not(:disabled) {
+  :global(.new-session-button:active:not(:disabled)) {
     transform: scale(0.96);
   }
 
-  .new-session-button:focus-visible {
+  :global(.new-session-button:focus-visible) {
     outline: 2px solid var(--text-muted);
     outline-offset: 2px;
   }
 
-  .new-session-button:disabled {
+  :global(.new-session-button:disabled) {
     cursor: wait;
     opacity: 0.6;
   }
@@ -203,7 +206,7 @@
     flex: 0 0 auto;
   }
 
-  .connection-status {
+  :global(.connection-status) {
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -227,16 +230,16 @@
       transform 150ms ease;
   }
 
-  .connection-status:hover {
+  :global(.connection-status:hover) {
     background: color-mix(in srgb, var(--panel-2) 76%, transparent);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
 
-  .connection-status:active {
+  :global(.connection-status:active) {
     transform: scale(0.96);
   }
 
-  .connection-status:focus-visible,
+  :global(.connection-status:focus-visible),
   :global(.menu-button:focus-visible),
   :global(.theme-menu-item:focus-visible) {
     outline: 2px solid var(--accent);
@@ -360,17 +363,17 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
   }
 
-  .connection-status.connected .status-dot {
+  :global(.connection-status.connected) .status-dot {
     background: #16a34a;
     color: #16a34a;
   }
 
-  .connection-status.connecting .status-dot {
+  :global(.connection-status.connecting) .status-dot {
     background: #f59e0b;
     color: #f59e0b;
   }
 
-  .connection-status.disconnected .status-dot {
+  :global(.connection-status.disconnected) .status-dot {
     background: #dc2626;
     color: #dc2626;
   }
@@ -380,14 +383,14 @@
       margin: 10px 10px 0;
     }
 
-    .new-session-button {
+    :global(.new-session-button) {
       width: 40px;
       min-width: 40px;
       padding: 0;
       border-radius: 50%;
     }
 
-    .new-session-button span {
+    :global(.new-session-button) span {
       display: none;
     }
   }

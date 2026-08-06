@@ -1,10 +1,11 @@
 <script lang="ts">
-  import ChevronLeft from "lucide-svelte/icons/chevron-left";
-  import ChevronRight from "lucide-svelte/icons/chevron-right";
-  import X from "lucide-svelte/icons/x";
-  import { onMount } from "svelte";
+  import ChevronLeft from "@lucide/svelte/icons/chevron-left";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import X from "@lucide/svelte/icons/x";
   import { t } from "../i18n";
   import type { ImageContentBlock } from "../utils/transcript";
+  import { Button } from "./ui/button";
+  import * as Dialog from "./ui/dialog";
 
   let {
     open = false,
@@ -35,11 +36,6 @@
 
   function handleKeydown(event: KeyboardEvent) {
     if (!open) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-      return;
-    }
     if (!hasMultipleImages) return;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -52,34 +48,33 @@
     }
   }
 
-  $effect(() => {
-    if (typeof document === "undefined") return;
-    if (open) {
-      document.addEventListener("keydown", handleKeydown);
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.removeEventListener("keydown", handleKeydown);
-        document.body.style.removeProperty("overflow");
-      };
-    }
-  });
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && open) onClose();
+  }
 </script>
 
-{#if open && currentImage}
-  <div class="image-lightbox-shell">
-    <div class="image-lightbox-backdrop" role="button" tabindex="0" onclick={onClose} onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onClose()}></div>
+<svelte:window onkeydown={handleKeydown} />
+
+{#if currentImage}
+  <Dialog.Root {open} onOpenChange={handleOpenChange}>
+    <Dialog.Content
+      class="image-lightbox-shell"
+      aria-label={t("imageLightbox.previewLabel")}
+      showCloseButton={false}
+      overlayProps={{ class: "image-lightbox-backdrop" }}
+      onclick={onClose}
+    >
     <div
       class="image-lightbox-stage"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("imageLightbox.previewLabel")}
-      tabindex="-1"
+      role="presentation"
       onclick={onClose}
-      onkeydown={(e) => e.key === "Escape" && onClose()}
+      onkeydown={(event) => event.stopPropagation()}
     >
-      <button
+      <Button
         type="button"
         class="image-lightbox-close"
+        variant="ghost"
+        size="icon"
         aria-label={t("imageLightbox.close")}
         onclick={(event) => {
           event.stopPropagation();
@@ -87,12 +82,14 @@
         }}
       >
         <X aria-hidden="true" size={18} />
-      </button>
+      </Button>
 
       {#if hasMultipleImages}
-        <button
+        <Button
           type="button"
           class="image-lightbox-nav prev"
+          variant="ghost"
+          size="icon"
           aria-label={t("imageLightbox.previous")}
           onclick={(event) => {
             event.stopPropagation();
@@ -100,7 +97,7 @@
           }}
         >
           <ChevronLeft aria-hidden="true" size={18} />
-        </button>
+        </Button>
       {/if}
 
       <div class="image-lightbox-viewport">
@@ -116,9 +113,11 @@
       </div>
 
       {#if hasMultipleImages}
-        <button
+        <Button
           type="button"
           class="image-lightbox-nav next"
+          variant="ghost"
+          size="icon"
           aria-label={t("imageLightbox.next")}
           onclick={(event) => {
             event.stopPropagation();
@@ -126,7 +125,7 @@
           }}
         >
           <ChevronRight aria-hidden="true" size={18} />
-        </button>
+        </Button>
       {/if}
 
       <div
@@ -146,22 +145,35 @@
         {/if}
       </div>
     </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
 
 <style>
-  .image-lightbox-shell {
+  :global(.image-lightbox-shell) {
     position: fixed;
     inset: 0;
     z-index: 1600;
     display: grid;
     place-items: center;
     padding: 24px;
+    width: auto;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    box-shadow: none;
+    translate: none;
+    transform: none;
   }
 
-  .image-lightbox-backdrop {
-    position: absolute;
+  :global(.image-lightbox-backdrop) {
+    position: fixed;
     inset: 0;
+    z-index: 1599;
     background:
       radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 28%),
       rgba(5, 5, 8, 0.84);
@@ -261,8 +273,8 @@
     font-weight: 600;
   }
 
-  .image-lightbox-close,
-  .image-lightbox-nav {
+  :global(.image-lightbox-close),
+  :global(.image-lightbox-nav) {
     position: absolute;
     z-index: 2;
     display: inline-flex;
@@ -284,10 +296,10 @@
       box-shadow 0.16s ease;
   }
 
-  .image-lightbox-close:hover,
-  .image-lightbox-close:focus-visible,
-  .image-lightbox-nav:hover,
-  .image-lightbox-nav:focus-visible {
+  :global(.image-lightbox-close:hover),
+  :global(.image-lightbox-close:focus-visible),
+  :global(.image-lightbox-nav:hover),
+  :global(.image-lightbox-nav:focus-visible) {
     transform: translateY(-1px) scale(1.01);
     background: rgba(255, 255, 255, 0.14);
     border-color: rgba(255, 255, 255, 0.26);
@@ -295,26 +307,26 @@
     box-shadow: 0 14px 30px rgba(0, 0, 0, 0.2);
   }
 
-  .image-lightbox-close {
+  :global(.image-lightbox-close) {
     top: max(8px, env(safe-area-inset-top));
     right: max(8px, env(safe-area-inset-right));
   }
 
-  .image-lightbox-nav {
+  :global(.image-lightbox-nav) {
     top: 50%;
     transform: translateY(-50%);
   }
 
-  .image-lightbox-nav.prev {
+  :global(.image-lightbox-nav.prev) {
     left: max(8px, env(safe-area-inset-left));
   }
 
-  .image-lightbox-nav.next {
+  :global(.image-lightbox-nav.next) {
     right: max(8px, env(safe-area-inset-right));
   }
 
   @media (max-width: 900px) {
-    .image-lightbox-shell {
+    :global(.image-lightbox-shell) {
       padding: 12px;
     }
 
@@ -335,17 +347,17 @@
       border-radius: 14px;
     }
 
-    .image-lightbox-close,
-    .image-lightbox-nav {
+    :global(.image-lightbox-close),
+    :global(.image-lightbox-nav) {
       width: 42px;
       height: 42px;
     }
 
-    .image-lightbox-nav.prev {
+    :global(.image-lightbox-nav.prev) {
       left: 4px;
     }
 
-    .image-lightbox-nav.next {
+    :global(.image-lightbox-nav.next) {
       right: 4px;
     }
 

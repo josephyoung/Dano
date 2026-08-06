@@ -1,14 +1,15 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
-  import type { HTMLAttributes } from "svelte/elements";
+	import { cn, type WithElementRef } from "$lib/utils.js";
+	import type { HTMLAttributes } from "svelte/elements";
 
-  let {
-    class: className,
-    children,
-    ...restProps
-  }: HTMLAttributes<HTMLTableRowElement> & { children?: Snippet } = $props();
+	let {
+		ref = $bindable(null),
+		class: className,
+		children,
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLTableRowElement>> = $props();
 </script>
 
-<tr class={["ui-table-row", className]} data-slot="table-row" {...restProps}>
-  {@render children?.()}
+<tr bind:this={ref} data-slot="table-row" class={cn("ui-table-row border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted", className)} {...restProps}>
+	{@render children?.()}
 </tr>

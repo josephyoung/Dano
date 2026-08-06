@@ -3,9 +3,9 @@
     ACCENT_COLOR_PRESET_KEYS,
     type AccentColorPreset,
   } from "@dano/types/protocol";
-  import Check from "lucide-svelte/icons/check";
-  import Palette from "lucide-svelte/icons/palette";
-  import X from "lucide-svelte/icons/x";
+  import Check from "@lucide/svelte/icons/check";
+  import Palette from "@lucide/svelte/icons/palette";
+  import X from "@lucide/svelte/icons/x";
   import * as Dialog from "./ui/dialog";
   import { t } from "../i18n";
   import { ACCENT_COLOR_PRESETS, DEFAULT_ACCENT_COLOR_PRESET } from "../themes";
@@ -34,17 +34,17 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-  <Dialog.Portal>
-    <Dialog.Overlay
-      class="theme-dialog-overlay"
-      style={themeStyle}
-      onclick={onClose}
-    />
-    <Dialog.Content
-      class="theme-dialog"
-      style={themeStyle}
-      aria-labelledby="theme-color-dialog-title"
-    >
+  <Dialog.Content
+    class="theme-dialog"
+    style={themeStyle}
+    aria-labelledby="theme-color-dialog-title"
+    showCloseButton={false}
+    overlayProps={{
+      class: "theme-dialog-overlay",
+      style: themeStyle,
+      onclick: onClose,
+    }}
+  >
       <header class="theme-dialog-top">
         <Dialog.Title
           id="theme-color-dialog-title"
@@ -86,8 +86,7 @@
           </button>
         {/each}
       </div>
-    </Dialog.Content>
-  </Dialog.Portal>
+  </Dialog.Content>
 </Dialog.Root>
 
 <style>
@@ -96,6 +95,7 @@
     inset: 0;
     z-index: var(--layer-dialog-overlay);
     background: var(--overlay);
+    backdrop-filter: none;
   }
 
   :global(.theme-dialog) {
@@ -107,8 +107,9 @@
     width: min(380px, calc(100vw - 40px));
     max-height: calc(100vh - 40px);
     padding: 14px;
+    gap: 0;
     overflow-y: auto;
-    transform: translate(-50%, -50%);
+    animation: none;
     border: 0;
     border-radius: 22px;
     background: var(--panel);

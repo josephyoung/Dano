@@ -1,5 +1,5 @@
 <script lang="ts">
-  import X from "lucide-svelte/icons/x";
+  import X from "@lucide/svelte/icons/x";
   import { t } from "../i18n";
 
   let { visible = false }: { visible?: boolean } = $props();
