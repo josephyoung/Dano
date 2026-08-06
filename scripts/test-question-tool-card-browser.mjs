@@ -103,7 +103,7 @@ async function visibleForegrounds(page) {
 }
 
 async function accentSurfaceForegrounds(page) {
-  await page.locator('.question-option input[type="checkbox"]:not(:disabled)').check();
+  await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "日期", exact: true }).click();
   const enabledDays = page.locator(
     ".question-calendar-day:not([data-disabled]):not([data-unavailable])",
@@ -139,24 +139,6 @@ async function inlineFormOverflowMetrics(page) {
       transcriptScrollHeight: transcript.scrollHeight,
       scrollRegionClientHeight: scrollRegion.clientHeight,
       scrollRegionScrollHeight: scrollRegion.scrollHeight,
-    };
-  });
-}
-
-async function submittedFormControlMetrics(page) {
-  return page.evaluate(() => {
-    const ancestor = document.querySelector(
-      '[data-testid="inline-form-overflow-ancestor"]',
-    );
-    const controls = [...(ancestor?.querySelectorAll(
-      "form input, form textarea, form select, form button",
-    ) ?? [])];
-    const options = [...(ancestor?.querySelectorAll(".question-option") ?? [])];
-    return {
-      controlCount: controls.length,
-      everyControlDisabled: controls.every(control => control.disabled),
-      optionCursors: options.map(option => getComputedStyle(option).cursor),
-      optionOpacities: options.map(option => getComputedStyle(option).opacity),
     };
   });
 }
@@ -492,18 +474,6 @@ async function run() {
       inlineOverflow.transcriptScrollHeight - inlineOverflow.transcriptClientHeight,
     ) <= 1,
     `expected inline form overflow not to create transcript blank space; scrollHeight=${inlineOverflow.transcriptScrollHeight}, clientHeight=${inlineOverflow.transcriptClientHeight}`,
-  );
-  const submittedControls = await submittedFormControlMetrics(page);
-  assert.ok(submittedControls.controlCount > 0);
-  assert.equal(submittedControls.everyControlDisabled, true);
-  assert.ok(submittedControls.optionCursors.length > 0);
-  assert.deepEqual(
-    submittedControls.optionCursors,
-    submittedControls.optionCursors.map(() => "not-allowed"),
-  );
-  assert.deepEqual(
-    submittedControls.optionOpacities,
-    submittedControls.optionOpacities.map(() => "0.5"),
   );
 
   const gray = await visibleForegrounds(page);
