@@ -23,3 +23,11 @@ _Avoid_: Runtime Workspace, user home, project `.pi`
 **Runtime Defaults**:
 Source-controlled files used to initialize the Agent Config Directory only when the corresponding runtime file is missing. The system-prompt template is rendered with the deployment's effective product name. Ordinary starts preserve existing host-managed files; an explicit Release Build synchronizes the system prompt atomically before starting the new app image.
 _Avoid_: Runtime state, generated config
+
+**Pi Package Seed**:
+Image-owned Pi packages installed with `pi install` during the image build and activated into the persistent Agent Config Directory without runtime downloads. Existing operator-managed packages with the same identity take precedence.
+_Avoid_: Runtime package installation, copied skill source
+
+**Local Search Daemon**:
+The loopback-only `open-websearch` process started and supervised with the Dano app on every normal container start. It becomes ready before Dano starts and shares the container lifecycle without exposing a Compose port.
+_Avoid_: Sidecar, public search endpoint

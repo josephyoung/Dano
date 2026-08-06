@@ -536,6 +536,14 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
     expect(compose).toContain(
       "DANO_UPLOAD_DIR: /opt/dano/runtime-data/.dano/uploads",
     );
+    expect(compose).toContain("OPEN_WEBSEARCH_HOST: 127.0.0.1");
+    expect(compose).toContain("OPEN_WEBSEARCH_PORT: 3210");
+    expect(compose).toContain(
+      "DEFAULT_SEARCH_ENGINE: ${OPEN_WEBSEARCH_DEFAULT_SEARCH_ENGINE:-duckduckgo}",
+    );
+    expect(compose).toContain(
+      "USE_PROXY: ${OPEN_WEBSEARCH_USE_PROXY:-false}",
+    );
     expect(compose).toContain(
       "${DANO_RUNTIME_DIR:-/opt/dano/runtime-data}:/opt/dano/runtime-data",
     );
@@ -638,6 +646,12 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
 
     expect(dockerfileText).toMatch(/fd-find[^\n]*ripgrep/);
     expect(dockerfileText).toContain("/usr/local/bin/fd");
+    expect(dockerfileText).toContain(
+      "npm install --global open-websearch@2.1.11",
+    );
+    expect(dockerfileText).toContain(
+      "pi install git:github.com/Aas-ee/open-webSearch@v2.1.11",
+    );
   });
 
   it("keeps local package stores out of the Docker build context", () => {
@@ -1022,6 +1036,70 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
       "{\"guard\":true}\n",
     );
     expect(existsSync(join(workspaceDir, ".pi"))).toBe(false);
+  });
+
+  it("runs the local open-websearch daemon for the lifetime of the app", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "dano-open-websearch-entrypoint-"));
+    tempDirs.push(cwd);
+    const defaultsDir = join(cwd, "defaults");
+    const runtimeDir = join(cwd, "runtime-data");
+    const fakeBin = join(cwd, "node-bin");
+    const appPath = join(cwd, "dist/server/main.js");
+    const daemonStarted = join(cwd, "daemon-started");
+    const daemonStopped = join(cwd, "daemon-stopped");
+    const appStarted = join(cwd, "app-started");
+
+    mkdirSync(defaultsDir, { recursive: true });
+    mkdirSync(join(cwd, "dist/server"), { recursive: true });
+    writeFileSync(join(defaultsDir, "SYSTEM.md"), "你是{产品名称}\n");
+    writeFileSync(join(defaultsDir, "settings.json"), "{}\n");
+    writeFileSync(join(defaultsDir, "heimdall.json"), "{}\n");
+    const path = nodeOnlyPath(cwd);
+    writeFileSync(
+      join(fakeBin, "open-websearch"),
+      `#!/bin/sh
+case "$1" in
+  serve)
+    : > "$DANO_TEST_DAEMON_STARTED"
+    trap ': > "$DANO_TEST_DAEMON_STOPPED"; exit 0' TERM INT
+    while :; do sleep 1; done
+    ;;
+  status)
+    test -f "$DANO_TEST_DAEMON_STARTED"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+`,
+    );
+    chmodSync(join(fakeBin, "open-websearch"), 0o755);
+    writeFileSync(
+      appPath,
+      `import { writeFileSync } from "node:fs";
+writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
+`,
+    );
+
+    execFileSync("sh", [entrypointFile], {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: path,
+        DANO_RUNTIME_DEFAULTS_DIR: defaultsDir,
+        DANO_RUNTIME_DIR: runtimeDir,
+        DANO_PRODUCT_NAME: "测试助手",
+        DANO_PI_PACKAGE_SEED_DIR: join(cwd, "missing-seed"),
+        DANO_TEST_DAEMON_STARTED: daemonStarted,
+        DANO_TEST_DAEMON_STOPPED: daemonStopped,
+        DANO_TEST_APP_STARTED: appStarted,
+      },
+      timeout: 10_000,
+    });
+
+    expect(readFileSync(appStarted, "utf8")).toBe("started");
+    expect(existsSync(daemonStarted)).toBe(true);
+    expect(existsSync(daemonStopped)).toBe(true);
   });
 
   it("renders a missing system prompt from the configured product name", () => {

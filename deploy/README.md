@@ -55,6 +55,9 @@ volumes as part of a site release.
 - The Pi agent config directory is
   `${PI_CODING_AGENT_DIR:-$DANO_RUNTIME_DIR/.pi/agent}`.
 - Runtime skills stay under `/opt/dano/runtime-data/.agents/skills`.
+- The image globally installs the pinned `open-websearch` CLI and uses Pi's own
+  package installer to seed the matching `open-websearch` skill under
+  `/app/pi-agent-seed` during the image build.
 
 `productName` in `dano.config.json` is the default assistant name used by the
 browser title, empty state, composer prompt, and the initial system-prompt
@@ -103,6 +106,22 @@ temporary-file writes followed by atomic publication. Missing-file
 initialization additionally uses a no-clobber hard-link publication so a
 concurrent host-created file is preserved. The entrypoint does not copy defaults
 into a Runtime Workspace `.pi` directory.
+
+The entrypoint also activates image-seeded Pi packages in the persistent Agent
+Config Directory. It adds a missing package registration and links the matching
+image-owned package checkout without downloading anything at container startup.
+An operator-managed package with the same Pi package identity is preserved.
+
+On every normal Dano app start, the entrypoint starts `open-websearch serve` on
+`127.0.0.1:3210`, waits for `open-websearch status` to succeed, and then starts
+the Dano server. The daemon is not published by Compose. The app and daemon are
+one runtime lifecycle: app exit stops the daemon, while daemon exit stops the
+app so the container restart policy can recover both together.
+
+The default search engine is DuckDuckGo with `SEARCH_MODE=auto`. Deployment
+operators can set the `OPEN_WEBSEARCH_*` values documented in `.env.example` to
+restrict engines or configure an explicit runtime proxy. Package-install proxy
+or registry settings remain separate from these runtime network settings.
 
 ## Authenticated User Context
 
