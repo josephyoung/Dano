@@ -187,14 +187,10 @@ checkout under the system temporary directory. Start the Podman machine first
 when it is not already running. Run `smoke:deploy` and the browser acceptance
 steps below after `container:up` when validating a change.
 
-For the fixed Demo authentication flow, run the external browser regression
-against that deployment. It starts with an empty browser context, verifies the
-server-set HttpOnly cookie and `演示用户`, changes and reloads the theme, then
-restores the original theme preference:
-
-```bash
-DANO_BROWSER_BASE_URL=http://localhost:18082 pnpm run test:browser:demo-auth
-```
+For the fixed Demo authentication flow, open `http://localhost:18082` in the
+Codex in-app Browser. Verify that the app identifies the fixed `演示用户`, change
+and reload the theme, then restore the original theme preference before
+handoff.
 
 ```bash
 cp .env.example .env

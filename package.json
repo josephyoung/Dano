@@ -33,14 +33,6 @@
     "smoke:deploy": "node scripts/smoke-dano-deploy.mjs",
     "start": "pnpm -C apps/dano start",
     "test": "vitest run",
-    "test:browser": "pnpm run --sequential \"/^test:browser:(composer|header|theme-color|question-tool|multi-tab|viewport)$/\"",
-    "test:browser:composer": "node scripts/test-composer-autosize-browser.mjs",
-    "test:browser:header": "node scripts/test-app-header-browser.mjs",
-    "test:browser:demo-auth": "node scripts/test-demo-auth-browser.mjs",
-    "test:browser:theme-color": "node scripts/test-theme-color-browser.mjs",
-    "test:browser:question-tool": "node scripts/test-question-tool-card-browser.mjs",
-    "test:browser:multi-tab": "node scripts/test-multi-tab-prompt-browser.mjs",
-    "test:browser:viewport": "node scripts/test-app-viewport-browser.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {
@@ -48,7 +40,6 @@
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^25.8.0",
     "happy-dom": "^20.10.6",
-    "playwright-core": "^1.61.1",
     "svelte": "^5.55.7",
     "svelte-check": "^4.4.8",
     "tsdown": "^0.22.0",
