@@ -323,7 +323,7 @@
   .center-focus-overlay {
     position: absolute;
     inset: 0;
-    z-index: 20;
+    z-index: var(--layer-focus-overlay);
     opacity: 0;
     pointer-events: none;
     background: color-mix(in srgb, var(--panel) 58%, transparent);
@@ -356,7 +356,7 @@
     right: calc(24px + var(--right-rail-space, 0px));
     bottom: 24px;
     left: 24px;
-    z-index: 22;
+    z-index: var(--layer-focus-content);
     width: min(760px, calc(100vw - var(--right-rail-space, 0px) - 48px));
     max-height: calc(100dvh - 48px);
     height: fit-content;

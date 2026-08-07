@@ -1347,6 +1347,7 @@
       monospace;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     height: 100vh;
     height: 100dvh;
     width: 100vw;

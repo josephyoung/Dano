@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Select as SelectPrimitive } from "bits-ui";
 	import { cn, type WithoutChild } from "$lib/utils.js";
+	import { getFloatingLayer } from "../layer-context.js";
 	import type { WithoutChildrenOrChild } from "$lib/utils.js";
 	import SelectPortal from "./select-portal.svelte";
 	import SelectScrollDownButton from "./select-scroll-down-button.svelte";
@@ -18,6 +19,8 @@
 	}: WithoutChild<SelectPrimitive.ContentProps> & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof SelectPortal>>;
 	} = $props();
+
+	const layer = getFloatingLayer("popover");
 </script>
 
 <SelectPortal {...portalProps}>
@@ -27,10 +30,11 @@
 		{preventScroll}
 		data-slot="select-content"
 		class={cn(
-			"min-w-36 rounded-md bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 relative isolate z-50 overflow-x-hidden overflow-y-auto",
+			"min-w-36 rounded-md bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 relative isolate overflow-x-hidden overflow-y-auto",
 			className
 		)}
 		{...restProps}
+		data-dano-layer={layer}
 	>
 		<SelectScrollUpButton />
 		<SelectPrimitive.Viewport

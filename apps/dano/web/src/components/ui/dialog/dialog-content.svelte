@@ -6,6 +6,7 @@
 	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 	import * as Dialog from "./index.js";
 	import DialogPortal from "./dialog-portal.svelte";
+	import { getModalLayer } from "../layer-context.js";
 	import type { Snippet } from "svelte";
 	import type { ComponentProps } from "svelte";
 
@@ -25,18 +26,21 @@
 		showCloseButton?: boolean;
 		closeLabel?: string;
 	} = $props();
+
+	const layer = getModalLayer();
 </script>
 
 <DialogPortal {...portalProps}>
-	<Dialog.Overlay {...overlayProps} />
+	<Dialog.Overlay {...overlayProps} {layer} />
 	<DialogPrimitive.Content
 		bind:ref
 		data-slot="dialog-content"
 		class={cn(
-			"grid max-w-[calc(100%-2rem)] gap-6 rounded-xl bg-popover p-6 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 fixed top-1/2 left-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2 outline-none",
+			"grid max-w-[calc(100%-2rem)] gap-6 rounded-xl bg-popover p-6 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 fixed top-1/2 left-1/2 w-full -translate-x-1/2 -translate-y-1/2 outline-none",
 			className
 		)}
 		{...restProps}
+		data-dano-layer={layer}
 	>
 		{@render children?.()}
 		{#if showCloseButton}
