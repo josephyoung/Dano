@@ -1835,6 +1835,7 @@ export function applyCompactionEndEvent(
   payload: RpcCompactionEndEvent,
 ): void {
   setCompactionState(false);
+  if (!payload.willRetry) _isStreaming = false;
   if (
     payload.reason !== "manual" &&
     !payload.aborted &&
