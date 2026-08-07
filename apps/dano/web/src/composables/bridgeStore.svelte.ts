@@ -1497,12 +1497,13 @@ function replaceTranscript(
 
 function applyTranscriptPage(
   page: RpcTranscriptPage,
-  mode: "replace" | "prepend" = "replace",
+  mode: "replace" | "prepend" | "reconcile" = "replace",
 ) {
   const prevSp = _transcriptSessionPath;
   const normalized = page.messages.map((entry, idx) =>
     normalizeTranscriptEntry(entry, `snapshot:${idx}`),
   ) as TranscriptEntry[];
+  let preservedLoadedHistory = false;
 
   if (mode === "prepend") {
     const existingKeys = new Set<string | undefined>();
@@ -1516,6 +1517,27 @@ function applyTranscriptPage(
       ...merged,
       ...currentRawTranscriptEntries(),
     ] as TranscriptEntry[];
+  } else if (
+    mode === "reconcile" &&
+    prevSp === (page.sessionPath ?? null) &&
+    normalized.length > 0
+  ) {
+    const currentEntries = currentRawTranscriptEntries();
+    const firstIncomingKey = normalized[0]?.transcriptKey;
+    const overlapIndex = firstIncomingKey
+      ? currentEntries.findIndex(
+          entry => entry.transcriptKey === firstIncomingKey,
+        )
+      : -1;
+    if (overlapIndex >= 0) {
+      _rawTranscript = [
+        ...currentEntries.slice(0, overlapIndex),
+        ...normalized,
+      ] as TranscriptEntry[];
+      preservedLoadedHistory = overlapIndex > 0;
+    } else {
+      _rawTranscript = normalized;
+    }
   } else {
     _rawTranscript = normalized;
   }
@@ -1530,12 +1552,14 @@ function applyTranscriptPage(
     clearPromptPending();
   }
   _transcriptSessionPath = nsp;
-  _transcriptHasOlder = page.hasOlder;
-  _transcriptOldestCursor = page.oldestCursor ?? null;
+  if (!preservedLoadedHistory) {
+    _transcriptHasOlder = page.hasOlder;
+    _transcriptOldestCursor = page.oldestCursor ?? null;
+  }
   _transcriptNewestCursor = page.newestCursor ?? null;
   _transcriptInitialLoading = false;
   _transcriptPageLoading = false;
-  if (mode === "replace") reanchorMissingPendingTranscriptConfigEvent();
+  if (mode !== "prepend") reanchorMissingPendingTranscriptConfigEvent();
   reconcilePendingTranscriptConfigEvent();
 }
 
@@ -2618,7 +2642,12 @@ export function applyTranscriptSnapshotEvent(
   ) {
     return;
   }
-  if (Array.isArray(data.messages)) applyTranscriptPage(data, "replace");
+  if (Array.isArray(data.messages)) {
+    applyTranscriptPage(
+      data,
+      data.preserveLoadedHistory ? "reconcile" : "replace",
+    );
+  }
 }
 
 function handleEvent(payload: RpcBridgeEvent) {

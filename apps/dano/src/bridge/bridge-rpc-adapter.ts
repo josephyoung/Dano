@@ -5292,6 +5292,7 @@ export class BridgeRpcAdapter {
           if (!this.sessionRuntime.shouldHandleLiveSessionEvents()) return;
           this.sendTranscriptSnapshot(
             this.sessionRuntime.buildCurrentTranscriptPage(),
+            { preserveLoadedHistory: true },
           );
           this.sessionStatsPusher.queue(
             this.sessionRuntime.currentTranscriptSessionPath(),
@@ -5477,13 +5478,17 @@ export class BridgeRpcAdapter {
    * Transcript synchronization
    * ---------------------------------------------------------------------- */
 
-  private sendTranscriptSnapshot(page: RpcTranscriptPage): void {
+  private sendTranscriptSnapshot(
+    page: RpcTranscriptPage,
+    options?: { preserveLoadedHistory?: boolean },
+  ): void {
     const snapshot = this.transcriptProjector.buildSnapshotEvent(
       page,
       this.sessionRuntime.buildCurrentTranscriptMessages(),
     );
     this.sendEvent({
       ...snapshot,
+      ...options,
       messages: this.projectCurrentFormInteractions(snapshot.messages),
     });
   }
@@ -5666,6 +5671,7 @@ export class BridgeRpcAdapter {
     if (eventType === "session_compact") {
       this.sendTranscriptSnapshot(
         this.sessionRuntime.buildCurrentTranscriptPage(),
+        { preserveLoadedHistory: true },
       );
       this.sessionStatsPusher.queue(sessionPath);
       return;
@@ -5699,6 +5705,7 @@ export class BridgeRpcAdapter {
               ),
               detachedSession.sessionFile ?? null,
             ),
+            { preserveLoadedHistory: true },
           );
         }
         this.sessionStatsPusher.queue(sessionPath);
@@ -5713,6 +5720,7 @@ export class BridgeRpcAdapter {
       case "compaction_end":
         this.sendTranscriptSnapshot(
           this.sessionRuntime.buildCurrentTranscriptPage(),
+          { preserveLoadedHistory: true },
         );
         this.sessionStatsPusher.queue(sessionPath);
         return;

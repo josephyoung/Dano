@@ -37,7 +37,10 @@ Default Pi settings live in
   "defaultProvider": "xiaomi-token-plan-cn",
   "defaultModel": "mimo-v2.5",
   "defaultThinkingLevel": "high",
-  "defaultProjectTrust": "always"
+  "defaultProjectTrust": "always",
+  "compaction": {
+    "enabled": true
+  }
 }
 ```
 

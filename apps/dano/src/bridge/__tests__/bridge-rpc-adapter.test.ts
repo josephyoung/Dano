@@ -5643,6 +5643,7 @@ describe("BridgeRpcAdapter", () => {
           expect.objectContaining({
             payload: expect.objectContaining({
               type: "transcript_snapshot",
+              preserveLoadedHistory: true,
             }),
           }),
           expect.objectContaining({
@@ -5715,6 +5716,7 @@ describe("BridgeRpcAdapter", () => {
       );
       expect(sendCalls[0].payload).toMatchObject({
         type: "transcript_snapshot",
+        preserveLoadedHistory: true,
         messages: [
           expect.objectContaining({
             role: "user",
