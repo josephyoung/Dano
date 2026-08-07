@@ -366,6 +366,7 @@ let _isPromptPending = $state(false);
 let _compactingRequestCount = $state(0);
 let _remoteCompactionActive = $state(false);
 let _compactionReason = $state<RpcCompactionReason | null>(null);
+let _compactionLifecycleAuthoritative = false;
 let _queuedUserMessages = $state<RpcQueuedMessage[]>([]);
 let _sessionStats = $state<RpcSessionStats | null>(null);
 let _gitRepoState = $state<RpcGitRepoState | null>(null);
@@ -1629,6 +1630,14 @@ function applySessionSnapshotResponse(
   const prevSp = getDisplayedSessionPath();
   const prevWp = getWorkspaceEntriesContextKey();
 
+  if (
+    _liveSessionPath !== null &&
+    data.sessionPath &&
+    data.sessionPath !== _liveSessionPath
+  ) {
+    _compactionLifecycleAuthoritative = false;
+  }
+
   applySessionTranscriptPage(data.transcript);
   if (data.sessionPath) _liveSessionPath = data.sessionPath;
   if (Array.isArray(data.treeEntries)) {
@@ -1825,15 +1834,31 @@ function setCompactionState(
   _sessionState = { ..._sessionState, isCompacting: compacting };
 }
 
+function applySessionActivitySnapshot(
+  state: Pick<RpcSessionState, "isStreaming" | "isCompacting">,
+) {
+  if (_compactionLifecycleAuthoritative) {
+    setCompactionState(_remoteCompactionActive, _compactionReason);
+    if (_sessionState) {
+      _sessionState = { ..._sessionState, isStreaming: _isStreaming };
+    }
+    return;
+  }
+  _isStreaming = state.isStreaming;
+  setCompactionState(state.isCompacting);
+}
+
 export function applyCompactionStartEvent(
   payload: RpcCompactionStartEvent,
 ): void {
+  _compactionLifecycleAuthoritative = true;
   setCompactionState(true, payload.reason);
 }
 
 export function applyCompactionEndEvent(
   payload: RpcCompactionEndEvent,
 ): void {
+  _compactionLifecycleAuthoritative = true;
   setCompactionState(false);
   if (!payload.willRetry) _isStreaming = false;
   if (
@@ -2494,6 +2519,12 @@ function handleResponse(payload: RpcResponse) {
         if (data) {
           const prevSp = getDisplayedSessionPath();
           const prevWp = getWorkspaceEntriesContextKey();
+          if (
+            _liveSessionPath !== null &&
+            _liveSessionPath !== (data.sessionFile ?? null)
+          ) {
+            _compactionLifecycleAuthoritative = false;
+          }
           _liveSessionPath = data.sessionFile ?? null;
           const isBrowsingDifferent = Boolean(
             _activeTreeSessionPath &&
@@ -2515,9 +2546,8 @@ function handleResponse(payload: RpcResponse) {
           }
           updateCurrentModel(data.model);
           _currentThinkingLevel = normalizeThinkingLevel(data.thinkingLevel);
-          setSessionRunning(data.sessionFile ?? null, data.isStreaming);
-          _isStreaming = data.isStreaming;
-          setCompactionState(data.isCompacting);
+          applySessionActivitySnapshot(data);
+          setSessionRunning(data.sessionFile ?? null, _isStreaming);
           if (!_activeTreeSessionPath && data.sessionFile) {
             setActiveTreeSessionPath(data.sessionFile);
           }
@@ -2936,6 +2966,7 @@ function resetTransportState() {
   themeColorTransportRevision += 1;
   themeColorSaveQueue = Promise.resolve();
   _accentColorPreset = DEFAULT_ACCENT_COLOR_PRESET;
+  _compactionLifecycleAuthoritative = false;
   stopHeartbeatWatchdog();
   lastHeartbeatAt = 0;
   if (eventSource) {
@@ -2957,6 +2988,7 @@ function markDisconnected(reason = t("appHeader.connection.disconnected")) {
   clearPromptPending();
   _remoteCompactionActive = false;
   _compactionReason = null;
+  _compactionLifecycleAuthoritative = false;
   _reconnectCount++;
   _runningSessionPaths = [];
   _workspaceSessionLoading = {};

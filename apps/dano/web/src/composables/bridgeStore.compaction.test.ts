@@ -60,6 +60,41 @@ async function connectBridge() {
   return bridge;
 }
 
+function sendStateResponse(
+  events: FakeEventSource,
+  id: string,
+  {
+    isStreaming = false,
+    isCompacting = false,
+    sessionId = "session-1",
+  }: {
+    isStreaming?: boolean;
+    isCompacting?: boolean;
+    sessionId?: string;
+  } = {},
+) {
+  events.send({
+    type: "response",
+    payload: {
+      id,
+      type: "response",
+      command: "get_state",
+      success: true,
+      data: {
+        thinkingLevel: "off",
+        isStreaming,
+        isCompacting,
+        steeringMode: "all",
+        followUpMode: "all",
+        sessionId,
+        autoCompactionEnabled: true,
+        messageCount: 2,
+        pendingMessageCount: 0,
+      },
+    },
+  });
+}
+
 describe("bridge compaction lifecycle", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -96,7 +131,7 @@ describe("bridge compaction lifecycle", () => {
     expect(bridge.isCompacting).toBe(false);
     expect(bridge.compactionReason).toBeNull();
     expect(bridge.transcript.at(-1)?.errorMessage).toBe(
-      "上下文压缩失败，请重试；若仍失败，请新建对话。",
+      "请求处理失败，请重试；若仍失败，请新建对话。",
     );
     expect(JSON.stringify(bridge.transcript)).not.toContain("secret-123");
     expect(consoleError).toHaveBeenCalledWith(
@@ -105,7 +140,7 @@ describe("bridge compaction lifecycle", () => {
     );
   });
 
-  it("returns to idle when non-retrying compaction ends after a stale state response", async () => {
+  it("ignores stale streaming state once compaction lifecycle starts", async () => {
     const bridge = await connectBridge();
     const events = eventSources[0]!;
 
@@ -121,28 +156,12 @@ describe("bridge compaction lifecycle", () => {
       type: "event",
       payload: { type: "compaction_start", reason: "threshold" },
     });
-    events.send({
-      type: "response",
-      payload: {
-        id: "stale-state",
-        type: "response",
-        command: "get_state",
-        success: true,
-        data: {
-          thinkingLevel: "off",
-          isStreaming: true,
-          isCompacting: true,
-          steeringMode: "all",
-          followUpMode: "all",
-          sessionId: "session-1",
-          autoCompactionEnabled: true,
-          messageCount: 2,
-          pendingMessageCount: 0,
-        },
-      },
+    sendStateResponse(events, "stale-state", {
+      isStreaming: true,
+      isCompacting: true,
     });
 
-    expect(bridge.isStreaming).toBe(true);
+    expect(bridge.isStreaming).toBe(false);
     expect(bridge.isCompacting).toBe(true);
 
     events.send({
@@ -161,6 +180,45 @@ describe("bridge compaction lifecycle", () => {
     });
 
     expect(bridge.isCompacting).toBe(false);
+    expect(bridge.isStreaming).toBe(false);
+    bridge.disconnect();
+  });
+
+  it("keeps native lifecycle authoritative over stale state responses", async () => {
+    const bridge = await connectBridge();
+    const events = eventSources[0]!;
+
+    sendStateResponse(events, "initial-state");
+    events.send({
+      type: "event",
+      payload: { type: "compaction_start", reason: "overflow" },
+    });
+    sendStateResponse(events, "stale-idle-state");
+
+    expect(bridge.isCompacting).toBe(true);
+    expect(bridge.compactionReason).toBe("overflow");
+
+    events.send({
+      type: "event",
+      payload: {
+        type: "compaction_end",
+        reason: "overflow",
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "message-2",
+          tokensBefore: 6804,
+        },
+        aborted: false,
+        willRetry: false,
+      },
+    });
+    sendStateResponse(events, "stale-compacting-state", {
+      isStreaming: true,
+      isCompacting: true,
+    });
+
+    expect(bridge.isCompacting).toBe(false);
+    expect(bridge.compactionReason).toBeNull();
     expect(bridge.isStreaming).toBe(false);
     bridge.disconnect();
   });
