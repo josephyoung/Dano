@@ -40,6 +40,21 @@ describe("shadcn-svelte component boundary", () => {
     expect(css).toContain("@theme inline");
   });
 
+  it("keeps auxiliary component roots outside the application layout track", () => {
+    const app = readFileSync(join(danoDirectory, "web/src/App.svelte"), "utf8");
+
+    expect(app).toContain("grid-template-rows: minmax(0, 1fr);");
+  });
+
+  it("keeps the desktop single-line composer height aligned with compact layouts", () => {
+    const composer = readFileSync(
+      join(danoDirectory, "web/src/components/ComposerBar.svelte"),
+      "utf8",
+    );
+
+    expect(composer).toContain("padding: 10px 18px;");
+  });
+
   it("targets shared floating layers at the themed application shell", () => {
     const portalFiles = [
       "dialog/dialog-portal.svelte",

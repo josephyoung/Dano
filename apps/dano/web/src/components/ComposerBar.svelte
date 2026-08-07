@@ -637,7 +637,7 @@
     display: flex;
     align-items: center;
     gap: var(--composer-single-line-gap);
-    padding: 12px 18px;
+    padding: 10px 18px;
     border-radius: 30px;
     border: none;
     background: var(--panel);
