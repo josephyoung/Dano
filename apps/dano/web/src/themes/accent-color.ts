@@ -8,7 +8,7 @@ import {
 export const ACCENT_COLOR_PRESETS = Object.freeze({
   default: "#53b559",
   blue: "#7aa2f7",
-  gray: "#c4c4c4",
+  gray: "#737373",
   yellow: "#d79921",
   pink: "#eb6f92",
   purple: "#cba6f7",

@@ -112,10 +112,10 @@ describe("resolveAppThemeVars", () => {
       ACCENT_COLOR_PRESETS.gray,
     );
 
-    expect(vars["--accent"]).toBe("#c4c4c4");
-    expect(vars["--surface-active"]).toBe("rgba(196, 196, 196, 0.14)");
-    expect(vars["--focus-ring"]).toBe("rgba(196, 196, 196, 0.28)");
-    expect(vars["--selection-bg"]).toBe("rgba(196, 196, 196, 0.16)");
+    expect(vars["--accent"]).toBe("#737373");
+    expect(vars["--surface-active"]).toBe("rgba(115, 115, 115, 0.14)");
+    expect(vars["--focus-ring"]).toBe("rgba(115, 115, 115, 0.28)");
+    expect(vars["--selection-bg"]).toBe("rgba(115, 115, 115, 0.16)");
     expect(vars["--on-accent"]).toBe("#ffffff");
   });
 
