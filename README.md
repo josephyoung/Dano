@@ -29,20 +29,8 @@ Electron target.
 
 ## Model
 
-Default Pi settings live in
-[deploy/runtime-defaults/settings.json](deploy/runtime-defaults/settings.json):
-
-```json
-{
-  "defaultProvider": "xiaomi-token-plan-cn",
-  "defaultModel": "mimo-v2.5",
-  "defaultThinkingLevel": "high",
-  "defaultProjectTrust": "always",
-  "compaction": {
-    "enabled": true
-  }
-}
-```
+Default Pi settings are defined in
+[deploy/runtime-defaults/settings.json](deploy/runtime-defaults/settings.json).
 
 To switch model, edit that file and restart the server/container. The current
 headless web bridge treats `/model` as normal chat text.
