@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Issue #421 灰色主题着重色原型</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #e8e8e6;
+        color: #1f2328;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        margin: 0;
+        padding: 32px 24px 112px;
+      }
+
+      button, input { font: inherit; }
+
+      .prototype-note {
+        width: min(1120px, 100%);
+        margin: 0 auto 18px;
+        color: #5f6368;
+        font-size: 13px;
+        font-weight: 650;
+        letter-spacing: .02em;
+        text-transform: uppercase;
+      }
+
+      .header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        width: min(1120px, 100%);
+        margin: 0 auto 24px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(26px, 4vw, 42px);
+        line-height: 1.08;
+        letter-spacing: -.035em;
+        text-wrap: balance;
+      }
+
+      .header p {
+        max-width: 700px;
+        margin: 0;
+        color: #5f6368;
+        font-size: 15px;
+        line-height: 1.6;
+        text-wrap: pretty;
+      }
+
+      .metric-summary {
+        flex: 0 0 auto;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 8px 28px rgb(0 0 0 / .08);
+        color: #5f6368;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .metric-summary strong {
+        display: block;
+        color: #1f2328;
+        font-size: 16px;
+      }
+
+      .comparison {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        width: min(1120px, 100%);
+        margin: 0 auto;
+      }
+
+      .surface {
+        --bg: #fbfbfb;
+        --panel: #fff;
+        --panel-2: #f7f7f5;
+        --border: #e4e5e2;
+        --border-strong: #d8d8d4;
+        --text: #1f2328;
+        --muted: #5f6368;
+        --accent: #737373;
+        --on-accent: #fff;
+        min-width: 0;
+        padding: 28px;
+        border-radius: 24px;
+        background: var(--bg);
+        color: var(--text);
+        box-shadow: 0 18px 50px rgb(0 0 0 / .1);
+      }
+
+      .surface.dark {
+        --bg: #0d1117;
+        --panel: #212121;
+        --panel-2: #21262d;
+        --border: #30363d;
+        --border-strong: #484f58;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        box-shadow: 0 18px 50px rgb(1 4 9 / .32);
+      }
+
+      .surface-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .surface-head h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .mode-tag {
+        padding: 5px 8px;
+        border-radius: 999px;
+        background: var(--panel-2);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .card {
+        padding: 22px;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: var(--panel);
+      }
+
+      .card h3 {
+        margin: 0 0 6px;
+        font-size: 18px;
+      }
+
+      .card > p {
+        margin: 0 0 20px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .field {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      .field-label {
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 42px;
+        padding: 0 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--text);
+      }
+
+      .option.selected {
+        border-color: var(--accent);
+        color: var(--accent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+
+      .option.disabled {
+        cursor: not-allowed;
+        opacity: .5;
+      }
+
+      .radio, .checkbox {
+        position: relative;
+        flex: 0 0 auto;
+        width: 17px;
+        height: 17px;
+        border: 2px solid var(--border-strong);
+      }
+
+      .radio { border-radius: 999px; }
+      .checkbox { border-radius: 4px; }
+
+      .selected .radio { border-color: var(--accent); }
+      .selected .radio::after {
+        position: absolute;
+        inset: 3px;
+        border-radius: 999px;
+        background: var(--accent);
+        content: "";
+      }
+
+      .selected .checkbox {
+        border-color: var(--accent);
+        background: var(--accent);
+      }
+
+      .selected .checkbox::after {
+        position: absolute;
+        top: 1px;
+        left: 4px;
+        width: 5px;
+        height: 9px;
+        border: solid var(--on-accent);
+        border-width: 0 2px 2px 0;
+        content: "";
+        transform: rotate(45deg);
+      }
+
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+      }
+
+      .button {
+        min-height: 40px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 10px;
+        font-weight: 650;
+      }
+
+      .button.secondary {
+        background: var(--panel-2);
+        color: var(--text);
+      }
+
+      .button.primary {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+
+      .legend {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        width: min(1120px, 100%);
+        margin: 18px auto 0;
+      }
+
+      .legend-item {
+        padding: 14px;
+        border-radius: 14px;
+        background: #fff;
+        box-shadow: 0 8px 24px rgb(0 0 0 / .06);
+      }
+
+      .legend-item span {
+        display: block;
+        margin-bottom: 4px;
+        color: #5f6368;
+        font-size: 12px;
+      }
+
+      .legend-item strong { font-size: 15px; }
+
+      .switcher {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        z-index: 10;
+        display: grid;
+        grid-template-columns: 42px minmax(190px, auto) 42px;
+        align-items: center;
+        padding: 6px;
+        border: 1px solid rgb(255 255 255 / .12);
+        border-radius: 999px;
+        background: #111318;
+        color: #fff;
+        box-shadow: 0 16px 42px rgb(0 0 0 / .3);
+        transform: translateX(-50%);
+      }
+
+      .switcher button {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: #fff;
+        cursor: pointer;
+        font-size: 18px;
+      }
+
+      .switcher button:hover { background: rgb(255 255 255 / .12); }
+
+      .variant-label {
+        padding-inline: 12px;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      @media (max-width: 780px) {
+        body { padding: 22px 14px 104px; }
+        .header { align-items: stretch; flex-direction: column; }
+        .metric-summary { align-self: flex-start; }
+        .comparison { grid-template-columns: 1fr; }
+        .surface { padding: 18px; border-radius: 18px; }
+        .legend { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="prototype-note">Throwaway prototype · Issue #421</div>
+    <header class="header">
+      <div>
+        <h1>灰色主题的表单着重色</h1>
+        <p>当前值 <code>#c4c4c4</code> 在浅色背景上只有 1.69:1，对比度接近禁用状态。用底部切换器或键盘 ← → 比较三个候选值。</p>
+      </div>
+      <div class="metric-summary">
+        当前候选
+        <strong id="candidateHex">#737373</strong>
+        <span id="candidateName">B · 平衡</span>
+      </div>
+    </header>
+
+    <main class="comparison">
+      <section class="surface light" aria-label="浅色模式表单">
+        <div class="surface-head">
+          <h2>实际浅色表面</h2>
+          <span class="mode-tag">#fbfbfb</span>
+        </div>
+        <div class="card">
+          <h3>出差申请</h3>
+          <p>请确认交通方式和随行资料。</p>
+          <div class="field">
+            <div class="field-label">交通方式</div>
+            <div class="options">
+              <div class="option selected"><span class="radio"></span>高铁</div>
+              <div class="option"><span class="radio"></span>飞机</div>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">随行资料</div>
+            <div class="options">
+              <div class="option selected"><span class="checkbox"></span>会议资料</div>
+              <div class="option disabled"><span class="checkbox"></span>不可用选项</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="button secondary" type="button">取消</button>
+            <button class="button primary" type="button">确认提交</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface dark" aria-label="深色模式表单">
+        <div class="surface-head">
+          <h2>实际深色表面</h2>
+          <span class="mode-tag">#0d1117</span>
+        </div>
+        <div class="card">
+          <h3>出差申请</h3>
+          <p>请确认交通方式和随行资料。</p>
+          <div class="field">
+            <div class="field-label">交通方式</div>
+            <div class="options">
+              <div class="option selected"><span class="radio"></span>高铁</div>
+              <div class="option"><span class="radio"></span>飞机</div>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">随行资料</div>
+            <div class="options">
+              <div class="option selected"><span class="checkbox"></span>会议资料</div>
+              <div class="option disabled"><span class="checkbox"></span>不可用选项</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="button secondary" type="button">取消</button>
+            <button class="button primary" type="button">确认提交</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <section class="legend" aria-label="对比度数据">
+      <div class="legend-item"><span>浅色画布对比度</span><strong id="lightContrast">4.58:1</strong></div>
+      <div class="legend-item"><span>深色画布对比度</span><strong id="darkContrast">3.99:1</strong></div>
+      <div class="legend-item"><span>白色按钮文字对比度</span><strong id="whiteContrast">4.74:1</strong></div>
+    </section>
+
+    <nav class="switcher" aria-label="原型候选切换">
+      <button id="previous" type="button" aria-label="上一个候选">←</button>
+      <div class="variant-label" id="variantLabel">B · 平衡 #737373</div>
+      <button id="next" type="button" aria-label="下一个候选">→</button>
+    </nav>
+
+    <script>
+      const variants = {
+        A: { name: "柔和", accent: "#8a8a8a", light: "3.34:1", dark: "5.48:1", white: "3.45:1" },
+        B: { name: "平衡", accent: "#737373", light: "4.58:1", dark: "3.99:1", white: "4.74:1" },
+        C: { name: "强对比", accent: "#6b6b6b", light: "5.15:1", dark: "3.55:1", white: "5.33:1" },
+      };
+      const keys = Object.keys(variants);
+
+      function currentKey() {
+        const requested = new URLSearchParams(location.search).get("variant")?.toUpperCase();
+        return variants[requested] ? requested : "B";
+      }
+
+      function render() {
+        const key = currentKey();
+        const variant = variants[key];
+        document.querySelectorAll(".surface").forEach((surface) => surface.style.setProperty("--accent", variant.accent));
+        document.getElementById("candidateHex").textContent = variant.accent;
+        document.getElementById("candidateName").textContent = `${key} · ${variant.name}`;
+        document.getElementById("variantLabel").textContent = `${key} · ${variant.name} ${variant.accent}`;
+        document.getElementById("lightContrast").textContent = variant.light;
+        document.getElementById("darkContrast").textContent = variant.dark;
+        document.getElementById("whiteContrast").textContent = variant.white;
+      }
+
+      function move(delta) {
+        const index = keys.indexOf(currentKey());
+        const nextKey = keys[(index + delta + keys.length) % keys.length];
+        const url = new URL(location.href);
+        url.searchParams.set("variant", nextKey);
+        history.replaceState({}, "", url);
+        render();
+      }
+
+      document.getElementById("previous").addEventListener("click", () => move(-1));
+      document.getElementById("next").addEventListener("click", () => move(1));
+      addEventListener("keydown", (event) => {
+        if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+        if (event.key === "ArrowLeft") move(-1);
+        if (event.key === "ArrowRight") move(1);
+      });
+      addEventListener("popstate", render);
+      render();
+    </script>
+  </body>
+</html>
+
