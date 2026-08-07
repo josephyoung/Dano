@@ -56,8 +56,6 @@ import type {
   RpcAutoRetryStartEvent,
   RpcBridgeEvent,
   RpcCommand,
-  RpcCompactionEndEvent,
-  RpcCompactionStartEvent,
   RpcExtensionUIRequest,
   RpcExtensionUIResponse,
   RpcGitBranch,
@@ -496,35 +494,6 @@ function toRpcModelSelectEvent(event: {
   };
 }
 
-function toRpcCompactionStartEvent(
-  event: Extract<AgentSessionEvent, { type: "compaction_start" }>,
-): RpcCompactionStartEvent {
-  return {
-    type: "compaction_start",
-    reason: event.reason,
-  };
-}
-
-function toRpcCompactionEndEvent(
-  event: Extract<AgentSessionEvent, { type: "compaction_end" }>,
-): RpcCompactionEndEvent {
-  return {
-    type: "compaction_end",
-    reason: event.reason,
-    result: event.result
-      ? {
-          summary: event.result.summary,
-          firstKeptEntryId: event.result.firstKeptEntryId,
-          tokensBefore: event.result.tokensBefore,
-          details: event.result.details,
-        }
-      : null,
-    aborted: event.aborted,
-    willRetry: event.willRetry,
-    errorMessage: event.errorMessage,
-  };
-}
-
 interface SessionTreeNodeLike {
   entry: SessionEntry;
   children: SessionTreeNodeLike[];
@@ -553,7 +522,7 @@ interface TreeEntryPresentation {
   isToolOnlyAssistant: boolean;
 }
 
-const TREE_HARD_HIDDEN_ENTRY_TYPES = new Set(["label"]);
+const TREE_HARD_HIDDEN_ENTRY_TYPES = new Set(["label", "compaction"]);
 const TREE_SETTINGS_ENTRY_TYPES = new Set([
   "custom",
   "model_change",
@@ -2058,20 +2027,7 @@ function transcriptMessageFromSessionEntry(
 
   switch (entry.type) {
     case "compaction":
-      return {
-        transcriptKey: id ?? fallbackKey,
-        id,
-        role: "system",
-        timestamp,
-        content: [
-          {
-            type: "compaction",
-            summary: entry.summary,
-            tokensBefore: entry.tokensBefore,
-            firstKeptEntryId: entry.firstKeptEntryId,
-          },
-        ],
-      };
+      return null;
     case "branch_summary":
       return {
         transcriptKey: id ?? fallbackKey,
@@ -5753,13 +5709,11 @@ export class BridgeRpcAdapter {
         }
         return;
       case "compaction_start":
-        this.sendEvent(toRpcCompactionStartEvent(event));
         return;
       case "compaction_end":
         this.sendTranscriptSnapshot(
           this.sessionRuntime.buildCurrentTranscriptPage(),
         );
-        this.sendEvent(toRpcCompactionEndEvent(event));
         this.sessionStatsPusher.queue(sessionPath);
         return;
       default:

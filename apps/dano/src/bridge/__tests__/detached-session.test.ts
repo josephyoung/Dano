@@ -136,9 +136,11 @@ describe("detached-session", () => {
     const writeToolDefinition = { name: "write" };
     const configuredAskUserQuestionTool = { name: "configured-question" };
     let sessionEventHandler: ((event: any) => void) | undefined;
+    const setAutoCompactionEnabled = vi.fn();
     const sessionResult = {
       session: {
         sessionId: "session-123",
+        setAutoCompactionEnabled,
         abort: vi.fn().mockResolvedValue(undefined),
         subscribe: vi.fn((handler: (event: any) => void) => {
           sessionEventHandler = handler;
@@ -202,6 +204,7 @@ describe("detached-session", () => {
     });
     expect(result.runtime.session).toBe(sessionResult.session);
     expect(result.disposeDanoLlmResilience).toEqual(expect.any(Function));
+    expect(setAutoCompactionEnabled).toHaveBeenCalledWith(true);
 
     const overrideCallCount = applyOverrides.mock.calls.length;
     sessionEventHandler?.({
@@ -246,4 +249,57 @@ describe("detached-session", () => {
     expect(sessionResult.session.abort).not.toHaveBeenCalled();
   });
 
+  it("enables auto compaction for initial and replacement runtime sessions", async () => {
+    const services = {
+      settingsManager: {
+        getImageAutoResize: vi.fn().mockReturnValue(false),
+        getRetryEnabled: vi.fn().mockReturnValue(true),
+        applyOverrides: vi.fn(),
+      },
+    };
+    const initialAutoCompaction = vi.fn();
+    const replacementAutoCompaction = vi.fn();
+    const createSession = (
+      setAutoCompactionEnabled: ReturnType<typeof vi.fn>,
+    ) => ({
+      session: {
+        setAutoCompactionEnabled,
+        subscribe: vi.fn().mockReturnValue(() => {}),
+      },
+    });
+    const sessionManager = { getCwd: vi.fn().mockReturnValue(tmpDir) };
+    let runtimeFactory:
+      | ((options: object) => Promise<{ session: object }>)
+      | undefined;
+
+    createAgentSessionServicesMock.mockResolvedValue(services);
+    createReadToolDefinitionMock.mockReturnValue({ name: "read" });
+    createCurlToolMock.mockReturnValue({ name: "curl" });
+    createEditToolDefinitionMock.mockReturnValue({ name: "edit" });
+    createWriteToolDefinitionMock.mockReturnValue({ name: "write" });
+    createAgentSessionFromServicesMock
+      .mockResolvedValueOnce(createSession(initialAutoCompaction))
+      .mockResolvedValueOnce(createSession(replacementAutoCompaction));
+    createAgentSessionRuntimeMock.mockImplementation(
+      async (factory: typeof runtimeFactory, options: object) => {
+        runtimeFactory = factory;
+        const created = await factory?.(options);
+        return {
+          session: created?.session,
+          setBeforeSessionInvalidate: vi.fn(),
+        };
+      },
+    );
+
+    await createDetachedAgentSessionRuntime(tmpDir, sessionManager as never);
+    await runtimeFactory?.({
+      cwd: tmpDir,
+      agentDir: "/agent",
+      sessionManager,
+      sessionStartEvent: { type: "session_start", reason: "resume" },
+    });
+
+    expect(initialAutoCompaction).toHaveBeenCalledWith(true);
+    expect(replacementAutoCompaction).toHaveBeenCalledWith(true);
+  });
 });

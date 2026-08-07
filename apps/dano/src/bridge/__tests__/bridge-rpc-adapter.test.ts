@@ -3471,7 +3471,7 @@ describe("BridgeRpcAdapter", () => {
       expect(response.payload.data.hasOlder).toBe(true);
     });
 
-    it("includes compaction and model changes in transcript pages", async () => {
+    it("keeps compaction internal while preserving visible transcript entries", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-compact-"));
       const sessionManager = SessionManager.create(tmpDir, tmpDir);
       sessionManager.appendModelChange("openai", "gpt-5");
@@ -3533,18 +3533,10 @@ describe("BridgeRpcAdapter", () => {
           role: "user",
           content: "Summarize the repo",
         }),
-        expect.objectContaining({
-          role: "system",
-          content: [
-            {
-              type: "compaction",
-              summary: "Kept the repo summary and pending fixes.",
-              tokensBefore: 18800,
-              firstKeptEntryId,
-            },
-          ],
-        }),
       ]);
+      expect(JSON.stringify(response.payload.data)).not.toContain(
+        "Kept the repo summary and pending fixes.",
+      );
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
@@ -5589,7 +5581,7 @@ describe("BridgeRpcAdapter", () => {
       });
     });
 
-    it("forwards selected-session compaction lifecycle events", async () => {
+    it("keeps selected-session compaction lifecycle events internal", async () => {
       const tmpDir = fs.mkdtempSync(
         path.join(os.tmpdir(), "pi-web-compaction-events-"),
       );
@@ -5628,10 +5620,7 @@ describe("BridgeRpcAdapter", () => {
       let sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
         call => JSON.parse(call[0] as string),
       );
-      expect(sendCalls[0].payload).toEqual({
-        type: "compaction_start",
-        reason: "threshold",
-      });
+      expect(sendCalls).toEqual([]);
 
       (ws.send as ReturnType<typeof vi.fn>).mockClear();
 
@@ -5652,20 +5641,21 @@ describe("BridgeRpcAdapter", () => {
       expect(sendCalls).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: expect.objectContaining({ type: "transcript_snapshot" }),
+            payload: expect.objectContaining({
+              type: "transcript_snapshot",
+            }),
           }),
           expect.objectContaining({
-            payload: {
-              type: "compaction_end",
-              reason: "threshold",
-              result: null,
-              aborted: false,
-              willRetry: false,
-              errorMessage: "API quota exceeded",
-            },
+            payload: expect.objectContaining({ type: "session_stats" }),
           }),
         ]),
       );
+      expect(
+        sendCalls.some(call =>
+          ["compaction_start", "compaction_end"].includes(call.payload?.type),
+        ),
+      ).toBe(false);
+      expect(JSON.stringify(sendCalls)).not.toContain("API quota exceeded");
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
@@ -5678,6 +5668,11 @@ describe("BridgeRpcAdapter", () => {
       sessionManager.appendMessage({
         role: "user",
         content: "Initial prompt",
+        timestamp: Date.now(),
+      } as any);
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Initial response" }],
         timestamp: Date.now(),
       } as any);
       const firstKeptEntryId = sessionManager.getLeafId();
@@ -5720,20 +5715,20 @@ describe("BridgeRpcAdapter", () => {
       );
       expect(sendCalls[0].payload).toMatchObject({
         type: "transcript_snapshot",
-        messages: expect.arrayContaining([
+        messages: [
           expect.objectContaining({
-            role: "system",
-            content: [
-              {
-                type: "compaction",
-                summary: "Saved the active task before pruning history.",
-                tokensBefore: 22400,
-                firstKeptEntryId,
-              },
-            ],
+            role: "user",
+            content: "Initial prompt",
           }),
-        ]),
+          expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "Initial response" }],
+          }),
+        ],
       });
+      expect(JSON.stringify(sendCalls[0].payload)).not.toContain(
+        "Saved the active task before pruning history.",
+      );
       expect(sendCalls[1].payload).toMatchObject({ type: "session_stats" });
 
       fs.rmSync(tmpDir, { recursive: true, force: true });

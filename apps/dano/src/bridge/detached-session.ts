@@ -82,6 +82,7 @@ export async function createDetachedAgentSessionRuntime(
         options.askUserQuestionTool ?? askUserQuestionTool,
       ] as unknown as ToolDefinition[],
     });
+    result.session.setAutoCompactionEnabled(true);
     disposeActiveDanoLlmResilience = configureDanoLlmResilience(
       services.settingsManager,
       result.session,
