@@ -31,3 +31,9 @@
 		<TriangleAlertIcon class="size-4" />
 	{/snippet}
 </Sonner>
+
+<style>
+	:global(.toaster) {
+		z-index: var(--layer-notification);
+	}
+</style>

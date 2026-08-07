@@ -50,4 +50,14 @@
 		background: var(--bg, #0d1117);
 		color: var(--text, #e6edf3);
 	}
+	.app-shell {
+		/* Ordinary stacking contexts, from lowest to highest. Native :modal is above all of them. */
+		--layer-popover: 30;
+		--layer-dialog-overlay: 100;
+		--layer-dialog: 110;
+		--layer-tooltip: 120;
+		--layer-lightbox-overlay: 200;
+		--layer-lightbox: 210;
+		--layer-notification: 300;
+	}
 }

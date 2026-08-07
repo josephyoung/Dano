@@ -100,6 +100,5 @@
   gap={8}
   offset={{ top: 56, right: 16 }}
   mobileOffset={{ top: 56, right: 16, left: 16 }}
-  style="z-index: var(--layer-notification)"
   containerAriaLabel={t("notifications.type.info")}
 />

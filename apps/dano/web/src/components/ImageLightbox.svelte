@@ -59,6 +59,7 @@
   <Dialog.Root {open} onOpenChange={handleOpenChange}>
     <Dialog.Content
       class="image-lightbox-shell"
+      layer="lightbox"
       aria-label={t("imageLightbox.previewLabel")}
       showCloseButton={false}
       overlayProps={{ class: "image-lightbox-backdrop" }}
@@ -153,7 +154,6 @@
   :global(.image-lightbox-shell) {
     position: fixed;
     inset: 0;
-    z-index: 1600;
     display: grid;
     place-items: center;
     padding: 24px;
@@ -173,7 +173,6 @@
   :global(.image-lightbox-backdrop) {
     position: fixed;
     inset: 0;
-    z-index: 1599;
     background:
       radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 28%),
       rgba(5, 5, 8, 0.84);

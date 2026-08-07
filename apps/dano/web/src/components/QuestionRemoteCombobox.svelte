@@ -247,7 +247,6 @@
   }
 
   :global(.question-combobox-popover) {
-    z-index: 30;
     width: min(var(--bits-popover-anchor-width), calc(100vw - 24px));
     min-width: min(260px, calc(100vw - 24px));
     max-height: min(360px, var(--bits-popover-content-available-height));
