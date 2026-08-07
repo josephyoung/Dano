@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { translate } from "../../i18n/translate";
 
 const uiDirectory = fileURLToPath(new URL("./", import.meta.url));
 const componentsDirectory = fileURLToPath(new URL("../", import.meta.url));
@@ -54,5 +55,22 @@ describe("shadcn-svelte component boundary", () => {
       const source = readFileSync(join(uiDirectory, relativePath), "utf8");
       expect(source, relativePath).toContain('to = ".app-shell"');
     }
+  });
+
+  it("localizes the public close controls", () => {
+    const closeControlFiles = [
+      "dialog/dialog-content.svelte",
+      "dialog/dialog-footer.svelte",
+      "sheet/sheet-content.svelte",
+    ];
+
+    for (const relativePath of closeControlFiles) {
+      const source = readFileSync(join(uiDirectory, relativePath), "utf8");
+      expect(source, relativePath).toContain('t("common.close")');
+      expect(source, relativePath).not.toMatch(/>Close</);
+    }
+
+    expect(translate("common.close", { locale: "zh-CN" })).toBe("关闭");
+    expect(translate("common.close", { locale: "en-US" })).toBe("Close");
   });
 });

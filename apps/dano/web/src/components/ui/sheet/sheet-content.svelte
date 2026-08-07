@@ -6,6 +6,7 @@
 	import { Dialog as SheetPrimitive } from "bits-ui";
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from "$lib/components/ui/button/index.js";
+	import { t } from "$lib/i18n/index.js";
 	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 	import SheetOverlay from "./sheet-overlay.svelte";
 	import SheetPortal from "./sheet-portal.svelte";
@@ -17,6 +18,7 @@
 		class: className,
 		side = "right",
 		showCloseButton = true,
+		closeLabel = t("common.close"),
 		portalProps,
 		overlayProps,
 		children,
@@ -26,6 +28,7 @@
 		overlayProps?: ComponentProps<typeof SheetOverlay>;
 		side?: Side;
 		showCloseButton?: boolean;
+		closeLabel?: string;
 		children: Snippet;
 	} = $props();
 </script>
@@ -48,7 +51,7 @@
 				{#snippet child({ props })}
 					<Button variant="ghost" class="absolute top-4 right-4" size="icon-sm" {...props}>
 						<XIcon  />
-						<span class="sr-only">Close</span>
+						<span class="sr-only">{closeLabel}</span>
 					</Button>
 				{/snippet}
 			</SheetPrimitive.Close>

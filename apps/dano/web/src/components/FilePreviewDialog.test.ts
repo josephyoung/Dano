@@ -10,9 +10,17 @@ describe("FilePreviewDialog stacking", () => {
   });
 
   it("keeps the maximized preview in the browser modal layer", async () => {
+    const appShell = document.createElement("div");
+    appShell.className = "app-shell";
+    appShell.style.setProperty("--panel", "#123456");
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open preview";
     const isolatedContent = document.createElement("div");
     isolatedContent.style.isolation = "isolate";
-    document.body.append(isolatedContent);
+    appShell.append(trigger);
+    appShell.append(isolatedContent);
+    document.body.append(appShell);
+    trigger.focus();
     const onClose = vi.fn();
 
     const component = mount(FilePreviewDialog, {
@@ -37,6 +45,8 @@ describe("FilePreviewDialog stacking", () => {
       expect(shell).toBeInstanceOf(HTMLDialogElement);
       expect(shell?.open).toBe(true);
       expect(shell?.parentElement).toBe(isolatedContent);
+      expect(shell?.closest(".app-shell")).toBe(appShell);
+      expect(shell?.getAttribute("aria-label")).toBe("preview.png");
 
       const controls = [
         ["缩小", "lucide-zoom-out"],
@@ -95,5 +105,7 @@ describe("FilePreviewDialog stacking", () => {
     } finally {
       await unmount(component);
     }
+
+    expect(document.activeElement).toBe(trigger);
   });
 });

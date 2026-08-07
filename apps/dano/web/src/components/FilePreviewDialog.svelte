@@ -231,10 +231,19 @@
 
   $effect(() => {
     const shell = shellElement;
-    if (!preview || !shell) return;
+    if (!shell) return;
+    const restoreFocusElement =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     if (!shell.open) shell.showModal();
     return () => {
       if (shell.open) shell.close();
+      queueMicrotask(() => {
+        if (restoreFocusElement?.isConnected) {
+          restoreFocusElement.focus({ preventScroll: true });
+        }
+      });
     };
   });
 

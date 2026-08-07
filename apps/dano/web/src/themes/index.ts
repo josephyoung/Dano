@@ -137,6 +137,7 @@ export function resolveAppThemeVars(
     "--overlay": toRgba(shadowSource, mode === "dark" ? 0.78 : 0.22),
     "--backdrop": toRgba(shadowSource, mode === "dark" ? 0.52 : 0.12),
     "--layer-popover": "30",
+    "--layer-tooltip": "1000",
     "--layer-dialog-overlay": "1000",
     "--layer-dialog": "1001",
     "--layer-notification": "2000",

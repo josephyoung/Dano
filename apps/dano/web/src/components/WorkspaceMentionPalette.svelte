@@ -97,19 +97,10 @@
           onSelect={() => onSelect(item)}
           onpointermove={() => (highlightedIndex = idx)}
         >
-          <button
-            class="workspace-item-btn"
-            type="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              onSelect(item);
-            }}
-          >
-            <div class="workspace-copy">
-              <span class="workspace-name">{item.label}</span>
-              <span class="workspace-path">{item.description}</span>
-            </div>
-          </button>
+          <div class="workspace-copy">
+            <span class="workspace-name">{item.label}</span>
+            <span class="workspace-path">{item.description}</span>
+          </div>
         </Command.Item>
       {/each}
     </Command.List>
@@ -149,25 +140,16 @@
   :global(.workspace-item) {
     display: flex;
     align-items: center;
-    min-height: 42px;
-    padding: 0;
-    border-radius: 10px;
-    transition: background 0.1s ease;
-  }
-
-  .workspace-item-btn {
-    display: flex;
-    align-items: center;
     width: 100%;
     min-height: 42px;
     padding: 8px 12px;
-    border: none;
     border-radius: 10px;
     background: transparent;
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
+    transition: background 0.1s ease;
   }
 
   :global(.workspace-item:hover),

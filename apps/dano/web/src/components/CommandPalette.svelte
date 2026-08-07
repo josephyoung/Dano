@@ -95,21 +95,12 @@
           onSelect={() => onSelect(cmd.name)}
           onpointermove={() => (highlightedIndex = idx)}
         >
-          <button
-            class="command-item-btn"
-            type="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              onSelect(cmd.name);
-            }}
-          >
-            <div class="command-copy">
-              <span class="cmd-name">/{cmd.name}</span>
-              {#if cmd.description}
-                <span class="cmd-desc">{cmd.description}</span>
-              {/if}
-            </div>
-          </button>
+          <div class="command-copy">
+            <span class="cmd-name">/{cmd.name}</span>
+            {#if cmd.description}
+              <span class="cmd-desc">{cmd.description}</span>
+            {/if}
+          </div>
         </Command.Item>
       {/each}
     </Command.List>
@@ -171,25 +162,16 @@
   :global(.command-item) {
     display: flex;
     align-items: center;
-    min-height: 38px;
-    padding: 0;
-    border-radius: 10px;
-    transition: background 0.1s ease;
-  }
-
-  .command-item-btn {
-    display: flex;
-    align-items: center;
     width: 100%;
     min-height: 38px;
     padding: 8px 12px;
-    border: none;
     border-radius: 10px;
     background: transparent;
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
+    transition: background 0.1s ease;
   }
 
   :global(.command-item:hover),

@@ -17,6 +17,7 @@ describe("resolveAppThemeVars", () => {
     expect(layers.every(Number.isFinite)).toBe(true);
     expect(layers).toEqual([...layers].sort((a, b) => a - b));
     expect(new Set(layers).size).toBe(layers.length);
+    expect(vars["--layer-tooltip"]).toBe("1000");
   });
 
   it("does not emit a separate send button background token", () => {
