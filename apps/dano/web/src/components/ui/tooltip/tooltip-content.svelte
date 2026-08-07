@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Tooltip as TooltipPrimitive } from "bits-ui";
 	import { cn } from "$lib/utils.js";
+	import { getFloatingLayer } from "../layer-context.js";
 	import type { WithoutChildrenOrChild } from "$lib/utils.js";
 	import TooltipPortal from "./tooltip-portal.svelte";
 	import type { ComponentProps } from "svelte";
@@ -17,6 +18,8 @@
 	}: TooltipPrimitive.ContentProps & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof TooltipPortal>>;
 	} = $props();
+
+	const layer = getFloatingLayer("tooltip");
 </script>
 
 <TooltipPortal {...portalProps}>
@@ -31,6 +34,7 @@
 			className
 		)}
 		{...restProps}
+		data-dano-layer={layer}
 	>
 		{@render children?.()}
 	</TooltipPrimitive.Content>
@@ -38,7 +42,6 @@
 
 <style>
 	:global(.tooltip-content) {
-		z-index: var(--layer-tooltip);
 		max-width: min(420px, calc(100vw - 32px));
 		padding: 8px 10px;
 		border-radius: 8px;

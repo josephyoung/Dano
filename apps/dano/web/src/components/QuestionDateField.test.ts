@@ -40,7 +40,8 @@ describe("QuestionDateField", () => {
     expect(datePickerIndexSource).toContain('from "./date-picker-portal.svelte"');
     expect(datePickerContentSource).toContain("<Portal>");
     expect(datePickerPortalSource).toContain('to = ".app-shell"');
-    expect(datePickerContentSource).toContain("z-index: var(--layer-popover)");
+    expect(datePickerContentSource).toContain('getFloatingLayer("popover")');
+    expect(datePickerContentSource).toContain("data-dano-layer={layer}");
     expect(questionDateFieldSource).not.toMatch(
       /:global\(\.question-date-popover\)\s*\{[\s\S]*?z-index:/,
     );

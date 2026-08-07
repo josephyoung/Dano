@@ -41,10 +41,10 @@ describe("ImageLightbox", () => {
     try {
       expect(target.querySelector("[data-slot=dialog-overlay].image-lightbox-backdrop")).not.toBeNull();
       expect(target.querySelector("[data-slot=dialog-content].image-lightbox-shell")).not.toBeNull();
-      expect(target.querySelector("[data-slot=dialog-overlay]")?.getAttribute("data-layer")).toBe(
-        "lightbox",
+      expect(target.querySelector("[data-slot=dialog-overlay]")?.getAttribute("data-dano-layer")).toBe(
+        "lightbox-overlay",
       );
-      expect(target.querySelector("[data-slot=dialog-content]")?.getAttribute("data-layer")).toBe(
+      expect(target.querySelector("[data-slot=dialog-content]")?.getAttribute("data-dano-layer")).toBe(
         "lightbox",
       );
       expect(target.querySelector("img")?.getAttribute("alt")).toBe("First");

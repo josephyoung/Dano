@@ -60,12 +60,18 @@ describe("shadcn-svelte component boundary", () => {
   it("defines one ordered layer contract and applies it in shared wrappers", () => {
     const css = readFileSync(join(danoDirectory, "web/src/app.css"), "utf8");
     const layerNames = [
+      "focus-overlay",
+      "focus-content",
       "popover",
+      "tooltip",
       "dialog-overlay",
       "dialog",
-      "tooltip",
+      "dialog-popover",
+      "dialog-tooltip",
       "lightbox-overlay",
       "lightbox",
+      "lightbox-popover",
+      "lightbox-tooltip",
       "notification",
     ];
     const layers = layerNames.map(name => {
@@ -77,23 +83,33 @@ describe("shadcn-svelte component boundary", () => {
     expect(layers).toEqual([...layers].sort((a, b) => a - b));
     expect(new Set(layers).size).toBe(layers.length);
 
-    const wrapperLayers = new Map([
-      ["dialog/dialog-overlay.svelte", "--layer-dialog-overlay"],
-      ["dialog/dialog-content.svelte", "--layer-dialog"],
-      ["alert-dialog/alert-dialog-overlay.svelte", "--layer-dialog-overlay"],
-      ["alert-dialog/alert-dialog-content.svelte", "--layer-dialog"],
-      ["sheet/sheet-overlay.svelte", "--layer-dialog-overlay"],
-      ["sheet/sheet-content.svelte", "--layer-dialog"],
-      ["popover/popover-content.svelte", "--layer-popover"],
-      ["select/select-content.svelte", "--layer-popover"],
-      ["date-picker/date-picker-content.svelte", "--layer-popover"],
-      ["tooltip/tooltip-content.svelte", "--layer-tooltip"],
-      ["sonner/sonner.svelte", "--layer-notification"],
-    ]);
+    for (const name of layerNames.slice(2)) {
+      expect(css, name).toContain(`[data-dano-layer="${name}"]`);
+    }
 
-    for (const [relativePath, layer] of wrapperLayers) {
+    const mainContent = readFileSync(join(layoutDirectory, "AppMainContent.svelte"), "utf8");
+    expect(mainContent).toContain("z-index: var(--layer-focus-overlay)");
+    expect(mainContent).toContain("z-index: var(--layer-focus-content)");
+    expect(mainContent).not.toMatch(/\.center-focus-overlay\s*\{[^}]*z-index:\s*20/s);
+    expect(mainContent).not.toMatch(/\.center-focused-card\)\s*\{[^}]*z-index:\s*22/s);
+
+    const wrapperFiles = [
+      "dialog/dialog-overlay.svelte",
+      "dialog/dialog-content.svelte",
+      "alert-dialog/alert-dialog-overlay.svelte",
+      "alert-dialog/alert-dialog-content.svelte",
+      "sheet/sheet-overlay.svelte",
+      "sheet/sheet-content.svelte",
+      "popover/popover-content.svelte",
+      "select/select-content.svelte",
+      "date-picker/date-picker-content.svelte",
+      "tooltip/tooltip-content.svelte",
+      "sonner/sonner.svelte",
+    ];
+
+    for (const relativePath of wrapperFiles) {
       const source = readFileSync(join(uiDirectory, relativePath), "utf8");
-      expect(source, relativePath).toContain(layer);
+      expect(source, relativePath).toContain("data-dano-layer");
       expect(source, relativePath).not.toMatch(/(?:^|\s)z-(?:50|\[)/);
     }
 

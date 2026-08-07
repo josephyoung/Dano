@@ -44,6 +44,7 @@
 			className
 		)}
 		{...restProps}
+		data-dano-layer="dialog"
 	>
 		{@render children?.()}
 		{#if showCloseButton}
@@ -58,9 +59,3 @@
 		{/if}
 	</SheetPrimitive.Content>
 </SheetPortal>
-
-<style>
-	:global([data-slot="sheet-content"]) {
-		z-index: var(--layer-dialog);
-	}
-</style>

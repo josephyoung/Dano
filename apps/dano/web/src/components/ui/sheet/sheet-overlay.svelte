@@ -14,10 +14,5 @@
 	data-slot="sheet-overlay"
 	class={cn("bg-black/10 supports-backdrop-filter:backdrop-blur-xs fixed inset-0", className)}
 	{...restProps}
+	data-dano-layer="dialog-overlay"
 />
-
-<style>
-	:global([data-slot="sheet-overlay"]) {
-		z-index: var(--layer-dialog-overlay);
-	}
-</style>

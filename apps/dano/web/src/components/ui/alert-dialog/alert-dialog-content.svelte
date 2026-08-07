@@ -28,11 +28,6 @@
 			className
 		)}
 		{...restProps}
+		data-dano-layer="dialog"
 	/>
 </AlertDialogPortal>
-
-<style>
-	:global([data-slot="alert-dialog-content"]) {
-		z-index: var(--layer-dialog);
-	}
-</style>

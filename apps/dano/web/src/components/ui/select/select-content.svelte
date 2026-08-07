@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Select as SelectPrimitive } from "bits-ui";
 	import { cn, type WithoutChild } from "$lib/utils.js";
+	import { getFloatingLayer } from "../layer-context.js";
 	import type { WithoutChildrenOrChild } from "$lib/utils.js";
 	import SelectPortal from "./select-portal.svelte";
 	import SelectScrollDownButton from "./select-scroll-down-button.svelte";
@@ -18,6 +19,8 @@
 	}: WithoutChild<SelectPrimitive.ContentProps> & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof SelectPortal>>;
 	} = $props();
+
+	const layer = getFloatingLayer("popover");
 </script>
 
 <SelectPortal {...portalProps}>
@@ -31,6 +34,7 @@
 			className
 		)}
 		{...restProps}
+		data-dano-layer={layer}
 	>
 		<SelectScrollUpButton />
 		<SelectPrimitive.Viewport
@@ -43,9 +47,3 @@
 		<SelectScrollDownButton />
 	</SelectPrimitive.Content>
 </SelectPortal>
-
-<style>
-	:global([data-slot="select-content"]) {
-		z-index: var(--layer-popover);
-	}
-</style>

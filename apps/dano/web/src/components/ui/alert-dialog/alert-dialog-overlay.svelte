@@ -14,10 +14,5 @@
 	data-slot="alert-dialog-overlay"
 	class={cn("bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 fixed inset-0", className)}
 	{...restProps}
+	data-dano-layer="dialog-overlay"
 />
-
-<style>
-	:global([data-slot="alert-dialog-overlay"]) {
-		z-index: var(--layer-dialog-overlay);
-	}
-</style>

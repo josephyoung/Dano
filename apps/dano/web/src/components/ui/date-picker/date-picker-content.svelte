@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DatePicker as DatePickerPrimitive } from "bits-ui";
   import { cn } from "$lib/utils.js";
+  import { getFloatingLayer } from "../layer-context.js";
   import Portal from "./date-picker-portal.svelte";
 
   let {
@@ -9,6 +10,8 @@
     children,
     ...restProps
   }: DatePickerPrimitive.ContentProps = $props();
+
+  const layer = getFloatingLayer("popover");
 </script>
 
 <Portal>
@@ -17,13 +20,8 @@
     data-slot="date-picker-content"
     class={cn("date-picker-content", className)}
     {...restProps}
+    data-dano-layer={layer}
   >
     {@render children?.()}
   </DatePickerPrimitive.Content>
 </Portal>
-
-<style>
-  :global(.date-picker-content) {
-    z-index: var(--layer-popover);
-  }
-</style>

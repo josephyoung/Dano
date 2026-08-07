@@ -56,10 +56,9 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if currentImage}
-  <Dialog.Root {open} onOpenChange={handleOpenChange}>
+  <Dialog.Root {open} layer="lightbox" onOpenChange={handleOpenChange}>
     <Dialog.Content
       class="image-lightbox-shell"
-      layer="lightbox"
       aria-label={t("imageLightbox.previewLabel")}
       showCloseButton={false}
       overlayProps={{ class: "image-lightbox-backdrop" }}

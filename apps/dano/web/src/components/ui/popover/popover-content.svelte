@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Popover as PopoverPrimitive } from "bits-ui";
 	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
+	import { getFloatingLayer } from "../layer-context.js";
 	import PopoverPortal from "./popover-portal.svelte";
 	import type { ComponentProps } from "svelte";
 
@@ -14,6 +15,8 @@
 	}: PopoverPrimitive.ContentProps & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof PopoverPortal>>;
 	} = $props();
+
+	const layer = getFloatingLayer("popover");
 </script>
 
 <PopoverPortal {...portalProps}>
@@ -27,11 +30,6 @@
 			className
 		)}
 		{...restProps}
+		data-dano-layer={layer}
 	/>
 </PopoverPortal>
-
-<style>
-	:global([data-slot="popover-content"]) {
-		z-index: var(--layer-popover);
-	}
-</style>

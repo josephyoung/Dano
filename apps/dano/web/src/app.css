@@ -52,12 +52,52 @@
 	}
 	.app-shell {
 		/* Ordinary stacking contexts, from lowest to highest. Native :modal is above all of them. */
+		--layer-focus-overlay: 20;
+		--layer-focus-content: 22;
 		--layer-popover: 30;
+		--layer-tooltip: 40;
 		--layer-dialog-overlay: 100;
 		--layer-dialog: 110;
-		--layer-tooltip: 120;
+		--layer-dialog-popover: 120;
+		--layer-dialog-tooltip: 130;
 		--layer-lightbox-overlay: 200;
 		--layer-lightbox: 210;
+		--layer-lightbox-popover: 220;
+		--layer-lightbox-tooltip: 230;
 		--layer-notification: 300;
+	}
+
+	.app-shell [data-dano-layer="popover"] {
+		z-index: var(--layer-popover);
+	}
+	.app-shell [data-dano-layer="tooltip"] {
+		z-index: var(--layer-tooltip);
+	}
+	.app-shell [data-dano-layer="dialog-overlay"] {
+		z-index: var(--layer-dialog-overlay);
+	}
+	.app-shell [data-dano-layer="dialog"] {
+		z-index: var(--layer-dialog);
+	}
+	.app-shell [data-dano-layer="dialog-popover"] {
+		z-index: var(--layer-dialog-popover);
+	}
+	.app-shell [data-dano-layer="dialog-tooltip"] {
+		z-index: var(--layer-dialog-tooltip);
+	}
+	.app-shell [data-dano-layer="lightbox-overlay"] {
+		z-index: var(--layer-lightbox-overlay);
+	}
+	.app-shell [data-dano-layer="lightbox"] {
+		z-index: var(--layer-lightbox);
+	}
+	.app-shell [data-dano-layer="lightbox-popover"] {
+		z-index: var(--layer-lightbox-popover);
+	}
+	.app-shell [data-dano-layer="lightbox-tooltip"] {
+		z-index: var(--layer-lightbox-tooltip);
+	}
+	.app-shell [data-dano-layer="notification"] {
+		z-index: var(--layer-notification);
 	}
 }
