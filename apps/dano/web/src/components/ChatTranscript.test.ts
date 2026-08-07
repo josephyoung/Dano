@@ -93,6 +93,13 @@ describe("ChatTranscript completed Assistant Turn actions", () => {
       expect(
         actions[0]?.querySelector('button[aria-label="复制消息"]'),
       ).not.toBeNull();
+      expect(
+        actions[0]?.querySelector('button[aria-label="复制消息"]')?.hasAttribute("title"),
+      ).toBe(false);
+      expect(chatTranscriptSource).toContain(
+        '<Tooltip.Content side="bottom">{t("common.copy")}</Tooltip.Content>',
+      );
+      expect(chatTranscriptSource.match(/<Tooltip\.Content side="bottom">/g)).toHaveLength(3);
     } finally {
       await unmount(component);
       target.remove();
