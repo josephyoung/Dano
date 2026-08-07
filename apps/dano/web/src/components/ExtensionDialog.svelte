@@ -3,8 +3,12 @@
     RpcExtensionUIRequest,
     RpcExtensionUIResponse,
   } from "@dano/types/protocol";
-  import X from "lucide-svelte/icons/x";
+  import X from "@lucide/svelte/icons/x";
   import { t } from "../i18n";
+  import { Button } from "./ui/button";
+  import * as Dialog from "./ui/dialog";
+  import { Input } from "./ui/input";
+  import { Textarea } from "./ui/textarea";
 
   type DialogExtensionUIRequest = Extract<
     RpcExtensionUIRequest,
@@ -69,6 +73,10 @@
     editorValue = "";
   }
 
+  function handleOpenChange(open: boolean) {
+    if (!open && request) handleCancel();
+  }
+
   function initFromRequest() {
     if (!request) return;
     if (request.method === "input") inputValue = "";
@@ -86,16 +94,21 @@
 </script>
 
 {#if request}
-  <div class="dialog-overlay" role="button" tabindex="0" onclick={handleCancel} onkeydown={(e) => (e.key === "Enter" || e.key === " ") && handleCancel()}>
-    <div class="dialog-panel" role="dialog" aria-modal="true" aria-label={request.title} tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+  <Dialog.Root open onOpenChange={handleOpenChange}>
+    <Dialog.Content
+      class="dialog-panel"
+      aria-label={request.title}
+      showCloseButton={false}
+      overlayProps={{ class: "dialog-overlay" }}
+    >
       <div class="dialog-header">
         <div>
           <div class="dialog-kicker">{t("extensionDialog.kicker")}</div>
-          <h3 class="dialog-title">{request.title}</h3>
+          <Dialog.Title class="dialog-title" level={3}>{request.title}</Dialog.Title>
         </div>
-        <button class="dialog-close" aria-label={t("common.cancel")} onclick={handleCancel}>
+        <Button class="dialog-close" variant="ghost" size="icon-sm" aria-label={t("common.cancel")} onclick={handleCancel}>
           <X aria-hidden="true" size={16} />
-        </button>
+        </Button>
       </div>
 
       {#if request.method === "select"}
@@ -106,15 +119,16 @@
                 class="select-item"
                 class:selected={selectedIndex === i}
               >
-                <button
+                <Button
                   class="select-item-btn"
+                  variant="ghost"
                   type="button"
                   onclick={() => handleSelect(option)}
                   onmouseenter={() => (selectedIndex = i)}
                   onmouseleave={() => (selectedIndex = -1)}
                 >
                   {option}
-                </button>
+                </Button>
               </li>
             {/each}
           </ul>
@@ -123,61 +137,61 @@
         <div class="dialog-body">
           <p class="confirm-message">{request.message}</p>
           <div class="dialog-actions">
-            <button class="btn btn-cancel" onclick={() => handleConfirm(false)}>
+            <Button class="btn btn-cancel" variant="outline" onclick={() => handleConfirm(false)}>
               {t("common.cancel")}
-            </button>
-            <button class="btn btn-primary" onclick={() => handleConfirm(true)}>
+            </Button>
+            <Button class="btn btn-primary" onclick={() => handleConfirm(true)}>
               {t("common.confirm")}
-            </button>
+            </Button>
           </div>
         </div>
       {:else if request.method === "input"}
         <div class="dialog-body">
-          <input
+          <Input
             bind:value={inputValue}
             class="dialog-input"
             placeholder={request.placeholder ?? t("extensionDialog.inputPlaceholder")}
             onkeydown={(e) => e.key === "Enter" && handleInputSubmit()}
           />
           <div class="dialog-actions">
-            <button class="btn btn-cancel" onclick={handleCancel}>{t("common.cancel")}</button>
-            <button class="btn btn-primary" onclick={handleInputSubmit}>
+            <Button class="btn btn-cancel" variant="outline" onclick={handleCancel}>{t("common.cancel")}</Button>
+            <Button class="btn btn-primary" onclick={handleInputSubmit}>
               {t("common.submit")}
-            </button>
+            </Button>
           </div>
         </div>
       {:else if request.method === "editor"}
         <div class="dialog-body">
-          <textarea
+          <Textarea
             bind:value={editorValue}
             class="dialog-textarea"
-            rows="10"
+            rows={10}
             onkeydown={(e) =>
               (e.ctrlKey || e.metaKey) && e.key === "Enter" && handleEditorSubmit()}
-          ></textarea>
+          ></Textarea>
           <div class="dialog-hint">
             <kbd class="dialog-kbd">Ctrl+Enter</kbd> {t("extensionDialog.submitShortcutSuffix")}
           </div>
           <div class="dialog-actions">
-            <button class="btn btn-cancel" onclick={handleCancel}>{t("common.cancel")}</button>
-            <button class="btn btn-primary" onclick={handleEditorSubmit}>
+            <Button class="btn btn-cancel" variant="outline" onclick={handleCancel}>{t("common.cancel")}</Button>
+            <Button class="btn btn-primary" onclick={handleEditorSubmit}>
               {t("common.submit")}
-            </button>
+            </Button>
           </div>
         </div>
       {/if}
 
       {#if request.method === "select"}
         <div class="dialog-actions select-actions">
-          <button class="btn btn-cancel" onclick={handleCancel}>{t("common.cancel")}</button>
+          <Button class="btn btn-cancel" variant="outline" onclick={handleCancel}>{t("common.cancel")}</Button>
         </div>
       {/if}
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
 
 <style>
-  .dialog-overlay {
+  :global(.dialog-overlay) {
     position: fixed;
     inset: 0;
     z-index: 1000;
@@ -188,7 +202,7 @@
     backdrop-filter: blur(6px);
   }
 
-  .dialog-panel {
+  :global(.dialog-panel) {
     width: min(92vw, 520px);
     max-height: 80vh;
     max-height: 80dvh;
@@ -219,14 +233,14 @@
     color: var(--text-subtle);
   }
 
-  .dialog-title {
+  :global(.dialog-title) {
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
     color: var(--text);
   }
 
-  .dialog-close {
+  :global(.dialog-close) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -238,7 +252,7 @@
     padding: 4px;
   }
 
-  .dialog-close:hover {
+  :global(.dialog-close:hover) {
     color: var(--text);
   }
 
@@ -268,7 +282,7 @@
     list-style: none;
   }
 
-  .select-item-btn {
+  :global(.select-item-btn) {
     display: block;
     width: 100%;
     padding: 12px 14px;
@@ -295,8 +309,8 @@
     line-height: 1.6;
   }
 
-  .dialog-input,
-  .dialog-textarea {
+  :global(.dialog-input),
+  :global(.dialog-textarea) {
     width: 100%;
     padding: 12px 14px;
     border-radius: 12px;
@@ -308,16 +322,16 @@
     box-sizing: border-box;
   }
 
-  .dialog-input:focus,
-  .dialog-textarea:focus {
+  :global(.dialog-input:focus),
+  :global(.dialog-textarea:focus) {
     border-color: var(--border-strong);
   }
 
-  .dialog-input::placeholder {
+  :global(.dialog-input::placeholder) {
     color: var(--text-subtle);
   }
 
-  .dialog-textarea {
+  :global(.dialog-textarea) {
     font-family: var(--pi-font-mono);
     resize: vertical;
     margin-bottom: 6px;
@@ -353,7 +367,7 @@
     padding-top: 0;
   }
 
-  .btn {
+  :global(.btn) {
     height: 38px;
     padding: 0 16px;
     border-radius: 10px;
@@ -367,40 +381,40 @@
       border-color 0.15s ease;
   }
 
-  .btn-primary {
+  :global(.btn-primary) {
     background: var(--button-bg);
     color: var(--text);
   }
 
-  .btn-primary:hover {
+  :global(.btn-primary:hover) {
     background: var(--button-hover);
     border-color: var(--border-strong);
   }
 
-  .btn-cancel {
+  :global(.btn-cancel) {
     background: transparent;
     color: var(--text-muted);
   }
 
-  .btn-cancel:hover {
+  :global(.btn-cancel:hover) {
     background: var(--panel-2);
     color: var(--text);
   }
 
   @media (max-width: 900px) {
-    .dialog-panel {
+    :global(.dialog-panel) {
       width: min(95vw, 520px);
       max-height: 90vh;
       max-height: 90dvh;
     }
 
     .select-item,
-    .btn {
+    :global(.btn) {
       min-height: 44px;
     }
 
-    .dialog-input,
-    .dialog-textarea {
+    :global(.dialog-input),
+    :global(.dialog-textarea) {
       font-size: 16px;
     }
   }

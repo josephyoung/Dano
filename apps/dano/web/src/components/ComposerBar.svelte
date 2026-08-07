@@ -8,9 +8,9 @@
     RpcThinkingLevel,
     RpcWorkspaceEntry,
   } from "@dano/types/protocol";
-  import FileIcon from "lucide-svelte/icons/file";
-  import Pencil from "lucide-svelte/icons/pencil";
-  import X from "lucide-svelte/icons/x";
+  import FileIcon from "@lucide/svelte/icons/file";
+  import Pencil from "@lucide/svelte/icons/pencil";
+  import X from "@lucide/svelte/icons/x";
   import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
   import { t } from "../i18n";
   import { COMPOSER_ATTACHMENT_ACCEPT, MAX_COMPOSER_ATTACHMENT_BYTES, MAX_COMPOSER_ATTACHMENTS, formatAttachmentSize } from "../utils/attachments";

@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { RpcWorkspaceFile } from "@dano/types/protocol";
-  import X from "lucide-svelte/icons/x";
+  import X from "@lucide/svelte/icons/x";
   import FileViewerPanel from "../components/FileViewerPanel.svelte";
   import SessionTreeRail from "../components/SessionTreeRail.svelte";
+  import { Button } from "../components/ui/button";
+  import * as Sheet from "../components/ui/sheet";
   import type { TreeEntry } from "../composables/bridgeStore.svelte";
 
   type FileTab = {
@@ -14,6 +16,7 @@
   let {
     treeEntries = [] as readonly TreeEntry[],
     sidebarOpen = false,
+    compactLayout = false,
     sessionPath = null as string | null,
     hasTreeTab = false,
     activeTabId = "",
@@ -28,6 +31,7 @@
   }: {
     treeEntries?: readonly TreeEntry[];
     sidebarOpen?: boolean;
+    compactLayout?: boolean;
     sessionPath?: string | null;
     hasTreeTab?: boolean;
     activeTabId?: string;
@@ -55,7 +59,7 @@
   }
 </script>
 
-<aside class="right-rail" class:open={sidebarOpen}>
+{#snippet railContent()}
   <div class="rail-shell">
     <div class="rail-tabs" role="tablist" aria-label="Right sidebar panels">
       {#each tabs as tab (tab.id)}
@@ -63,9 +67,10 @@
           class="rail-tab-item"
           class:active={activeTabId === tab.id}
         >
-          <button
+          <Button
             id={`right-rail-tab-${tab.id}`}
             class="rail-tab"
+            variant="ghost"
             type="button"
             role="tab"
             aria-selected={activeTabId === tab.id}
@@ -78,18 +83,19 @@
             <span class="rail-tab-label">
               {isTreeTab(tab.id) ? "Tree" : fileTabLabel(tab.path)}
             </span>
-          </button>
+          </Button>
           {#if !isTreeTab(tab.id)}
-            <button
+            <Button
               type="button"
-              class="rail-tab-close"
-              class:active={activeTabId === tab.id}
+              class={`rail-tab-close${activeTabId === tab.id ? " active" : ""}`}
+              variant="ghost"
+              size="icon-xs"
               aria-label={`Close ${tab.path}`}
               title={`Close ${tab.path}`}
               onclick={() => onCloseFileTab(tab.id)}
             >
               <X class="rail-tab-close-icon" aria-hidden="true" size={12} />
-            </button>
+            </Button>
           {/if}
         </div>
       {/each}
@@ -125,11 +131,27 @@
       {/if}
     </div>
   </div>
-</aside>
-<div class="rail-backdrop" role="button" tabindex="0" onclick={() => onCloseSidebar()} onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onCloseSidebar()}></div>
+{/snippet}
+
+{#if compactLayout}
+  <Sheet.Root open={sidebarOpen} onOpenChange={(open) => !open && onCloseSidebar()}>
+    <Sheet.Content
+      class="right-rail open"
+      side="right"
+      showCloseButton={false}
+      overlayProps={{ class: "rail-backdrop" }}
+    >
+      {@render railContent()}
+    </Sheet.Content>
+  </Sheet.Root>
+{:else}
+  <aside class="right-rail" class:open={sidebarOpen}>
+    {@render railContent()}
+  </aside>
+{/if}
 
 <style>
-  .right-rail {
+  :global(.right-rail) {
     min-width: 0;
     height: 100%;
     background: var(--rail-bg);
@@ -185,7 +207,7 @@
     background: color-mix(in srgb, var(--panel-2) 92%, var(--rail-bg));
   }
 
-  .rail-tab {
+  :global(.rail-tab) {
     min-width: 0;
     height: 30px;
     display: inline-flex;
@@ -201,10 +223,10 @@
     transition: color 0.12s ease;
   }
 
-  .rail-tab:hover,
-  .rail-tab-close:hover,
-  .rail-tab-item.active .rail-tab,
-  .rail-tab-item.active .rail-tab-close {
+  :global(.rail-tab:hover),
+  :global(.rail-tab-close:hover),
+  .rail-tab-item.active :global(.rail-tab),
+  .rail-tab-item.active :global(.rail-tab-close) {
     color: var(--text);
   }
 
@@ -214,7 +236,7 @@
     line-height: 1;
   }
 
-  .rail-tab-close {
+  :global(.rail-tab-close) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -243,12 +265,12 @@
     overflow: hidden;
   }
 
-  .rail-backdrop {
+  :global(.rail-backdrop) {
     display: none;
   }
 
   @media (max-width: 900px) {
-    .right-rail {
+    :global(.right-rail) {
       position: absolute;
       top: 0;
       right: 0;
@@ -260,30 +282,26 @@
       z-index: 15;
     }
 
-    .right-rail.open {
+    :global(.right-rail.open) {
       transform: translateX(0);
       box-shadow: var(--shadow);
     }
 
-    .rail-backdrop {
+    :global(.rail-backdrop) {
       display: block;
       position: absolute;
       inset: 0;
       background: var(--backdrop);
       z-index: 14;
-      pointer-events: none;
-      opacity: 0;
+      pointer-events: auto;
+      opacity: 1;
       transition: opacity 0.2s ease;
     }
 
-    .right-rail.open ~ .rail-backdrop {
-      pointer-events: auto;
-      opacity: 1;
-    }
   }
 
   @media (max-width: 640px) {
-    .right-rail {
+    :global(.right-rail) {
       width: 100vw;
       border-left: none;
     }

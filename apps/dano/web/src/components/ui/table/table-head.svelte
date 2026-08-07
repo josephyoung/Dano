@@ -1,14 +1,15 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
-  import type { HTMLThAttributes } from "svelte/elements";
+	import { cn, type WithElementRef } from "$lib/utils.js";
+	import type { HTMLThAttributes } from "svelte/elements";
 
-  let {
-    class: className,
-    children,
-    ...restProps
-  }: HTMLThAttributes & { children?: Snippet } = $props();
+	let {
+		ref = $bindable(null),
+		class: className,
+		children,
+		...restProps
+	}: WithElementRef<HTMLThAttributes> = $props();
 </script>
 
-<th class={["ui-table-head", className]} data-slot="table-head" {...restProps}>
-  {@render children?.()}
+<th bind:this={ref} data-slot="table-head" class={cn("ui-table-head h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0", className)} {...restProps}>
+	{@render children?.()}
 </th>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { CalendarDate, Time, getLocalTimeZone, type DateValue } from "@internationalized/date";
-  import ChevronDown from "lucide-svelte/icons/chevron-down";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import { formatAskUserQuestionDateValue, isAskUserQuestionDateTimeFormat, parseAskUserQuestionDateValue } from "@dano/types/ask-user-question-date";
   import { t } from "../i18n";
   import { formatNativeDateInputValue, parseNativeDateInputValue } from "../utils/questionDateNative";

@@ -11,14 +11,14 @@ vi.mock("./MarkdownRenderer.svelte", () => ({
     payload.out += props.content;
   },
 }));
-vi.mock("lucide-svelte/icons/chevron-down", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/calendar", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/check", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/circle-check", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/list-checks", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/message-square-text", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/refresh-cw", () => ({ default: () => {} }));
-vi.mock("lucide-svelte/icons/sparkle", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/chevron-down", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/calendar", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/check", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/circle-check", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/list-checks", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/message-square-text", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/refresh-cw", () => ({ default: () => {} }));
+vi.mock("@lucide/svelte/icons/sparkle", () => ({ default: () => {} }));
 
 vi.stubGlobal("matchMedia", vi.fn(() => ({
   matches: true,

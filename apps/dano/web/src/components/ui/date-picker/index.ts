@@ -1,5 +1,6 @@
 import { DatePicker as DatePickerPrimitive } from "bits-ui";
 import Content from "./date-picker-content.svelte";
+import Portal from "./date-picker-portal.svelte";
 
 export const Calendar = DatePickerPrimitive.Calendar;
 export const Cell = DatePickerPrimitive.Cell;
@@ -16,4 +17,4 @@ export const NextButton = DatePickerPrimitive.NextButton;
 export const PrevButton = DatePickerPrimitive.PrevButton;
 export const Root = DatePickerPrimitive.Root;
 export const Trigger = DatePickerPrimitive.Trigger;
-export { Content };
+export { Content, Portal };

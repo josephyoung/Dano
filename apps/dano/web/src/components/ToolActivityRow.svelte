@@ -1,12 +1,12 @@
 <script lang="ts">
-  import BookOpenText from "lucide-svelte/icons/book-open-text";
-  import ChevronRight from "lucide-svelte/icons/chevron-right";
-  import FilePenLine from "lucide-svelte/icons/file-pen-line";
-  import ListChecks from "lucide-svelte/icons/list-checks";
-  import Search from "lucide-svelte/icons/search";
-  import Sparkle from "lucide-svelte/icons/sparkle";
-  import SquareTerminal from "lucide-svelte/icons/square-terminal";
-  import WandSparkles from "lucide-svelte/icons/wand-sparkles";
+  import BookOpenText from "@lucide/svelte/icons/book-open-text";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import FilePenLine from "@lucide/svelte/icons/file-pen-line";
+  import ListChecks from "@lucide/svelte/icons/list-checks";
+  import Search from "@lucide/svelte/icons/search";
+  import Sparkle from "@lucide/svelte/icons/sparkle";
+  import SquareTerminal from "@lucide/svelte/icons/square-terminal";
+  import WandSparkles from "@lucide/svelte/icons/wand-sparkles";
   import { slide } from "svelte/transition";
   import { t } from "../i18n";
   import type { ToolActivity } from "../utils/toolPresentation";

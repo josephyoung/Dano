@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "../i18n";
   import type { SlashCommandOption } from "../utils/slashCommands";
+  import * as Command from "./ui/command";
 
   let {
     commands = [] as SlashCommandOption[],
@@ -77,48 +78,50 @@
 </script>
 
 {#if filtered.length > 0}
-  <div class="command-palette">
+  <Command.Root
+    class="command-palette"
+    shouldFilter={false}
+    value={filtered[highlightedIndex]?.name ?? ""}
+  >
     {#if isDebugMode}
       <div class="command-hint">{t("commandPalette.debugHint")}</div>
     {/if}
-    <ul bind:this={listRef} class="command-list">
+    <Command.List bind:ref={listRef} class="command-list">
       {#each filtered as cmd, idx (cmd.name)}
-        <li
-          class="command-item"
-          class:highlighted={idx === highlightedIndex}
+        <Command.Item
+          class={`command-item${idx === highlightedIndex ? " highlighted" : ""}`}
+          value={cmd.name}
+          showIndicator={false}
+          onSelect={() => onSelect(cmd.name)}
+          onpointermove={() => (highlightedIndex = idx)}
         >
-          <button
-            class="command-item-btn"
-            type="button"
-            onclick={() => onSelect(cmd.name)}
-            onmouseenter={() => (highlightedIndex = idx)}
-          >
-            <div class="command-copy">
-              <span class="cmd-name">/{cmd.name}</span>
-              {#if cmd.description}
-                <span class="cmd-desc">{cmd.description}</span>
-              {/if}
-            </div>
-          </button>
-        </li>
+          <div class="command-copy">
+            <span class="cmd-name">/{cmd.name}</span>
+            {#if cmd.description}
+              <span class="cmd-desc">{cmd.description}</span>
+            {/if}
+          </div>
+        </Command.Item>
       {/each}
-    </ul>
-  </div>
+    </Command.List>
+  </Command.Root>
 {:else}
-  <div class="command-palette empty">
-    <span class="empty-text">
-      {isDebugMode
-        ? t("commandPalette.emptyDebug")
-        : t("commandPalette.empty")}
-    </span>
-    {#if isDebugMode}
-      <span class="empty-hint">{t("commandPalette.debugEmptyHint", { examples: debugEmptyExamples })}</span>
-    {/if}
-  </div>
+  <Command.Root class="command-palette empty" shouldFilter={false}>
+    <Command.Empty>
+      <span class="empty-text">
+        {isDebugMode
+          ? t("commandPalette.emptyDebug")
+          : t("commandPalette.empty")}
+      </span>
+      {#if isDebugMode}
+        <span class="empty-hint">{t("commandPalette.debugEmptyHint", { examples: debugEmptyExamples })}</span>
+      {/if}
+    </Command.Empty>
+  </Command.Root>
 {/if}
 
 <style>
-  .command-palette {
+  :global(.command-palette) {
     position: absolute;
     left: 0;
     right: 0;
@@ -133,11 +136,11 @@
     scrollbar-width: none;
   }
 
-  .command-palette::-webkit-scrollbar {
+  :global(.command-palette::-webkit-scrollbar) {
     display: none;
   }
 
-  .command-palette.empty {
+  :global(.command-palette.empty) {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -150,38 +153,29 @@
     color: var(--text-subtle);
   }
 
-  .command-list {
+  :global(.command-list) {
     list-style: none;
     margin: 0;
     padding: 6px;
   }
 
-  .command-item {
-    display: flex;
-    align-items: center;
-    min-height: 38px;
-    padding: 0;
-    border-radius: 10px;
-    transition: background 0.1s ease;
-  }
-
-  .command-item-btn {
+  :global(.command-item) {
     display: flex;
     align-items: center;
     width: 100%;
     min-height: 38px;
     padding: 8px 12px;
-    border: none;
     border-radius: 10px;
     background: transparent;
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
+    transition: background 0.1s ease;
   }
 
-  .command-item:hover,
-  .command-item.highlighted {
+  :global(.command-item:hover),
+  :global(.command-item.highlighted) {
     background: var(--panel-2);
   }
 

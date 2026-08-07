@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 function readDebugFlag(value: string | undefined): boolean {
@@ -38,9 +39,13 @@ export default defineConfig({
   define: {
     __PI_WEB_DEV_DEBUG__: JSON.stringify(devDebugModeEnabled),
   },
-  plugins: [dropPierreDiffThemes(), svelte()],
+  plugins: [dropPierreDiffThemes(), tailwindcss(), svelte()],
   resolve: {
     alias: [
+      {
+        find: /^\$lib(?:\/(.*))?$/,
+        replacement: fileURLToPath(new URL("./web/src/$1", import.meta.url)),
+      },
       {
         find: /^shiki$/,
         replacement: fileURLToPath(

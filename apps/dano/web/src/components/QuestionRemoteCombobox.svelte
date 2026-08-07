@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
-  import Check from "lucide-svelte/icons/check";
-  import ChevronDown from "lucide-svelte/icons/chevron-down";
-  import CircleX from "lucide-svelte/icons/circle-x";
-  import LoaderCircle from "lucide-svelte/icons/loader-circle";
-  import RotateCw from "lucide-svelte/icons/rotate-cw";
-  import Search from "lucide-svelte/icons/search";
+  import Check from "@lucide/svelte/icons/check";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import CircleX from "@lucide/svelte/icons/circle-x";
+  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import RotateCw from "@lucide/svelte/icons/rotate-cw";
+  import Search from "@lucide/svelte/icons/search";
   import * as Command from "./ui/command";
   import * as Popover from "./ui/popover";
   import "./questionToolControls.css";

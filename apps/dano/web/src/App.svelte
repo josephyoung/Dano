@@ -1304,6 +1304,7 @@
     <AppRightSidebar
       treeEntries={displayedTreeEntries}
       sidebarOpen={outlineSidebarOpen}
+      {compactLayout}
       sessionPath={displayedActiveSessionPath}
       hasTreeTab={displayedHasSessionOutline}
       activeTabId={activeRightSidebarTabId}

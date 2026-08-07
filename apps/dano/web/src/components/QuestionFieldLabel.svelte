@@ -1,9 +1,9 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import Calendar from "lucide-svelte/icons/calendar";
-  import CircleCheck from "lucide-svelte/icons/circle-check";
-  import ListChecks from "lucide-svelte/icons/list-checks";
-  import MessageSquareText from "lucide-svelte/icons/message-square-text";
+  import Calendar from "@lucide/svelte/icons/calendar";
+  import CircleCheck from "@lucide/svelte/icons/circle-check";
+  import ListChecks from "@lucide/svelte/icons/list-checks";
+  import MessageSquareText from "@lucide/svelte/icons/message-square-text";
   import type { AskUserQuestionItem } from "../utils/askUserQuestion";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import * as Tooltip from "./ui/tooltip";

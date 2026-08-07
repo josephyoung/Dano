@@ -7,13 +7,13 @@
     RpcTranscriptContent,
     RpcTranscriptContentBlock,
   } from "@dano/types/protocol";
-  import ArrowDown from "lucide-svelte/icons/arrow-down";
-  import ChevronRight from "lucide-svelte/icons/chevron-right";
-  import Copy from "lucide-svelte/icons/copy";
-  import FileText from "lucide-svelte/icons/file-text";
-  import Pencil from "lucide-svelte/icons/pencil";
-  import Sparkle from "lucide-svelte/icons/sparkle";
-  import X from "lucide-svelte/icons/x";
+  import ArrowDown from "@lucide/svelte/icons/arrow-down";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import Copy from "@lucide/svelte/icons/copy";
+  import FileText from "@lucide/svelte/icons/file-text";
+  import Pencil from "@lucide/svelte/icons/pencil";
+  import Sparkle from "@lucide/svelte/icons/sparkle";
+  import X from "@lucide/svelte/icons/x";
   import { slide } from "svelte/transition";
   import {
     abortGeneration,
@@ -1757,7 +1757,7 @@
                         </button>
                       {/snippet}
                     </Tooltip.Trigger>
-                    <Tooltip.Content>{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
+                    <Tooltip.Content side="bottom">{revisionActive ? t("common.cancel") : t("common.edit")}</Tooltip.Content>
                   </Tooltip.Root>
                 {/if}
 
@@ -1778,7 +1778,7 @@
                         </button>
                       {/snippet}
                     </Tooltip.Trigger>
-                    <Tooltip.Content>{t("common.copy")}</Tooltip.Content>
+                    <Tooltip.Content side="bottom">{t("common.copy")}</Tooltip.Content>
                   </Tooltip.Root>
                 {/if}
               </div>
@@ -1786,28 +1786,36 @@
           {/if}
 
           {#if finalAnswerCopyKey}
-            <div
-              class="assistant-turn-actions"
-              class:copied={copiedMessageKey === finalAnswerCopyKey}
-              class:interaction-active={hoveredFinalAnswerActionKey === finalAnswerCopyKey ||
-                focusedFinalAnswerActionKey === finalAnswerCopyKey ||
-                copiedMessageKey === finalAnswerCopyKey}
-            >
-              <button
-                type="button"
-                class="message-action-button"
-                data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
-                data-tooltip={messageCopyLabel(finalAnswerCopyKey)}
-                aria-label={messageCopyLabel(finalAnswerCopyKey)}
-                title={messageCopyLabel(finalAnswerCopyKey)}
-                onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
+            <Tooltip.Provider delayDuration={300}>
+              <div
+                class="assistant-turn-actions"
+                class:copied={copiedMessageKey === finalAnswerCopyKey}
+                class:interaction-active={hoveredFinalAnswerActionKey === finalAnswerCopyKey ||
+                  focusedFinalAnswerActionKey === finalAnswerCopyKey ||
+                  copiedMessageKey === finalAnswerCopyKey}
               >
-                <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
-              </button>
-              {#if assistantTurnTimestamp(item.message)}
-                <time datetime={item.message.timestamp}>{assistantTurnTimestamp(item.message)}</time>
-              {/if}
-            </div>
+                <Tooltip.Root ignoreNonKeyboardFocus={false}>
+                  <Tooltip.Trigger>
+                    {#snippet child({ props })}
+                      <button
+                        {...props}
+                        type="button"
+                        class="message-action-button"
+                        data-copy-state={copiedMessageKey === finalAnswerCopyKey ? "copied" : undefined}
+                        aria-label={messageCopyLabel(finalAnswerCopyKey)}
+                        onclick={() => handleCopyAssistantTurn(item, finalAnswerCopyKey)}
+                      >
+                        <Copy class="message-action-icon copy-base-icon" aria-hidden="true" size={14} />
+                      </button>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  <Tooltip.Content side="bottom">{t("common.copy")}</Tooltip.Content>
+                </Tooltip.Root>
+                {#if assistantTurnTimestamp(item.message)}
+                  <time datetime={item.message.timestamp}>{assistantTurnTimestamp(item.message)}</time>
+                {/if}
+              </div>
+            </Tooltip.Provider>
           {/if}
         </div>
         </div>
@@ -2341,26 +2349,6 @@
 
   .message-action-button[data-revision-active="true"] {
     color: color-mix(in srgb, var(--accent) 88%, var(--text));
-  }
-
-  .assistant-turn-actions .message-action-button[data-copy-state="copied"]::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 7px);
-    z-index: 2;
-    padding: 5px 8px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--panel);
-    box-shadow: var(--shadow-raised);
-    color: var(--text);
-    font-size: 0.68rem;
-    line-height: 1;
-    white-space: nowrap;
-    pointer-events: none;
-    opacity: 1;
-    transform: translateX(-50%);
   }
 
   .message-content.user {

@@ -1,6 +1,11 @@
 <script lang="ts">
-  import X from "lucide-svelte/icons/x";
+  import { onDestroy } from "svelte";
+  import { toast } from "svelte-sonner";
+  import { Toaster } from "../components/ui/sonner";
   import { t } from "../i18n";
+  import AppNotificationToast from "./AppNotificationToast.svelte";
+
+  const CONNECTION_ERROR_ID = "dano-connection-error";
 
   let {
     connectionError = "",
@@ -11,6 +16,8 @@
     }>,
     onDismiss = (_: string) => {},
   } = $props();
+
+  let activeSignatures = new Map<string, string>();
 
   function formatNotifyType(type: string | undefined): string {
     switch (type) {
@@ -25,129 +32,74 @@
         return type;
     }
   }
+
+  function showConnectionError(message: string) {
+    toast.custom(AppNotificationToast, {
+      id: CONNECTION_ERROR_ID,
+      duration: Number.POSITIVE_INFINITY,
+      dismissible: false,
+      unstyled: true,
+      componentProps: {
+        message,
+        typeLabel: t("notifications.type.error"),
+        error: true,
+      },
+    });
+  }
+
+  function showNotification(notification: (typeof notifications)[number]) {
+    toast.custom(AppNotificationToast, {
+      id: notification.id,
+      duration: Number.POSITIVE_INFINITY,
+      dismissible: false,
+      unstyled: true,
+      componentProps: {
+        message: notification.message,
+        typeLabel: formatNotifyType(notification.notifyType),
+        error: notification.notifyType === "error",
+        dismissible: true,
+        onDismiss: () => onDismiss(notification.id),
+      },
+    });
+  }
+
+  $effect(() => {
+    const nextSignatures = new Map<string, string>();
+
+    if (connectionError) {
+      nextSignatures.set(CONNECTION_ERROR_ID, connectionError);
+      if (activeSignatures.get(CONNECTION_ERROR_ID) !== connectionError) {
+        showConnectionError(connectionError);
+      }
+    }
+
+    for (const notification of notifications) {
+      const signature = `${notification.notifyType ?? "info"}\u0000${notification.message}`;
+      nextSignatures.set(notification.id, signature);
+      if (activeSignatures.get(notification.id) !== signature) {
+        showNotification(notification);
+      }
+    }
+
+    for (const id of activeSignatures.keys()) {
+      if (!nextSignatures.has(id)) toast.dismiss(id);
+    }
+
+    activeSignatures = nextSignatures;
+  });
+
+  onDestroy(() => {
+    for (const id of activeSignatures.keys()) toast.dismiss(id);
+  });
 </script>
 
-{#if connectionError || notifications.length > 0}
-  <div class="toast-container">
-    {#if connectionError}
-      <div class="toast-item error" role="alert">
-        <div class="toast-copy">
-          <span class="toast-type">{t("notifications.type.error")}</span>
-          <span class="toast-message">{connectionError}</span>
-        </div>
-      </div>
-    {/if}
-    {#each notifications as notif (notif.id)}
-      <div
-        class="toast-item"
-        class:info={notif.notifyType === "info"}
-        class:error={notif.notifyType === "error"}
-        class:warn={notif.notifyType === "warn"}
-      >
-        <div class="toast-copy">
-          <span class="toast-type">{formatNotifyType(notif.notifyType)}</span>
-          <span class="toast-message">{notif.message}</span>
-        </div>
-        <button
-          class="toast-dismiss"
-          aria-label={t("notifications.dismiss")}
-          onclick={() => onDismiss(notif.id)}
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      </div>
-    {/each}
-  </div>
-{/if}
-
-<style>
-  .toast-container {
-    position: fixed;
-    top: 56px;
-    right: 16px;
-    z-index: var(--layer-notification);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    max-width: 340px;
-  }
-
-  .toast-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 12px 14px;
-    border-radius: 12px;
-    background: var(--panel);
-    border: 1px solid var(--border-strong);
-    box-shadow: var(--shadow);
-    animation: toast-in 0.16s ease;
-  }
-
-  .toast-item.error {
-    background: color-mix(in srgb, var(--error-text) 10%, var(--panel));
-    border-color: var(--error-border);
-  }
-
-  .toast-item.error .toast-type,
-  .toast-item.error .toast-message {
-    color: var(--error-text);
-  }
-
-  .toast-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .toast-type {
-    font-size: 0.66rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-subtle);
-  }
-
-  .toast-message {
-    font-size: 0.82rem;
-    line-height: 1.45;
-    color: var(--text-muted);
-  }
-
-  .toast-dismiss {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    color: var(--text-subtle);
-    cursor: pointer;
-    padding: 0;
-    line-height: 1;
-  }
-
-  .toast-dismiss:hover {
-    color: var(--text);
-  }
-
-  @keyframes toast-in {
-    from {
-      opacity: 0;
-      transform: translateY(-4px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  @media (max-width: 900px) {
-    .toast-container {
-      left: 16px;
-      right: 16px;
-      max-width: none;
-    }
-  }
-</style>
+<Toaster
+  position="top-right"
+  expand
+  visibleToasts={20}
+  gap={8}
+  offset={{ top: 56, right: 16 }}
+  mobileOffset={{ top: 56, right: 16, left: 16 }}
+  style="z-index: var(--layer-notification)"
+  containerAriaLabel={t("notifications.type.info")}
+/>

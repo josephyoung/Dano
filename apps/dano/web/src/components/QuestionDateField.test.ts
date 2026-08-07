@@ -6,6 +6,7 @@ import QuestionDateField from "./QuestionDateField.svelte";
 import questionDateFieldSource from "./QuestionDateField.svelte?raw";
 import datePickerContentSource from "./ui/date-picker/date-picker-content.svelte?raw";
 import datePickerIndexSource from "./ui/date-picker/index.ts?raw";
+import datePickerPortalSource from "./ui/date-picker/date-picker-portal.svelte?raw";
 
 function mockMobilePicker(matches: boolean) {
   vi.spyOn(window, "matchMedia").mockReturnValue({
@@ -36,9 +37,9 @@ describe("QuestionDateField", () => {
 
   it("delegates date popover layering to the shared portalled content", () => {
     expect(datePickerIndexSource).toContain('from "./date-picker-content.svelte"');
-    expect(datePickerContentSource).toContain(
-      '<DatePickerPrimitive.Portal to=".app-shell">',
-    );
+    expect(datePickerIndexSource).toContain('from "./date-picker-portal.svelte"');
+    expect(datePickerContentSource).toContain("<Portal>");
+    expect(datePickerPortalSource).toContain('to = ".app-shell"');
     expect(datePickerContentSource).toContain("z-index: var(--layer-popover)");
     expect(questionDateFieldSource).not.toMatch(
       /:global\(\.question-date-popover\)\s*\{[\s\S]*?z-index:/,

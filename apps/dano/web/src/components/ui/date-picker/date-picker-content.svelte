@@ -1,5 +1,7 @@
 <script lang="ts">
   import { DatePicker as DatePickerPrimitive } from "bits-ui";
+  import { cn } from "$lib/utils.js";
+  import Portal from "./date-picker-portal.svelte";
 
   let {
     ref = $bindable(null),
@@ -9,15 +11,16 @@
   }: DatePickerPrimitive.ContentProps = $props();
 </script>
 
-<DatePickerPrimitive.Portal to=".app-shell">
+<Portal>
   <DatePickerPrimitive.Content
     bind:ref
-    class={["date-picker-content", className]}
+    data-slot="date-picker-content"
+    class={cn("date-picker-content", className)}
     {...restProps}
   >
     {@render children?.()}
   </DatePickerPrimitive.Content>
-</DatePickerPrimitive.Portal>
+</Portal>
 
 <style>
   :global(.date-picker-content) {

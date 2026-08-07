@@ -3,6 +3,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
 
 const typesRoot = fileURLToPath(new URL("./apps/dano/types/", import.meta.url));
+const webSrcRoot = fileURLToPath(new URL("./apps/dano/web/src/", import.meta.url));
 
 export default defineConfig({
   plugins: [svelte({
@@ -11,8 +12,8 @@ export default defineConfig({
   ssr: {
     noExternal: [
       "@comark/svelte",
+      "@lucide/svelte",
       "bits-ui",
-      "lucide-svelte",
       "runed",
       "svelte-toolbelt",
     ],
@@ -20,6 +21,10 @@ export default defineConfig({
   resolve: {
     conditions: ["browser"],
     alias: [
+      {
+        find: /^\$lib(?:\/(.*))?$/,
+        replacement: `${webSrcRoot}$1`,
+      },
       {
         find: /^@dano\/types\//,
         replacement: typesRoot,

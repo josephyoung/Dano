@@ -1,10 +1,10 @@
 <script lang="ts">
-  import Expand from "lucide-svelte/icons/expand";
-  import Scan from "lucide-svelte/icons/scan";
-  import Shrink from "lucide-svelte/icons/shrink";
-  import X from "lucide-svelte/icons/x";
-  import ZoomIn from "lucide-svelte/icons/zoom-in";
-  import ZoomOut from "lucide-svelte/icons/zoom-out";
+  import Expand from "@lucide/svelte/icons/expand";
+  import Scan from "@lucide/svelte/icons/scan";
+  import Shrink from "@lucide/svelte/icons/shrink";
+  import X from "@lucide/svelte/icons/x";
+  import ZoomIn from "@lucide/svelte/icons/zoom-in";
+  import ZoomOut from "@lucide/svelte/icons/zoom-out";
   import { t } from "../i18n";
 
   export interface FilePreviewData {
@@ -231,10 +231,19 @@
 
   $effect(() => {
     const shell = shellElement;
-    if (!preview || !shell) return;
+    if (!shell) return;
+    const restoreFocusElement =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     if (!shell.open) shell.showModal();
     return () => {
       if (shell.open) shell.close();
+      queueMicrotask(() => {
+        if (restoreFocusElement?.isConnected) {
+          restoreFocusElement.focus({ preventScroll: true });
+        }
+      });
     };
   });
 

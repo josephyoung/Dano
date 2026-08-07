@@ -130,7 +130,7 @@ describe("QuestionFieldLabel", () => {
     trigger?.focus();
     await vi.waitFor(() => {
       const tooltip = appShell.querySelector<HTMLElement>(".tooltip-content");
-      expect(tooltip?.textContent).toBe("完整字段 查看说明");
+      expect(tooltip?.textContent?.trim()).toBe("完整字段 查看说明");
       expect(tooltip?.getAttribute("data-state")).toMatch(/open$/);
     });
 
