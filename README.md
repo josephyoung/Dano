@@ -29,10 +29,11 @@ Electron target.
 
 ## Model
 
-Default Pi settings are defined in
-[deploy/runtime-defaults/settings.json](deploy/runtime-defaults/settings.json).
-
-To switch model, edit that file and restart the server/container. The current
+Shipped Pi defaults are defined in
+[deploy/runtime-defaults/settings.json](deploy/runtime-defaults/settings.json)
+and are used only to initialize a missing `settings.json` in the Agent Config
+Directory. Existing deployments keep the persistent `settings.json` selected by
+`PI_CODING_AGENT_DIR`; edit that file to change their model settings. The
 headless web bridge treats `/model` as normal chat text.
 
 ## System Prompt

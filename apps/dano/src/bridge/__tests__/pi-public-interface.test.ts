@@ -36,7 +36,7 @@ type PiAiPublicContracts = {
 type PiCodingAgentPublicContracts = {
   agentSession: Pick<
     AgentSession,
-    "model" | "thinkingLevel" | "pendingMessageCount"
+    "model" | "thinkingLevel" | "pendingMessageCount" | "abortCompaction"
   >;
   extensionRuntime: ExtensionRuntime;
   rpcCommand: RpcCommand;

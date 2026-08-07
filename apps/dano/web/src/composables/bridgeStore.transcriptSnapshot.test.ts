@@ -44,7 +44,6 @@ describe("transcript snapshot reconciliation", () => {
       hasNewer: false,
       oldestCursor: "i:21",
       newestCursor: "i:100",
-      preserveLoadedHistory: true,
     });
 
     expect(bridge.transcript).toHaveLength(101);

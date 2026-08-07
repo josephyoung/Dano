@@ -6,6 +6,9 @@ import type {
   FieldAssistCommandPayload,
   FieldAssistResult,
   RpcBridgeEvent,
+  RpcCompactionReason,
+  RpcCompactionEndEvent,
+  RpcCompactionStartEvent,
   RpcCommand,
   RpcAgentEndEvent,
   RpcAgentStartEvent,
@@ -362,6 +365,7 @@ let _isStreaming = $state(false);
 let _isPromptPending = $state(false);
 let _compactingRequestCount = $state(0);
 let _remoteCompactionActive = $state(false);
+let _compactionReason = $state<RpcCompactionReason | null>(null);
 let _queuedUserMessages = $state<RpcQueuedMessage[]>([]);
 let _sessionStats = $state<RpcSessionStats | null>(null);
 let _gitRepoState = $state<RpcGitRepoState | null>(null);
@@ -415,6 +419,7 @@ let isPromptPending = $derived(_isPromptPending);
 let isCompacting = $derived(
   _compactingRequestCount > 0 || _remoteCompactionActive,
 );
+let compactionReason = $derived(_compactionReason);
 let queuedUserMessages = $derived(_queuedUserMessages);
 let sessionStats = $derived(_sessionStats);
 let gitRepoState = $derived(_gitRepoState);
@@ -1497,7 +1502,7 @@ function replaceTranscript(
 
 function applyTranscriptPage(
   page: RpcTranscriptPage,
-  mode: "replace" | "prepend" | "reconcile" = "replace",
+  mode: "replace" | "prepend" = "replace",
 ) {
   const prevSp = _transcriptSessionPath;
   const normalized = page.messages.map((entry, idx) =>
@@ -1518,7 +1523,7 @@ function applyTranscriptPage(
       ...currentRawTranscriptEntries(),
     ] as TranscriptEntry[];
   } else if (
-    mode === "reconcile" &&
+    mode === "replace" &&
     prevSp === (page.sessionPath ?? null) &&
     normalized.length > 0
   ) {
@@ -1559,7 +1564,7 @@ function applyTranscriptPage(
   _transcriptNewestCursor = page.newestCursor ?? null;
   _transcriptInitialLoading = false;
   _transcriptPageLoading = false;
-  if (mode !== "prepend") reanchorMissingPendingTranscriptConfigEvent();
+  if (mode === "replace") reanchorMissingPendingTranscriptConfigEvent();
   reconcilePendingTranscriptConfigEvent();
 }
 
@@ -1800,22 +1805,44 @@ function applyTranscriptDelta(payload: RpcTranscriptDeltaEvent) {
 
 function appendCompactErrorMessage(message: string) {
   const detail = message.trim();
-  const em = detail
-    ? `${t("store.error.unknownCompaction")}: ${detail}`
-    : t("store.error.unknownCompaction");
+  if (detail) console.error("Context compaction failed:", detail);
   upsertTranscriptMessage({
     transcriptKey: `local:compact-error:${Date.now()}:${requestIdCounter}`,
     role: "assistant",
     stopReason: "error",
-    errorMessage: em,
+    errorMessage: t("store.error.compactionFailed"),
     timestamp: new Date().toISOString(),
   });
 }
 
-function setCompactionState(compacting: boolean) {
+function setCompactionState(
+  compacting: boolean,
+  reason: RpcCompactionReason | null = null,
+) {
   _remoteCompactionActive = compacting;
+  _compactionReason = compacting ? reason : null;
   if (!_sessionState) return;
   _sessionState = { ..._sessionState, isCompacting: compacting };
+}
+
+export function applyCompactionStartEvent(
+  payload: RpcCompactionStartEvent,
+): void {
+  setCompactionState(true, payload.reason);
+}
+
+export function applyCompactionEndEvent(
+  payload: RpcCompactionEndEvent,
+): void {
+  setCompactionState(false);
+  if (
+    payload.reason !== "manual" &&
+    !payload.aborted &&
+    typeof payload.errorMessage === "string" &&
+    payload.errorMessage.trim()
+  ) {
+    appendCompactErrorMessage(payload.errorMessage);
+  }
 }
 
 async function ensureConnectedForPrompt(): Promise<boolean> {
@@ -2182,10 +2209,11 @@ export async function createGitBranch(
 }
 
 export async function abortGeneration() {
-  if (!_isStreaming) return null;
+  if (!_isStreaming && !isCompacting) return null;
 
+  const abortingCompaction = isCompacting;
   const response = await sendCommand({ type: "abort" });
-  if (response.success) {
+  if (response.success && !abortingCompaction) {
     clearQueuedSteeringMessages();
   }
   return response;
@@ -2642,12 +2670,7 @@ export function applyTranscriptSnapshotEvent(
   ) {
     return;
   }
-  if (Array.isArray(data.messages)) {
-    applyTranscriptPage(
-      data,
-      data.preserveLoadedHistory ? "reconcile" : "replace",
-    );
-  }
+  if (Array.isArray(data.messages)) applyTranscriptPage(data, "replace");
 }
 
 function handleEvent(payload: RpcBridgeEvent) {
@@ -2762,19 +2785,11 @@ function handleEvent(payload: RpcBridgeEvent) {
       break;
     }
     case "compaction_start": {
-      setCompactionState(true);
+      applyCompactionStartEvent(payload);
       break;
     }
     case "compaction_end": {
-      setCompactionState(false);
-      if (
-        payload.reason !== "manual" &&
-        !payload.aborted &&
-        typeof payload.errorMessage === "string" &&
-        payload.errorMessage.trim()
-      ) {
-        appendCompactErrorMessage(payload.errorMessage);
-      }
+      applyCompactionEndEvent(payload);
       break;
     }
   }
@@ -2940,6 +2955,7 @@ function markDisconnected(reason = t("appHeader.connection.disconnected")) {
   _connectionStatus = "disconnected";
   clearPromptPending();
   _remoteCompactionActive = false;
+  _compactionReason = null;
   _reconnectCount++;
   _runningSessionPaths = [];
   _workspaceSessionLoading = {};
@@ -3171,6 +3187,9 @@ export function initBridge() {
     },
     get isCompacting() {
       return isCompacting;
+    },
+    get compactionReason() {
+      return compactionReason;
     },
     get sessionStats() {
       return sessionStats;

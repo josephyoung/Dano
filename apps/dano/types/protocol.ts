@@ -933,7 +933,6 @@ export interface RpcTranscriptPage {
 
 export interface RpcTranscriptSnapshotEvent extends RpcTranscriptPage {
   type: "transcript_snapshot";
-  preserveLoadedHistory?: boolean;
 }
 
 export interface RpcTranscriptStartEvent {

@@ -56,6 +56,8 @@ import type {
   RpcAutoRetryStartEvent,
   RpcBridgeEvent,
   RpcCommand,
+  RpcCompactionEndEvent,
+  RpcCompactionStartEvent,
   RpcExtensionUIRequest,
   RpcExtensionUIResponse,
   RpcGitBranch,
@@ -494,6 +496,35 @@ function toRpcModelSelectEvent(event: {
   };
 }
 
+function toRpcCompactionStartEvent(
+  event: Extract<AgentSessionEvent, { type: "compaction_start" }>,
+): RpcCompactionStartEvent {
+  return {
+    type: "compaction_start",
+    reason: event.reason,
+  };
+}
+
+function toRpcCompactionEndEvent(
+  event: Extract<AgentSessionEvent, { type: "compaction_end" }>,
+): RpcCompactionEndEvent {
+  return {
+    type: "compaction_end",
+    reason: event.reason,
+    result: event.result
+      ? {
+          summary: event.result.summary,
+          firstKeptEntryId: event.result.firstKeptEntryId,
+          tokensBefore: event.result.tokensBefore,
+          details: event.result.details,
+        }
+      : null,
+    aborted: event.aborted,
+    willRetry: event.willRetry,
+    errorMessage: event.errorMessage,
+  };
+}
+
 interface SessionTreeNodeLike {
   entry: SessionEntry;
   children: SessionTreeNodeLike[];
@@ -522,7 +553,7 @@ interface TreeEntryPresentation {
   isToolOnlyAssistant: boolean;
 }
 
-const TREE_HARD_HIDDEN_ENTRY_TYPES = new Set(["label", "compaction"]);
+const TREE_HARD_HIDDEN_ENTRY_TYPES = new Set(["label"]);
 const TREE_SETTINGS_ENTRY_TYPES = new Set([
   "custom",
   "model_change",
@@ -2027,7 +2058,20 @@ function transcriptMessageFromSessionEntry(
 
   switch (entry.type) {
     case "compaction":
-      return null;
+      return {
+        transcriptKey: id ?? fallbackKey,
+        id,
+        role: "system",
+        timestamp,
+        content: [
+          {
+            type: "compaction",
+            summary: entry.summary,
+            tokensBefore: entry.tokensBefore,
+            firstKeptEntryId: entry.firstKeptEntryId,
+          },
+        ],
+      };
     case "branch_summary":
       return {
         transcriptKey: id ?? fallbackKey,
@@ -3710,7 +3754,7 @@ class BrowserSessionView {
       model,
       thinkingLevel,
       isStreaming: !this.context.state.isIdle(),
-      isCompacting: false,
+      isCompacting: this.context.state.isCompacting(),
       steeringMode: "all",
       followUpMode: "all",
       sessionFile,
@@ -5292,7 +5336,6 @@ export class BridgeRpcAdapter {
           if (!this.sessionRuntime.shouldHandleLiveSessionEvents()) return;
           this.sendTranscriptSnapshot(
             this.sessionRuntime.buildCurrentTranscriptPage(),
-            { preserveLoadedHistory: true },
           );
           this.sessionStatsPusher.queue(
             this.sessionRuntime.currentTranscriptSessionPath(),
@@ -5478,17 +5521,13 @@ export class BridgeRpcAdapter {
    * Transcript synchronization
    * ---------------------------------------------------------------------- */
 
-  private sendTranscriptSnapshot(
-    page: RpcTranscriptPage,
-    options?: { preserveLoadedHistory?: boolean },
-  ): void {
+  private sendTranscriptSnapshot(page: RpcTranscriptPage): void {
     const snapshot = this.transcriptProjector.buildSnapshotEvent(
       page,
       this.sessionRuntime.buildCurrentTranscriptMessages(),
     );
     this.sendEvent({
       ...snapshot,
-      ...options,
       messages: this.projectCurrentFormInteractions(snapshot.messages),
     });
   }
@@ -5671,7 +5710,6 @@ export class BridgeRpcAdapter {
     if (eventType === "session_compact") {
       this.sendTranscriptSnapshot(
         this.sessionRuntime.buildCurrentTranscriptPage(),
-        { preserveLoadedHistory: true },
       );
       this.sessionStatsPusher.queue(sessionPath);
       return;
@@ -5705,7 +5743,6 @@ export class BridgeRpcAdapter {
               ),
               detachedSession.sessionFile ?? null,
             ),
-            { preserveLoadedHistory: true },
           );
         }
         this.sessionStatsPusher.queue(sessionPath);
@@ -5716,12 +5753,13 @@ export class BridgeRpcAdapter {
         }
         return;
       case "compaction_start":
+        this.sendEvent(toRpcCompactionStartEvent(event));
         return;
       case "compaction_end":
         this.sendTranscriptSnapshot(
           this.sessionRuntime.buildCurrentTranscriptPage(),
-          { preserveLoadedHistory: true },
         );
+        this.sendEvent(toRpcCompactionEndEvent(event));
         this.sessionStatsPusher.queue(sessionPath);
         return;
       default:
@@ -6374,8 +6412,14 @@ export class BridgeRpcAdapter {
         }
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
-          clearSteeringQueue(session);
-          await session.abort();
+          if (session.isCompacting) {
+            session.abortCompaction();
+          } else {
+            clearSteeringQueue(session);
+            await session.abort();
+          }
+        } else if (this.context.state.isCompacting()) {
+          this.context.actions.abortCompaction();
         } else {
           this.context.actions.abort();
         }

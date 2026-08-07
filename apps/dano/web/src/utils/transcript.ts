@@ -1315,10 +1315,13 @@ function systemContentBlock(
         kind: "system",
         systemType: "compaction",
         label: t("transcript.system.compactionLabel"),
-        title: t("transcript.system.compactionTitle"),
+        title:
+          tokensBefore === null
+            ? t("transcript.system.compactionTitle")
+            : t("transcript.system.compactionTitleWithTokens", {
+                tokens: formatTokenCount(tokensBefore),
+              }),
         body: block.summary.trim() ? block.summary.trim() : undefined,
-        meta:
-          tokensBefore === null ? undefined : formatTokenCount(tokensBefore),
       };
     }
     case "branch_summary":

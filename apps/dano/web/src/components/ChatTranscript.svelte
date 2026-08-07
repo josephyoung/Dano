@@ -4,6 +4,7 @@
     FieldAssistCommandPayload,
     FieldAssistResult,
     RpcImageContent,
+    RpcCompactionReason,
     RpcTranscriptContent,
     RpcTranscriptContentBlock,
   } from "@dano/types/protocol";
@@ -129,6 +130,7 @@
     isStreaming = false,
     isPromptPending = false,
     isCompacting = false,
+    compactionReason = null as RpcCompactionReason | null,
     scrollLocked = false,
     showMessageIds = false,
     allowRevision = false,
@@ -157,6 +159,7 @@
     isStreaming?: boolean;
     isPromptPending?: boolean;
     isCompacting?: boolean;
+    compactionReason?: RpcCompactionReason | null;
     scrollLocked?: boolean;
     showMessageIds?: boolean;
     allowRevision?: boolean;
@@ -293,6 +296,15 @@
     isStreaming || transcriptStreams.length > 0 || transcriptDeltas.length > 0,
   );
   let showBusyIndicator = $derived(hasVisibleStreaming || isCompacting);
+  let compactionStatusLabel = $derived(
+    t(
+      compactionReason === "overflow"
+        ? "chatTranscript.compaction.overflow"
+        : compactionReason === "manual"
+          ? "chatTranscript.compaction.manual"
+          : "chatTranscript.compaction.threshold",
+    ),
+  );
   let pendingAssistantState = $derived(
     assistantPendingState(
       [
@@ -1640,22 +1652,45 @@
               {@const block = projected.block}
               {@const bIdx = projected.blockIndex}
               {#if block.kind === "system"}
-                <article class="system-block" data-system-type={block.systemType}>
-                  <div class="system-block-header">
-                    <span class="system-block-label">{block.label}</span>
-                    {#if block.meta}
-                      <span class="system-block-meta">{block.meta}</span>
+                {#if block.systemType === "compaction"}
+                  <details class="system-block compaction-block" data-system-type="compaction">
+                    <summary class="compaction-summary">
+                      <span class="compaction-chevron" aria-hidden="true">
+                        <ChevronRight size={14} />
+                      </span>
+                      <span class="compaction-summary-copy">
+                        <span class="system-block-label">{block.label}</span>
+                        <span class="system-block-title">{block.title}</span>
+                      </span>
+                    </summary>
+                    {#if block.body}
+                      <div class="compaction-body">
+                        <MarkdownRenderer
+                          class="system-block-body"
+                          content={block.body}
+                          onOpenFileReference={onOpenFileReference}
+                        />
+                      </div>
                     {/if}
-                  </div>
-                  <div class="system-block-title">{block.title}</div>
-                  {#if block.body}
-                    <MarkdownRenderer
-                      class="system-block-body"
-                      content={block.body}
-                      onOpenFileReference={onOpenFileReference}
-                    />
-                  {/if}
-                </article>
+                  </details>
+                {:else}
+                  <article class="system-block" data-system-type={block.systemType}>
+                    <div class="system-block-header">
+                      <span class="system-block-label">{block.label}</span>
+                      {#if block.meta}
+                        <span class="system-block-meta">{block.meta}</span>
+                      {/if}
+                    </div>
+                    <div class="system-block-title">{block.title}</div>
+                    {#if block.body}
+                      <MarkdownRenderer
+                        class="system-block-body"
+                        content={block.body}
+                        onOpenFileReference={onOpenFileReference}
+                      />
+                    {/if}
+                  </article>
+                {/if}
               {:else if block.kind === "thinking"}
                 <div class="thinking-block">
                   <div class="thinking-stream-line">
@@ -1846,6 +1881,18 @@
       {/if}
     {/if}
   {/each}
+
+  {#if isCompacting}
+    <div
+      class="compaction-status"
+      data-compaction-status="true"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="compaction-status-dot" aria-hidden="true"></span>
+      <span>{compactionStatusLabel}</span>
+    </div>
+  {/if}
 
   {#if pendingAssistantState}
     <div
@@ -2472,6 +2519,88 @@
     color: var(--text-muted);
     font-size: 0.76rem;
     line-height: 1.6;
+  }
+
+  details.compaction-block {
+    display: block;
+    padding: 0;
+  }
+
+  .compaction-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .compaction-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .compaction-summary:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: 13px;
+  }
+
+  .compaction-chevron {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: var(--text-subtle);
+    transition: transform 160ms ease;
+  }
+
+  .compaction-block[open] .compaction-chevron {
+    transform: rotate(90deg);
+  }
+
+  .compaction-summary-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .compaction-body {
+    padding: 0 14px 12px 36px;
+  }
+
+  .compaction-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(960px, 100%);
+    margin: 2px auto 0;
+    padding: 0 4px;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+
+  .compaction-status-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--accent);
+    animation: compaction-status-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes compaction-status-pulse {
+    0%, 100% { opacity: 0.38; }
+    50% { opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .compaction-chevron {
+      transition: none;
+    }
+
+    .compaction-status-dot {
+      animation: none;
+    }
   }
 
   .message-image-block { margin: 0; }

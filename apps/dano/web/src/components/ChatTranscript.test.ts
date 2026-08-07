@@ -538,6 +538,77 @@ describe("ChatTranscript assistant pending indicator", () => {
   });
 });
 
+describe("ChatTranscript compaction presentation", () => {
+  it("shows a collapsed persistent summary with the original token count", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          {
+            id: "compaction-1",
+            role: "system",
+            content: [
+              {
+                type: "compaction",
+                summary: "保留了当前任务、关键决定与后续步骤。",
+                tokensBefore: 22400,
+                firstKeptEntryId: "message-1",
+              },
+            ],
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      const card = target.querySelector<HTMLDetailsElement>(
+        'details[data-system-type="compaction"]',
+      );
+      expect(card).not.toBeNull();
+      expect(card?.open).toBe(false);
+      expect(card?.querySelector("summary")?.textContent).toContain(
+        "已压缩 22.4k tokens 的上下文",
+      );
+      card?.querySelector<HTMLElement>("summary")?.click();
+      await tick();
+      expect(card?.open).toBe(true);
+      expect(card?.querySelector(".compaction-body")).not.toBeNull();
+      expect(chatTranscriptSource).toContain("content={block.body}");
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it.each([
+    ["threshold", "正在压缩上下文…"],
+    ["overflow", "上下文已满，正在压缩并重试…"],
+  ] as const)("shows the %s transient status", async (compactionReason, label) => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        isCompacting: true,
+        compactionReason,
+        messages: [{ id: "user-1", role: "user", content: "继续" }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector('[data-compaction-status="true"]')?.textContent)
+        .toContain(label);
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+});
+
 describe("ChatTranscript Activity Trail", () => {
   it("shows a sanitized activity summary and controlled inline details", async () => {
     const target = document.createElement("div");

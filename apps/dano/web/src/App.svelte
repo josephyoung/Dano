@@ -411,6 +411,9 @@
     activeDebugSession ? false : bridge.isPromptPending,
   );
   let displayedIsCompacting = $derived(activeDebugSession ? false : bridge.isCompacting);
+  let displayedCompactionReason = $derived(
+    activeDebugSession ? null : bridge.compactionReason,
+  );
   let displayedTreeEntries = $derived(activeDebugSession ? [] : bridge.treeEntries);
   let displayedHasSessionOutline = $derived(
     activeDebugSession === null && bridge.hasSessionOutline,
@@ -1242,6 +1245,7 @@
         isStreaming={displayedIsStreaming}
         isPromptPending={displayedIsPromptPending}
         isCompacting={displayedIsCompacting}
+        compactionReason={displayedCompactionReason}
         isDebugMode={debugModeAvailable}
         {slashCommandsAndMentionsEnabled}
         connectionStatus={bridge.connectionStatus}

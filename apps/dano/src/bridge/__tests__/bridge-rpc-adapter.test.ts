@@ -199,6 +199,7 @@ const createMockContext = (): BridgeRpcAdapterContext => {
     sessionManager: sessionManager as unknown as SessionManager,
     cwd: "/test/project",
     isIdle: vi.fn().mockReturnValue(true),
+    isCompacting: vi.fn().mockReturnValue(false),
     getPendingMessageCount: vi.fn().mockReturnValue(0),
     getAvailableModels: vi.fn().mockReturnValue([
       model,
@@ -223,6 +224,7 @@ const createMockContext = (): BridgeRpcAdapterContext => {
   const actions = {
     sendUserMessage: vi.fn(),
     abort: vi.fn(),
+    abortCompaction: vi.fn(),
     setModel: vi.fn().mockResolvedValue(undefined),
     setThinkingLevel: vi.fn(),
     setSessionName: vi.fn(),
@@ -1250,6 +1252,52 @@ describe("BridgeRpcAdapter", () => {
       await new Promise(r => setTimeout(r, 10));
 
       expect(context.actions.abort).toHaveBeenCalled();
+      expect(context.actions.abortCompaction).not.toHaveBeenCalled();
+    });
+
+    it("aborts Pi compaction instead of the agent turn", async () => {
+      (
+        context.state.isCompacting as ReturnType<typeof vi.fn>
+      ).mockReturnValue(true);
+      const command: RpcCommand = { id: "cmd-compact-abort", type: "abort" };
+      ws.trigger(
+        "message",
+        Buffer.from(JSON.stringify({ type: "command", payload: command })),
+      );
+
+      await new Promise(r => setTimeout(r, 10));
+
+      expect(context.actions.abortCompaction).toHaveBeenCalledOnce();
+      expect(context.actions.abort).not.toHaveBeenCalled();
+    });
+
+    it("aborts Pi compaction for a selected detached session", async () => {
+      const abort = vi.fn().mockResolvedValue(undefined);
+      const abortCompaction = vi.fn();
+      const detachedSession = {
+        isCompacting: true,
+        abort,
+        abortCompaction,
+        sessionManager: context.state.sessionManager,
+      };
+      const sessionRuntime = (adapter as any).sessionRuntime;
+      vi.spyOn(sessionRuntime, "hasDetachedSelection").mockReturnValue(true);
+      vi.spyOn(sessionRuntime, "ensureDetachedSession").mockResolvedValue(
+        detachedSession,
+      );
+      const command: RpcCommand = {
+        id: "cmd-detached-compact-abort",
+        type: "abort",
+      };
+      ws.trigger(
+        "message",
+        Buffer.from(JSON.stringify({ type: "command", payload: command })),
+      );
+
+      await new Promise(r => setTimeout(r, 10));
+
+      expect(abortCompaction).toHaveBeenCalledOnce();
+      expect(abort).not.toHaveBeenCalled();
     });
 
     it("resolves a pending question through the command channel", async () => {
@@ -3471,7 +3519,7 @@ describe("BridgeRpcAdapter", () => {
       expect(response.payload.data.hasOlder).toBe(true);
     });
 
-    it("keeps compaction internal while preserving visible transcript entries", async () => {
+    it("includes compaction and model changes in transcript pages", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-compact-"));
       const sessionManager = SessionManager.create(tmpDir, tmpDir);
       sessionManager.appendModelChange("openai", "gpt-5");
@@ -3500,6 +3548,12 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getBranch as ReturnType<typeof vi.fn>
       ).mockImplementation(() => sessionManager.getBranch());
+      (
+        context.state.sessionManager.getTree as ReturnType<typeof vi.fn>
+      ).mockImplementation(() => sessionManager.getTree());
+      (
+        context.state.sessionManager.getLeafId as ReturnType<typeof vi.fn>
+      ).mockImplementation(() => sessionManager.getLeafId());
 
       const command: RpcCommand = {
         id: "cmd-compact",
@@ -3533,9 +3587,40 @@ describe("BridgeRpcAdapter", () => {
           role: "user",
           content: "Summarize the repo",
         }),
+        expect.objectContaining({
+          role: "system",
+          content: [
+            {
+              type: "compaction",
+              summary: "Kept the repo summary and pending fixes.",
+              tokensBefore: 18800,
+              firstKeptEntryId,
+            },
+          ],
+        }),
       ]);
-      expect(JSON.stringify(response.payload.data)).not.toContain(
-        "Kept the repo summary and pending fixes.",
+
+      (ws.send as ReturnType<typeof vi.fn>).mockClear();
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: { id: "cmd-compact-tree", type: "list_tree_entries" },
+          }),
+        ),
+      );
+      await new Promise(r => setTimeout(r, 10));
+
+      const treeResponse = JSON.parse(
+        (ws.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string,
+      );
+      expect(treeResponse.payload.data.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            previewText: "[compaction: 19k tokens]",
+          }),
+        ]),
       );
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -5581,7 +5666,7 @@ describe("BridgeRpcAdapter", () => {
       });
     });
 
-    it("keeps selected-session compaction lifecycle events internal", async () => {
+    it("forwards selected-session compaction lifecycle events", async () => {
       const tmpDir = fs.mkdtempSync(
         path.join(os.tmpdir(), "pi-web-compaction-events-"),
       );
@@ -5620,7 +5705,10 @@ describe("BridgeRpcAdapter", () => {
       let sendCalls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
         call => JSON.parse(call[0] as string),
       );
-      expect(sendCalls).toEqual([]);
+      expect(sendCalls[0].payload).toEqual({
+        type: "compaction_start",
+        reason: "threshold",
+      });
 
       (ws.send as ReturnType<typeof vi.fn>).mockClear();
 
@@ -5641,22 +5729,20 @@ describe("BridgeRpcAdapter", () => {
       expect(sendCalls).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: expect.objectContaining({
-              type: "transcript_snapshot",
-              preserveLoadedHistory: true,
-            }),
+            payload: expect.objectContaining({ type: "transcript_snapshot" }),
           }),
           expect.objectContaining({
-            payload: expect.objectContaining({ type: "session_stats" }),
+            payload: {
+              type: "compaction_end",
+              reason: "threshold",
+              result: null,
+              aborted: false,
+              willRetry: false,
+              errorMessage: "API quota exceeded",
+            },
           }),
         ]),
       );
-      expect(
-        sendCalls.some(call =>
-          ["compaction_start", "compaction_end"].includes(call.payload?.type),
-        ),
-      ).toBe(false);
-      expect(JSON.stringify(sendCalls)).not.toContain("API quota exceeded");
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
@@ -5669,11 +5755,6 @@ describe("BridgeRpcAdapter", () => {
       sessionManager.appendMessage({
         role: "user",
         content: "Initial prompt",
-        timestamp: Date.now(),
-      } as any);
-      sessionManager.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "Initial response" }],
         timestamp: Date.now(),
       } as any);
       const firstKeptEntryId = sessionManager.getLeafId();
@@ -5716,21 +5797,20 @@ describe("BridgeRpcAdapter", () => {
       );
       expect(sendCalls[0].payload).toMatchObject({
         type: "transcript_snapshot",
-        preserveLoadedHistory: true,
-        messages: [
+        messages: expect.arrayContaining([
           expect.objectContaining({
-            role: "user",
-            content: "Initial prompt",
+            role: "system",
+            content: [
+              {
+                type: "compaction",
+                summary: "Saved the active task before pruning history.",
+                tokensBefore: 22400,
+                firstKeptEntryId,
+              },
+            ],
           }),
-          expect.objectContaining({
-            role: "assistant",
-            content: [{ type: "text", text: "Initial response" }],
-          }),
-        ],
+        ]),
       });
-      expect(JSON.stringify(sendCalls[0].payload)).not.toContain(
-        "Saved the active task before pruning history.",
-      );
       expect(sendCalls[1].payload).toMatchObject({ type: "session_stats" });
 
       fs.rmSync(tmpDir, { recursive: true, force: true });

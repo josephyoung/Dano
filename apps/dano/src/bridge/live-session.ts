@@ -81,6 +81,9 @@ export interface BridgeSessionState {
   /** True when the live agent is idle (not streaming). */
   isIdle(): boolean;
 
+  /** True while Pi is compacting the live session context. */
+  isCompacting(): boolean;
+
   /** Number of queued messages reported by the live Pi session. */
   getPendingMessageCount(): number;
 
@@ -123,6 +126,9 @@ export interface BridgeSessionActions {
 
   /** Abort the current agent turn. */
   abort(): void;
+
+  /** Abort Pi's active context compaction. */
+  abortCompaction(): void;
 
   /** Set the active model. */
   setModel(
