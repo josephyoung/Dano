@@ -7,6 +7,13 @@ const source = readFileSync(
 );
 
 describe("AppHeader control appearance", () => {
+  it("keeps the menu divider at its original five-pixel vertical spacing", () => {
+    const menuRule = source.match(/\.header-menu\)?\s*\{([^}]*)\}/)?.[1] ?? "";
+
+    expect(menuRule).toContain("gap: 0");
+    expect(source).toContain("margin: 5px 8px");
+  });
+
   it("shares one shadow between the connection and new-session controls", () => {
     const newSessionRule = source.match(/\.new-session-button\)?\s*\{([^}]*)\}/)?.[1] ?? "";
     const connectionRule = source.match(/\.connection-status\)?\s*\{([^}]*)\}/)?.[1] ?? "";

@@ -283,6 +283,7 @@
     z-index: var(--layer-popover);
     width: 248px;
     padding: 6px;
+    gap: 0;
     border: 0;
     border-radius: 16px;
     background: color-mix(in srgb, var(--panel) 65%, transparent);
