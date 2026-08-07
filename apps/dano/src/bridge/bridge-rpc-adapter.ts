@@ -3754,7 +3754,7 @@ class BrowserSessionView {
       model,
       thinkingLevel,
       isStreaming: !this.context.state.isIdle(),
-      isCompacting: false,
+      isCompacting: this.context.state.isCompacting(),
       steeringMode: "all",
       followUpMode: "all",
       sessionFile,
@@ -6412,8 +6412,14 @@ export class BridgeRpcAdapter {
         }
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
-          clearSteeringQueue(session);
-          await session.abort();
+          if (session.isCompacting) {
+            session.abortCompaction();
+          } else {
+            clearSteeringQueue(session);
+            await session.abort();
+          }
+        } else if (this.context.state.isCompacting()) {
+          this.context.actions.abortCompaction();
         } else {
           this.context.actions.abort();
         }

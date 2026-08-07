@@ -36,7 +36,7 @@ type PiAiPublicContracts = {
 type PiCodingAgentPublicContracts = {
   agentSession: Pick<
     AgentSession,
-    "model" | "thinkingLevel" | "pendingMessageCount"
+    "model" | "thinkingLevel" | "pendingMessageCount" | "abortCompaction"
   >;
   extensionRuntime: ExtensionRuntime;
   rpcCommand: RpcCommand;
@@ -105,6 +105,9 @@ describe("Pi 0.82.1 public interface baseline", () => {
     const adapterSource = bridgeSources.find(
       ({ name }) => name === "bridge-rpc-adapter.ts",
     )?.source;
+    const detachedSessionSource = bridgeSources.find(
+      ({ name }) => name === "detached-session.ts",
+    )?.source;
     const danoConfigSource = readFileSync(
       new URL("../dano-config.ts", import.meta.url),
       "utf8",
@@ -121,6 +124,15 @@ describe("Pi 0.82.1 public interface baseline", () => {
       new URL("../../../../../dano.config.json", import.meta.url),
       "utf8",
     );
+    const piRuntimeDefaults = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../../../deploy/runtime-defaults/settings.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { compaction?: { enabled?: boolean } };
 
     for (const source of [danoConfigSource, productConfig]) {
       expect(source).not.toMatch(
@@ -164,6 +176,11 @@ describe("Pi 0.82.1 public interface baseline", () => {
     expect(backendSource).not.toMatch(privateFieldAccess);
     expect(backendSource).toContain("session.pendingMessageCount");
     expect(backendSource).not.toContain('event.type === "queue_update"');
+    expect(piRuntimeDefaults.compaction?.enabled).toBe(true);
+    expect(detachedSessionSource).toBeDefined();
+    expect(detachedSessionSource!).not.toContain(
+      "setAutoCompactionEnabled",
+    );
   });
 
   it("keeps Field Assist on the public ModelRuntime boundary", () => {

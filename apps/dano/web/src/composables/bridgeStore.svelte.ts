@@ -6,6 +6,9 @@ import type {
   FieldAssistCommandPayload,
   FieldAssistResult,
   RpcBridgeEvent,
+  RpcCompactionReason,
+  RpcCompactionEndEvent,
+  RpcCompactionStartEvent,
   RpcCommand,
   RpcAgentEndEvent,
   RpcAgentStartEvent,
@@ -362,6 +365,8 @@ let _isStreaming = $state(false);
 let _isPromptPending = $state(false);
 let _compactingRequestCount = $state(0);
 let _remoteCompactionActive = $state(false);
+let _compactionReason = $state<RpcCompactionReason | null>(null);
+let _compactionLifecycleAuthoritative = false;
 let _queuedUserMessages = $state<RpcQueuedMessage[]>([]);
 let _sessionStats = $state<RpcSessionStats | null>(null);
 let _gitRepoState = $state<RpcGitRepoState | null>(null);
@@ -415,6 +420,7 @@ let isPromptPending = $derived(_isPromptPending);
 let isCompacting = $derived(
   _compactingRequestCount > 0 || _remoteCompactionActive,
 );
+let compactionReason = $derived(_compactionReason);
 let queuedUserMessages = $derived(_queuedUserMessages);
 let sessionStats = $derived(_sessionStats);
 let gitRepoState = $derived(_gitRepoState);
@@ -1503,6 +1509,7 @@ function applyTranscriptPage(
   const normalized = page.messages.map((entry, idx) =>
     normalizeTranscriptEntry(entry, `snapshot:${idx}`),
   ) as TranscriptEntry[];
+  let preservedLoadedHistory = false;
 
   if (mode === "prepend") {
     const existingKeys = new Set<string | undefined>();
@@ -1516,6 +1523,27 @@ function applyTranscriptPage(
       ...merged,
       ...currentRawTranscriptEntries(),
     ] as TranscriptEntry[];
+  } else if (
+    mode === "replace" &&
+    prevSp === (page.sessionPath ?? null) &&
+    normalized.length > 0
+  ) {
+    const currentEntries = currentRawTranscriptEntries();
+    const firstIncomingKey = normalized[0]?.transcriptKey;
+    const overlapIndex = firstIncomingKey
+      ? currentEntries.findIndex(
+          entry => entry.transcriptKey === firstIncomingKey,
+        )
+      : -1;
+    if (overlapIndex >= 0) {
+      _rawTranscript = [
+        ...currentEntries.slice(0, overlapIndex),
+        ...normalized,
+      ] as TranscriptEntry[];
+      preservedLoadedHistory = overlapIndex > 0;
+    } else {
+      _rawTranscript = normalized;
+    }
   } else {
     _rawTranscript = normalized;
   }
@@ -1530,8 +1558,10 @@ function applyTranscriptPage(
     clearPromptPending();
   }
   _transcriptSessionPath = nsp;
-  _transcriptHasOlder = page.hasOlder;
-  _transcriptOldestCursor = page.oldestCursor ?? null;
+  if (!preservedLoadedHistory) {
+    _transcriptHasOlder = page.hasOlder;
+    _transcriptOldestCursor = page.oldestCursor ?? null;
+  }
   _transcriptNewestCursor = page.newestCursor ?? null;
   _transcriptInitialLoading = false;
   _transcriptPageLoading = false;
@@ -1599,6 +1629,14 @@ function applySessionSnapshotResponse(
 
   const prevSp = getDisplayedSessionPath();
   const prevWp = getWorkspaceEntriesContextKey();
+
+  if (
+    _liveSessionPath !== null &&
+    data.sessionPath &&
+    data.sessionPath !== _liveSessionPath
+  ) {
+    _compactionLifecycleAuthoritative = false;
+  }
 
   applySessionTranscriptPage(data.transcript);
   if (data.sessionPath) _liveSessionPath = data.sessionPath;
@@ -1776,22 +1814,61 @@ function applyTranscriptDelta(payload: RpcTranscriptDeltaEvent) {
 
 function appendCompactErrorMessage(message: string) {
   const detail = message.trim();
-  const em = detail
-    ? `${t("store.error.unknownCompaction")}: ${detail}`
-    : t("store.error.unknownCompaction");
+  if (detail) console.error("Context compaction failed:", detail);
   upsertTranscriptMessage({
     transcriptKey: `local:compact-error:${Date.now()}:${requestIdCounter}`,
     role: "assistant",
     stopReason: "error",
-    errorMessage: em,
+    errorMessage: t("store.error.compactionFailed"),
     timestamp: new Date().toISOString(),
   });
 }
 
-function setCompactionState(compacting: boolean) {
+function setCompactionState(
+  compacting: boolean,
+  reason: RpcCompactionReason | null = null,
+) {
   _remoteCompactionActive = compacting;
+  _compactionReason = compacting ? reason : null;
   if (!_sessionState) return;
   _sessionState = { ..._sessionState, isCompacting: compacting };
+}
+
+function applySessionActivitySnapshot(
+  state: Pick<RpcSessionState, "isStreaming" | "isCompacting">,
+) {
+  if (_compactionLifecycleAuthoritative) {
+    setCompactionState(_remoteCompactionActive, _compactionReason);
+    if (_sessionState) {
+      _sessionState = { ..._sessionState, isStreaming: _isStreaming };
+    }
+    return;
+  }
+  _isStreaming = state.isStreaming;
+  setCompactionState(state.isCompacting);
+}
+
+export function applyCompactionStartEvent(
+  payload: RpcCompactionStartEvent,
+): void {
+  _compactionLifecycleAuthoritative = true;
+  setCompactionState(true, payload.reason);
+}
+
+export function applyCompactionEndEvent(
+  payload: RpcCompactionEndEvent,
+): void {
+  _compactionLifecycleAuthoritative = true;
+  setCompactionState(false);
+  if (!payload.willRetry) _isStreaming = false;
+  if (
+    payload.reason !== "manual" &&
+    !payload.aborted &&
+    typeof payload.errorMessage === "string" &&
+    payload.errorMessage.trim()
+  ) {
+    appendCompactErrorMessage(payload.errorMessage);
+  }
 }
 
 async function ensureConnectedForPrompt(): Promise<boolean> {
@@ -2158,10 +2235,11 @@ export async function createGitBranch(
 }
 
 export async function abortGeneration() {
-  if (!_isStreaming) return null;
+  if (!_isStreaming && !isCompacting) return null;
 
+  const abortingCompaction = isCompacting;
   const response = await sendCommand({ type: "abort" });
-  if (response.success) {
+  if (response.success && !abortingCompaction) {
     clearQueuedSteeringMessages();
   }
   return response;
@@ -2441,6 +2519,12 @@ function handleResponse(payload: RpcResponse) {
         if (data) {
           const prevSp = getDisplayedSessionPath();
           const prevWp = getWorkspaceEntriesContextKey();
+          if (
+            _liveSessionPath !== null &&
+            _liveSessionPath !== (data.sessionFile ?? null)
+          ) {
+            _compactionLifecycleAuthoritative = false;
+          }
           _liveSessionPath = data.sessionFile ?? null;
           const isBrowsingDifferent = Boolean(
             _activeTreeSessionPath &&
@@ -2462,9 +2546,8 @@ function handleResponse(payload: RpcResponse) {
           }
           updateCurrentModel(data.model);
           _currentThinkingLevel = normalizeThinkingLevel(data.thinkingLevel);
-          setSessionRunning(data.sessionFile ?? null, data.isStreaming);
-          _isStreaming = data.isStreaming;
-          setCompactionState(data.isCompacting);
+          applySessionActivitySnapshot(data);
+          setSessionRunning(data.sessionFile ?? null, _isStreaming);
           if (!_activeTreeSessionPath && data.sessionFile) {
             setActiveTreeSessionPath(data.sessionFile);
           }
@@ -2733,19 +2816,11 @@ function handleEvent(payload: RpcBridgeEvent) {
       break;
     }
     case "compaction_start": {
-      setCompactionState(true);
+      applyCompactionStartEvent(payload);
       break;
     }
     case "compaction_end": {
-      setCompactionState(false);
-      if (
-        payload.reason !== "manual" &&
-        !payload.aborted &&
-        typeof payload.errorMessage === "string" &&
-        payload.errorMessage.trim()
-      ) {
-        appendCompactErrorMessage(payload.errorMessage);
-      }
+      applyCompactionEndEvent(payload);
       break;
     }
   }
@@ -2891,6 +2966,7 @@ function resetTransportState() {
   themeColorTransportRevision += 1;
   themeColorSaveQueue = Promise.resolve();
   _accentColorPreset = DEFAULT_ACCENT_COLOR_PRESET;
+  _compactionLifecycleAuthoritative = false;
   stopHeartbeatWatchdog();
   lastHeartbeatAt = 0;
   if (eventSource) {
@@ -2911,6 +2987,8 @@ function markDisconnected(reason = t("appHeader.connection.disconnected")) {
   _connectionStatus = "disconnected";
   clearPromptPending();
   _remoteCompactionActive = false;
+  _compactionReason = null;
+  _compactionLifecycleAuthoritative = false;
   _reconnectCount++;
   _runningSessionPaths = [];
   _workspaceSessionLoading = {};
@@ -3142,6 +3220,9 @@ export function initBridge() {
     },
     get isCompacting() {
       return isCompacting;
+    },
+    get compactionReason() {
+      return compactionReason;
     },
     get sessionStats() {
       return sessionStats;

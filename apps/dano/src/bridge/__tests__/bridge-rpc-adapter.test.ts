@@ -199,6 +199,7 @@ const createMockContext = (): BridgeRpcAdapterContext => {
     sessionManager: sessionManager as unknown as SessionManager,
     cwd: "/test/project",
     isIdle: vi.fn().mockReturnValue(true),
+    isCompacting: vi.fn().mockReturnValue(false),
     getPendingMessageCount: vi.fn().mockReturnValue(0),
     getAvailableModels: vi.fn().mockReturnValue([
       model,
@@ -223,6 +224,7 @@ const createMockContext = (): BridgeRpcAdapterContext => {
   const actions = {
     sendUserMessage: vi.fn(),
     abort: vi.fn(),
+    abortCompaction: vi.fn(),
     setModel: vi.fn().mockResolvedValue(undefined),
     setThinkingLevel: vi.fn(),
     setSessionName: vi.fn(),
@@ -1250,6 +1252,52 @@ describe("BridgeRpcAdapter", () => {
       await new Promise(r => setTimeout(r, 10));
 
       expect(context.actions.abort).toHaveBeenCalled();
+      expect(context.actions.abortCompaction).not.toHaveBeenCalled();
+    });
+
+    it("aborts Pi compaction instead of the agent turn", async () => {
+      (
+        context.state.isCompacting as ReturnType<typeof vi.fn>
+      ).mockReturnValue(true);
+      const command: RpcCommand = { id: "cmd-compact-abort", type: "abort" };
+      ws.trigger(
+        "message",
+        Buffer.from(JSON.stringify({ type: "command", payload: command })),
+      );
+
+      await new Promise(r => setTimeout(r, 10));
+
+      expect(context.actions.abortCompaction).toHaveBeenCalledOnce();
+      expect(context.actions.abort).not.toHaveBeenCalled();
+    });
+
+    it("aborts Pi compaction for a selected detached session", async () => {
+      const abort = vi.fn().mockResolvedValue(undefined);
+      const abortCompaction = vi.fn();
+      const detachedSession = {
+        isCompacting: true,
+        abort,
+        abortCompaction,
+        sessionManager: context.state.sessionManager,
+      };
+      const sessionRuntime = (adapter as any).sessionRuntime;
+      vi.spyOn(sessionRuntime, "hasDetachedSelection").mockReturnValue(true);
+      vi.spyOn(sessionRuntime, "ensureDetachedSession").mockResolvedValue(
+        detachedSession,
+      );
+      const command: RpcCommand = {
+        id: "cmd-detached-compact-abort",
+        type: "abort",
+      };
+      ws.trigger(
+        "message",
+        Buffer.from(JSON.stringify({ type: "command", payload: command })),
+      );
+
+      await new Promise(r => setTimeout(r, 10));
+
+      expect(abortCompaction).toHaveBeenCalledOnce();
+      expect(abort).not.toHaveBeenCalled();
     });
 
     it("resolves a pending question through the command channel", async () => {
@@ -3500,6 +3548,12 @@ describe("BridgeRpcAdapter", () => {
       (
         context.state.sessionManager.getBranch as ReturnType<typeof vi.fn>
       ).mockImplementation(() => sessionManager.getBranch());
+      (
+        context.state.sessionManager.getTree as ReturnType<typeof vi.fn>
+      ).mockImplementation(() => sessionManager.getTree());
+      (
+        context.state.sessionManager.getLeafId as ReturnType<typeof vi.fn>
+      ).mockImplementation(() => sessionManager.getLeafId());
 
       const command: RpcCommand = {
         id: "cmd-compact",
@@ -3545,6 +3599,29 @@ describe("BridgeRpcAdapter", () => {
           ],
         }),
       ]);
+
+      (ws.send as ReturnType<typeof vi.fn>).mockClear();
+      ws.trigger(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "command",
+            payload: { id: "cmd-compact-tree", type: "list_tree_entries" },
+          }),
+        ),
+      );
+      await new Promise(r => setTimeout(r, 10));
+
+      const treeResponse = JSON.parse(
+        (ws.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string,
+      );
+      expect(treeResponse.payload.data.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            previewText: "[compaction: 19k tokens]",
+          }),
+        ]),
+      );
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });

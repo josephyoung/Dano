@@ -1,6 +1,7 @@
 <script lang="ts">
   import type {
     RpcGitRepoState,
+    RpcCompactionReason,
     RpcImageContent,
     RpcQueuedMessage,
     RpcResponse,
@@ -51,6 +52,7 @@
     isStreaming = false,
     isPromptPending = false,
     isCompacting = false,
+    compactionReason = null as RpcCompactionReason | null,
     isDebugMode = false,
     slashCommandsAndMentionsEnabled = false,
     connectionStatus = "disconnected" as ConnectionStatus,
@@ -112,6 +114,7 @@
     isStreaming?: boolean;
     isPromptPending?: boolean;
     isCompacting?: boolean;
+    compactionReason?: RpcCompactionReason | null;
     isDebugMode?: boolean;
     slashCommandsAndMentionsEnabled?: boolean;
     connectionStatus?: ConnectionStatus;
@@ -215,6 +218,7 @@
     {isStreaming}
     {isPromptPending}
     {isCompacting}
+    {compactionReason}
     scrollLocked={centerFocusActive}
     showMessageIds={isDebugMode}
     {allowRevision}
@@ -272,6 +276,7 @@
     bind:this={composerRef}
     {connectionStatus}
     {isStreaming}
+    {isCompacting}
     {isDebugMode}
     {isDebugSession}
     {slashCommandsAndMentionsEnabled}

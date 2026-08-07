@@ -161,6 +161,10 @@ export function createDanoBackendFromSession(
       return !session.isStreaming;
     },
 
+    isCompacting() {
+      return session.isCompacting;
+    },
+
     getPendingMessageCount() {
       return session.pendingMessageCount;
     },
@@ -204,6 +208,10 @@ export function createDanoBackendFromSession(
 
     abort() {
       void session.abort();
+    },
+
+    abortCompaction() {
+      session.abortCompaction();
     },
 
     async setModel(model) {

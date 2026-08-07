@@ -4,6 +4,7 @@
     FieldAssistCommandPayload,
     FieldAssistResult,
     RpcImageContent,
+    RpcCompactionReason,
     RpcTranscriptContent,
     RpcTranscriptContentBlock,
   } from "@dano/types/protocol";
@@ -129,6 +130,7 @@
     isStreaming = false,
     isPromptPending = false,
     isCompacting = false,
+    compactionReason = null as RpcCompactionReason | null,
     scrollLocked = false,
     showMessageIds = false,
     allowRevision = false,
@@ -157,6 +159,7 @@
     isStreaming?: boolean;
     isPromptPending?: boolean;
     isCompacting?: boolean;
+    compactionReason?: RpcCompactionReason | null;
     scrollLocked?: boolean;
     showMessageIds?: boolean;
     allowRevision?: boolean;
@@ -293,6 +296,15 @@
     isStreaming || transcriptStreams.length > 0 || transcriptDeltas.length > 0,
   );
   let showBusyIndicator = $derived(hasVisibleStreaming || isCompacting);
+  let compactionStatusLabel = $derived(
+    t(
+      compactionReason === "overflow"
+        ? "chatTranscript.compaction.overflow"
+        : compactionReason === "manual"
+          ? "chatTranscript.compaction.manual"
+          : "chatTranscript.compaction.threshold",
+    ),
+  );
   let pendingAssistantState = $derived(
     assistantPendingState(
       [
@@ -1847,6 +1859,18 @@
     {/if}
   {/each}
 
+  {#if isCompacting}
+    <div
+      class="compaction-status"
+      data-compaction-status="true"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="compaction-status-dot" aria-hidden="true"></span>
+      <span>{compactionStatusLabel}</span>
+    </div>
+  {/if}
+
   {#if pendingAssistantState}
     <div
       class="message-row assistant assistant-pending-row"
@@ -2472,6 +2496,38 @@
     color: var(--text-muted);
     font-size: 0.76rem;
     line-height: 1.6;
+  }
+
+  .compaction-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(960px, 100%);
+    margin: 2px auto 0;
+    padding: 0 4px;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+
+  .compaction-status-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--accent);
+    animation: compaction-status-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes compaction-status-pulse {
+    0%, 100% { opacity: 0.38; }
+    50% { opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .compaction-status-dot {
+      animation: none;
+    }
   }
 
   .message-image-block { margin: 0; }

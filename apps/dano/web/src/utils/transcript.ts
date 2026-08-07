@@ -1275,7 +1275,7 @@ function isSystemBlock(
 }
 
 function isHiddenSystemBlock(block: RpcTranscriptSystemBlock): boolean {
-  return block.type === "session_info";
+  return block.type === "session_info" || block.type === "compaction";
 }
 
 function contentItemText(block: TranscriptContentItem): string {

@@ -31,6 +31,7 @@
   let {
     connectionStatus = "disconnected" as ConnectionStatus,
     isStreaming = false,
+    isCompacting = false,
     isDebugMode = false,
     isDebugSession = false,
     slashCommandsAndMentionsEnabled = false,
@@ -99,6 +100,7 @@
     {
       get connectionStatus() { return connectionStatus; },
       get isStreaming() { return isStreaming; },
+      get isCompacting() { return isCompacting; },
       get isDebugMode() { return isDebugMode; },
       get slashCommandsAndMentionsEnabled() { return slashCommandsAndMentionsEnabled; },
       get commands() { return commands; },

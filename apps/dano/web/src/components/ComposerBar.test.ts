@@ -46,6 +46,44 @@ describe("ComposerBar prompt submission", () => {
     }
   });
 
+  it("keeps input available during compaction and exposes stop when empty", async () => {
+    const onAbort = vi.fn();
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ComposerBar, {
+      target,
+      props: {
+        connectionStatus: "connected",
+        isCompacting: true,
+        onAbort,
+        onSubmit,
+      },
+    });
+
+    try {
+      await tick();
+      const textarea = target.querySelector<HTMLTextAreaElement>("textarea")!;
+      const action = target.querySelector<HTMLButtonElement>(".send-btn")!;
+      expect(textarea.disabled).toBe(false);
+      expect(action.getAttribute("aria-label")).toBe("停止响应");
+      action.click();
+      expect(onAbort).toHaveBeenCalledOnce();
+
+      textarea.value = "压缩完成后继续";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      expect(action.getAttribute("aria-label")).toBe("发送消息");
+      action.click();
+      await tick();
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "压缩完成后继续" }),
+      );
+    } finally {
+      await unmount(component);
+    }
+  });
+
   it("keeps the submitted draft and blocks duplicate sends until acceptance", async () => {
     const acceptance = deferred<boolean>();
     const onSubmit = vi.fn(() => acceptance.promise);

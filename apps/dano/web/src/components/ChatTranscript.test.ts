@@ -538,6 +538,67 @@ describe("ChatTranscript assistant pending indicator", () => {
   });
 });
 
+describe("ChatTranscript compaction presentation", () => {
+  it("does not display persistent compaction summaries", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        messages: [
+          {
+            id: "compaction-1",
+            role: "system",
+            content: [
+              {
+                type: "compaction",
+                summary: "保留了当前任务、关键决定与后续步骤。",
+                tokensBefore: 22400,
+                firstKeptEntryId: "message-1",
+              },
+            ],
+          },
+        ] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector('[data-system-type="compaction"]')).toBeNull();
+      expect(target.textContent).not.toContain("保留了当前任务");
+      expect(target.textContent).not.toContain("上下文已压缩");
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+
+  it.each([
+    ["threshold", "正在压缩上下文…"],
+    ["overflow", "上下文已满，正在压缩并重试…"],
+  ] as const)("shows the %s transient status", async (compactionReason, label) => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(ChatTranscript, {
+      target,
+      props: {
+        isCompacting: true,
+        compactionReason,
+        messages: [{ id: "user-1", role: "user", content: "继续" }] as never,
+      },
+    });
+
+    try {
+      await tick();
+      expect(target.querySelector('[data-compaction-status="true"]')?.textContent)
+        .toContain(label);
+    } finally {
+      await unmount(component);
+      target.remove();
+    }
+  });
+});
+
 describe("ChatTranscript Activity Trail", () => {
   it("shows a sanitized activity summary and controlled inline details", async () => {
     const target = document.createElement("div");

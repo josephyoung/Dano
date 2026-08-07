@@ -50,6 +50,7 @@ import {
 export interface ComposerBarProps {
   readonly connectionStatus: ConnectionStatus;
   readonly isStreaming: boolean;
+  readonly isCompacting: boolean;
   readonly isDebugMode: boolean;
   readonly slashCommandsAndMentionsEnabled: boolean;
   readonly commands: readonly RpcSlashCommand[];
@@ -305,8 +306,11 @@ export function createComposerBarState(
       hasSubmittableAttachments,
     }),
   );
-  let canAbort = $derived(!isDisabled && props.isStreaming);
-  let showStopButton = $derived(props.isStreaming && !canSubmit);
+  let hasAbortableOperation = $derived(
+    props.isStreaming || props.isCompacting,
+  );
+  let canAbort = $derived(!isDisabled && hasAbortableOperation);
+  let showStopButton = $derived(hasAbortableOperation && !canSubmit);
   let hasPendingMessages = $derived(props.pendingMessageCount > 0);
   let attachmentSummary = $derived(attachmentNotice ?? "");
 
@@ -810,7 +814,7 @@ export function createComposerBarState(
     }
 
     // Escape → abort
-    if (e.key === "Escape" && props.isStreaming) {
+    if (e.key === "Escape" && hasAbortableOperation) {
       e.preventDefault();
       handleAbortAction();
       return;
