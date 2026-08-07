@@ -1652,45 +1652,22 @@
               {@const block = projected.block}
               {@const bIdx = projected.blockIndex}
               {#if block.kind === "system"}
-                {#if block.systemType === "compaction"}
-                  <details class="system-block compaction-block" data-system-type="compaction">
-                    <summary class="compaction-summary">
-                      <span class="compaction-chevron" aria-hidden="true">
-                        <ChevronRight size={14} />
-                      </span>
-                      <span class="compaction-summary-copy">
-                        <span class="system-block-label">{block.label}</span>
-                        <span class="system-block-title">{block.title}</span>
-                      </span>
-                    </summary>
-                    {#if block.body}
-                      <div class="compaction-body">
-                        <MarkdownRenderer
-                          class="system-block-body"
-                          content={block.body}
-                          onOpenFileReference={onOpenFileReference}
-                        />
-                      </div>
+                <article class="system-block" data-system-type={block.systemType}>
+                  <div class="system-block-header">
+                    <span class="system-block-label">{block.label}</span>
+                    {#if block.meta}
+                      <span class="system-block-meta">{block.meta}</span>
                     {/if}
-                  </details>
-                {:else}
-                  <article class="system-block" data-system-type={block.systemType}>
-                    <div class="system-block-header">
-                      <span class="system-block-label">{block.label}</span>
-                      {#if block.meta}
-                        <span class="system-block-meta">{block.meta}</span>
-                      {/if}
-                    </div>
-                    <div class="system-block-title">{block.title}</div>
-                    {#if block.body}
-                      <MarkdownRenderer
-                        class="system-block-body"
-                        content={block.body}
-                        onOpenFileReference={onOpenFileReference}
-                      />
-                    {/if}
-                  </article>
-                {/if}
+                  </div>
+                  <div class="system-block-title">{block.title}</div>
+                  {#if block.body}
+                    <MarkdownRenderer
+                      class="system-block-body"
+                      content={block.body}
+                      onOpenFileReference={onOpenFileReference}
+                    />
+                  {/if}
+                </article>
               {:else if block.kind === "thinking"}
                 <div class="thinking-block">
                   <div class="thinking-stream-line">
@@ -2521,52 +2498,6 @@
     line-height: 1.6;
   }
 
-  details.compaction-block {
-    display: block;
-    padding: 0;
-  }
-
-  .compaction-summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 14px;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .compaction-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .compaction-summary:focus-visible {
-    outline: 2px solid var(--focus-ring);
-    outline-offset: 2px;
-    border-radius: 13px;
-  }
-
-  .compaction-chevron {
-    display: inline-flex;
-    flex: 0 0 auto;
-    color: var(--text-subtle);
-    transition: transform 160ms ease;
-  }
-
-  .compaction-block[open] .compaction-chevron {
-    transform: rotate(90deg);
-  }
-
-  .compaction-summary-copy {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .compaction-body {
-    padding: 0 14px 12px 36px;
-  }
-
   .compaction-status {
     display: flex;
     align-items: center;
@@ -2594,10 +2525,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .compaction-chevron {
-      transition: none;
-    }
-
     .compaction-status-dot {
       animation: none;
     }

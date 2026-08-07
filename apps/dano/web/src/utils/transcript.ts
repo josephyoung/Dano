@@ -1275,7 +1275,7 @@ function isSystemBlock(
 }
 
 function isHiddenSystemBlock(block: RpcTranscriptSystemBlock): boolean {
-  return block.type === "session_info";
+  return block.type === "session_info" || block.type === "compaction";
 }
 
 function contentItemText(block: TranscriptContentItem): string {
@@ -1315,13 +1315,10 @@ function systemContentBlock(
         kind: "system",
         systemType: "compaction",
         label: t("transcript.system.compactionLabel"),
-        title:
-          tokensBefore === null
-            ? t("transcript.system.compactionTitle")
-            : t("transcript.system.compactionTitleWithTokens", {
-                tokens: formatTokenCount(tokensBefore),
-              }),
+        title: t("transcript.system.compactionTitle"),
         body: block.summary.trim() ? block.summary.trim() : undefined,
+        meta:
+          tokensBefore === null ? undefined : formatTokenCount(tokensBefore),
       };
     }
     case "branch_summary":

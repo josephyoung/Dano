@@ -539,7 +539,7 @@ describe("ChatTranscript assistant pending indicator", () => {
 });
 
 describe("ChatTranscript compaction presentation", () => {
-  it("shows a collapsed persistent summary with the original token count", async () => {
+  it("does not display persistent compaction summaries", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(ChatTranscript, {
@@ -564,19 +564,9 @@ describe("ChatTranscript compaction presentation", () => {
 
     try {
       await tick();
-      const card = target.querySelector<HTMLDetailsElement>(
-        'details[data-system-type="compaction"]',
-      );
-      expect(card).not.toBeNull();
-      expect(card?.open).toBe(false);
-      expect(card?.querySelector("summary")?.textContent).toContain(
-        "已压缩 22.4k tokens 的上下文",
-      );
-      card?.querySelector<HTMLElement>("summary")?.click();
-      await tick();
-      expect(card?.open).toBe(true);
-      expect(card?.querySelector(".compaction-body")).not.toBeNull();
-      expect(chatTranscriptSource).toContain("content={block.body}");
+      expect(target.querySelector('[data-system-type="compaction"]')).toBeNull();
+      expect(target.textContent).not.toContain("保留了当前任务");
+      expect(target.textContent).not.toContain("上下文已压缩");
     } finally {
       await unmount(component);
       target.remove();
