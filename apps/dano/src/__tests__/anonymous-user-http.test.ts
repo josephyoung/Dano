@@ -30,6 +30,7 @@ async function startAnonymousServer(
   runtimeRootPath: string,
   secureCookie = false,
   authenticatedResolver?: AuthenticatedUserContextResolver,
+  sessionsRootPath?: string,
 ) {
   const controller = await startDanoServer(
     {
@@ -43,6 +44,7 @@ async function startAnonymousServer(
     },
     {
       captureSigint: false,
+      sessionsRootPath,
       userContextResolver: createAnonymousUserContextResolver({
         runtimeRootPath,
         secureCookie,
@@ -191,8 +193,12 @@ async function uploadProjectFile(
   expect(response.status).toBe(201);
   return (await response.json()) as {
     id: string;
+    name: string;
+    size: number;
+    mimeType: string;
     previewUrl: string;
     path: string;
+    relativePath: string;
   };
 }
 
@@ -243,6 +249,55 @@ describe("Anonymous User over HTTP/Bridge", () => {
     const firstServer = await startAnonymousServer(runtimeRoot);
     const first = await createClient(firstServer.origin);
     const cookie = guestCookie(first.response);
+    const sessionState = await executeCommand(
+      firstServer.origin,
+      first.body,
+      cookie,
+      {
+        id: "guest-restart-state",
+        type: "new_session",
+        workspacePath: first.body.defaultWorkspacePath,
+      },
+    );
+    const sessionData = (
+      sessionState.payload as {
+        data?: { sessionPath?: string; sessionId?: string };
+      }
+    ).data;
+    const sessionPath = sessionData?.sessionPath;
+    expect(sessionPath).toBeTruthy();
+    const uploaded = await uploadProjectFile(
+      firstServer.origin,
+      first.body.client.id,
+      cookie,
+      "restart.txt",
+      "anonymous file survives restart",
+    );
+    const referenced = await executeCommand(
+      firstServer.origin,
+      first.body,
+      cookie,
+      {
+        id: "guest-restart-upload",
+        type: "steer",
+        message: "Keep this file",
+        files: [uploaded],
+      },
+    );
+    expect(referenced.payload).toMatchObject({
+      command: "steer",
+      success: true,
+    });
+    fs.writeFileSync(
+      sessionPath!,
+      `${JSON.stringify({
+        type: "session",
+        id: sessionData?.sessionId,
+        timestamp: "2026-08-11T00:00:00.000Z",
+        cwd: first.body.defaultWorkspacePath,
+      })}\n`,
+      "utf8",
+    );
 
     const refreshed = await createClient(firstServer.origin, cookie);
     expect(refreshed.response.headers.get("set-cookie")).toBeNull();
@@ -260,6 +315,26 @@ describe("Anonymous User over HTTP/Bridge", () => {
       first.body.defaultWorkspacePath,
     );
     expect(restarted.body.authentication).toEqual({ status: "anonymous" });
+    const switched = await executeCommand(
+      restartedServer.origin,
+      restarted.body,
+      cookie,
+      {
+        id: "guest-restart-switch",
+        type: "switch_session",
+        sessionPath: sessionPath!,
+      },
+    );
+    expect(switched.payload).toMatchObject({
+      command: "switch_session",
+      success: true,
+    });
+    const preview = await fetch(
+      `${restartedServer.origin}${uploaded.previewUrl}`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(preview.status).toBe(200);
+    expect(await preview.text()).toBe("anonymous file survives restart");
   });
 
   it("replaces an unknown or expired guest Cookie with a new Anonymous User", async () => {
@@ -451,5 +526,52 @@ describe("Anonymous User over HTTP/Bridge", () => {
       },
     );
     expect(forged.status).toBe(403);
+  });
+
+  it("uses the configured sessions root as isolated per-User session roots", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-session-base-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const sessionsRoot = path.join(runtimeRoot, "configured-sessions");
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      undefined,
+      sessionsRoot,
+    );
+    const first = await createClient(origin);
+    const second = await createClient(origin);
+    const firstState = await executeCommand(
+      origin,
+      first.body,
+      guestCookie(first.response),
+      { id: "configured-session-one", type: "get_state" },
+    );
+    const secondState = await executeCommand(
+      origin,
+      second.body,
+      guestCookie(second.response),
+      { id: "configured-session-two", type: "get_state" },
+    );
+    const firstSession = (
+      firstState.payload as { data?: { sessionFile?: string } }
+    ).data?.sessionFile;
+    const secondSession = (
+      secondState.payload as { data?: { sessionFile?: string } }
+    ).data?.sessionFile;
+
+    expect(firstSession).toBeTruthy();
+    expect(secondSession).toBeTruthy();
+    expect(path.relative(sessionsRoot, firstSession!).startsWith("..")).toBe(
+      false,
+    );
+    expect(path.relative(sessionsRoot, secondSession!).startsWith("..")).toBe(
+      false,
+    );
+    expect(firstSession).not.toBe(secondSession);
+    expect(path.relative(sessionsRoot, firstSession!).split(path.sep)[0]).not.toBe(
+      path.relative(sessionsRoot, secondSession!).split(path.sep)[0],
+    );
   });
 });

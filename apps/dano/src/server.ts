@@ -21,6 +21,7 @@ export interface StartDanoServerOptions {
   cwd?: string;
   sessionPath?: string;
   sessionDir?: string;
+  sessionsRootPath?: string;
   captureSigint?: boolean;
   backend?: DanoBackend;
   sessionRegistry?: DetachedSessionRegistry;
@@ -45,11 +46,13 @@ export async function startDanoServer(
   const eventHandlers: Array<(event: BridgeEvent) => void> = [];
 
   const userRuntimeRegistry = options.userContextResolver
-    ? new UserRuntimeRegistry((runtimeOptions: CreateDanoBackendOptions) =>
-        createDanoBackend({
-          ...runtimeOptions,
-          danoConfig: options.danoConfig,
-        }),
+    ? new UserRuntimeRegistry(
+        (runtimeOptions: CreateDanoBackendOptions) =>
+          createDanoBackend({
+            ...runtimeOptions,
+            danoConfig: options.danoConfig,
+          }),
+        { sessionsRootPath: options.sessionsRootPath },
       )
     : undefined;
   const backend = userRuntimeRegistry

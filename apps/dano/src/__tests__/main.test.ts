@@ -254,7 +254,7 @@ describe("Dano main", () => {
       /^\/opt\/dano\/runtime-data\/workspaces\/ws_[0-9a-f-]{36}$/,
     );
     expect(options.sessionsRootPath).toBe(
-      `${options.defaultWorkspacePath}/.dano/sessions`,
+      "/opt/dano/runtime-data/.dano/sessions",
     );
     expect(options.staticDir).toBe(
       resolveDefaultStaticDir(resolve("apps/dano/src/main.ts")),
@@ -503,7 +503,7 @@ describe("Dano main", () => {
     expect(options.defaultWorkspacePath).not.toBe("/tmp/custom-dano");
     expect(options.defaultWorkspacePath).not.toBe("/tmp/legacy-dano");
     expect(options.sessionsRootPath).toBe(
-      `${options.defaultWorkspacePath}/.dano/sessions`,
+      "/tmp/dano-runtime/.dano/sessions",
     );
   });
 
@@ -518,25 +518,21 @@ describe("Dano main", () => {
     );
     expect(options.defaultWorkspacePath).not.toBe("/tmp/cli-dano");
     expect(options.sessionsRootPath).toBe(
-      `${options.defaultWorkspacePath}/.dano/sessions`,
+      "/opt/dano/runtime-data/.dano/sessions",
     );
   });
 
-  it("uses Dano sessions root from environment", () => {
+  it("uses Dano sessions root as the base for per-User session roots", () => {
     const options = parseDanoServerOptions([], {
-      DANO_DEFAULT_WORKSPACE_PATH: "/tmp/custom-dano",
+      DANO_RUNTIME_DIR: "/tmp/dano-runtime",
       DANO_SESSIONS_ROOT: "/tmp/custom-dano-sessions",
     });
 
-    expect(options.defaultWorkspacePath).toMatch(
-      /^\/opt\/dano\/runtime-data\/workspaces\/ws_[0-9a-f-]{36}$/,
-    );
     expect(options.sessionsRootPath).toBe("/tmp/custom-dano-sessions");
   });
 
   it("keeps PI_WEB_SESSIONS_ROOT compatibility when Dano sessions root is absent", () => {
     const options = parseDanoServerOptions([], {
-      DANO_DEFAULT_WORKSPACE_PATH: "/tmp/custom-dano",
       PI_WEB_SESSIONS_ROOT: "/tmp/pi-web-sessions",
     });
 
