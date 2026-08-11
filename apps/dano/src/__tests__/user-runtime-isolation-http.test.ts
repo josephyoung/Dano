@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -54,6 +54,69 @@ async function createClient(origin: string, token: string) {
     eventsUrl: string;
     messagesUrl: string;
   };
+}
+
+type TestClient = Awaited<ReturnType<typeof createClient>>;
+type TestUpload = {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  path: string;
+  relativePath: string;
+  previewUrl: string;
+};
+
+function authenticatedServerSetup(runtimeRoot: string) {
+  return {
+    config: {
+      ...DEFAULT_BRIDGE_CONFIG,
+      host: "127.0.0.1",
+      port: 0,
+      upload: {
+        ...DEFAULT_BRIDGE_CONFIG.upload,
+        uploadDir: path.join(runtimeRoot, "uploads"),
+      },
+    },
+    resolver: createJwtUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secret: TEST_JWT_SECRET,
+    }),
+  };
+}
+
+async function startAuthenticatedServer(
+  setup: ReturnType<typeof authenticatedServerSetup>,
+): Promise<{ controller: DanoServerController; origin: string }> {
+  const controller = await startDanoServer(setup.config, {
+    captureSigint: false,
+    userContextResolver: setup.resolver,
+  });
+  controllers.push(controller);
+  const origin = controller.getBridgeUrl();
+  if (!origin) throw new Error("Dano test server did not start");
+  return { controller, origin };
+}
+
+async function uploadProjectFile(
+  origin: string,
+  client: TestClient,
+  token: string,
+  name: string,
+  content: string,
+): Promise<TestUpload> {
+  const body = new TextEncoder().encode(content);
+  const hash = createHash("sha256").update(body).digest("hex");
+  const response = await fetch(
+    `${origin}/api/uploads?clientId=${encodeURIComponent(client.client.id)}&name=${encodeURIComponent(name)}&mimeType=text/plain&sha256=${hash}`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body,
+    },
+  );
+  expect(response.status).toBe(201);
+  return (await response.json()) as TestUpload;
 }
 
 function waitForResponse(
@@ -458,5 +521,273 @@ describe("User runtime isolation over HTTP/SSE", () => {
       command: "new_session",
       success: false,
     });
+  });
+
+  it("rejects another User's Uploaded Project File reference", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-user-upload-http-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const { origin } = await startAuthenticatedServer(
+      authenticatedServerSetup(runtimeRoot),
+    );
+    const aliceToken = signUser("alice-upload", "Alice");
+    const bobToken = signUser("bob-upload", "Bob");
+    const alice = await createClient(origin, aliceToken);
+    const bob = await createClient(origin, bobToken);
+    const uploaded = await uploadProjectFile(
+      origin,
+      alice,
+      aliceToken,
+      "private.txt",
+      "Alice private upload",
+    );
+
+    const rejected = await executeCommand(origin, bob, bobToken, {
+      id: "bob-forged-upload",
+      type: "prompt",
+      message: "Read this file",
+      files: [uploaded],
+    });
+
+    expect(rejected.payload).toMatchObject({
+      command: "prompt",
+      success: false,
+    });
+    expect(fs.existsSync(path.join(bob.defaultWorkspacePath, uploaded.relativePath))).toBe(
+      false,
+    );
+  });
+
+  it("restores a referenced upload only for the same User and Agent Session", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-user-upload-restart-http-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const setup = authenticatedServerSetup(runtimeRoot);
+    const aliceToken = signUser("alice-upload-restart", "Alice");
+    const { controller: firstController, origin: firstOrigin } =
+      await startAuthenticatedServer(setup);
+    const firstAlice = await createClient(firstOrigin, aliceToken);
+    const state = await executeCommand(firstOrigin, firstAlice, aliceToken, {
+      id: "upload-restart-session",
+      type: "new_session",
+      workspacePath: firstAlice.defaultWorkspacePath,
+    });
+    const sessionData = (
+      state.payload as {
+        data?: { sessionPath?: string; sessionId?: string };
+      }
+    ).data;
+    const sessionPath = sessionData?.sessionPath;
+    expect(sessionPath).toBeTruthy();
+    const uploaded = await uploadProjectFile(
+      firstOrigin,
+      firstAlice,
+      aliceToken,
+      "restart.txt",
+      "survives restart",
+    );
+    const referenced = await executeCommand(firstOrigin, firstAlice, aliceToken, {
+      id: "upload-before-restart",
+      type: "steer",
+      message: "Keep this project file",
+      files: [uploaded],
+    });
+    expect(referenced.payload).toMatchObject({
+      command: "steer",
+      success: true,
+    });
+    fs.writeFileSync(
+      sessionPath!,
+      `${JSON.stringify({
+        type: "session",
+        id: sessionData?.sessionId,
+        timestamp: "2026-08-11T00:00:00.000Z",
+        cwd: firstAlice.defaultWorkspacePath,
+      })}\n`,
+      "utf8",
+    );
+    await firstController.stop();
+    controllers.splice(controllers.indexOf(firstController), 1);
+
+    const { origin: secondOrigin } = await startAuthenticatedServer(setup);
+    const secondAlice = await createClient(secondOrigin, aliceToken);
+    const switched = await executeCommand(secondOrigin, secondAlice, aliceToken, {
+      id: "upload-restart-switch",
+      type: "switch_session",
+      sessionPath: sessionPath!,
+    });
+    expect(switched.payload).toMatchObject({
+      command: "switch_session",
+      success: true,
+    });
+
+    const restoredPreview = await fetch(`${secondOrigin}${uploaded.previewUrl}`, {
+      headers: { Authorization: `Bearer ${aliceToken}` },
+    });
+    expect(restoredPreview.status).toBe(200);
+    expect(await restoredPreview.text()).toBe("survives restart");
+    const repeatedPreview = await fetch(
+      `${secondOrigin}${uploaded.previewUrl}`,
+      { headers: { Authorization: `Bearer ${aliceToken}` } },
+    );
+    expect(repeatedPreview.status).toBe(200);
+    expect(await repeatedPreview.text()).toBe("survives restart");
+
+    const restored = await executeCommand(secondOrigin, secondAlice, aliceToken, {
+      id: "upload-after-restart",
+      type: "steer",
+      message: "Read the restored project file",
+      files: [uploaded],
+    });
+    expect(restored.payload).toMatchObject({
+      command: "steer",
+      success: true,
+    });
+    const restoredDelete = await fetch(
+      `${secondOrigin}/api/uploads/${encodeURIComponent(uploaded.id)}/orphan?clientId=${encodeURIComponent(secondAlice.client.id)}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${aliceToken}` },
+        body: "{}",
+      },
+    );
+    expect(restoredDelete.status).toBe(202);
+
+    const anotherSession = await executeCommand(
+      secondOrigin,
+      secondAlice,
+      aliceToken,
+      {
+        id: "upload-another-session",
+        type: "new_session",
+        workspacePath: secondAlice.defaultWorkspacePath,
+      },
+    );
+    expect(anotherSession.payload).toMatchObject({
+      command: "new_session",
+      success: true,
+    });
+    const wrongSession = await executeCommand(
+      secondOrigin,
+      secondAlice,
+      aliceToken,
+      {
+        id: "upload-wrong-session",
+        type: "steer",
+        message: "Try another Agent Session",
+        files: [uploaded],
+      },
+    );
+    expect(wrongSession.payload).toMatchObject({
+      command: "steer",
+      success: false,
+    });
+  });
+
+  it("does not let another Client of the same User preview a draft upload", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-client-upload-http-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const { origin } = await startAuthenticatedServer(
+      authenticatedServerSetup(runtimeRoot),
+    );
+    const token = signUser("alice-two-clients", "Alice");
+    const owner = await createClient(origin, token);
+    const other = await createClient(origin, token);
+    const uploaded = await uploadProjectFile(
+      origin,
+      owner,
+      token,
+      "draft.txt",
+      "client-bound draft",
+    );
+    const forgedPreviewUrl = new URL(uploaded.previewUrl, origin);
+    forgedPreviewUrl.searchParams.set("clientId", other.client.id);
+
+    const ownerPreview = await fetch(`${origin}${uploaded.previewUrl}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const forgedPreview = await fetch(forgedPreviewUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(ownerPreview.status).toBe(200);
+    expect(forgedPreview.status).toBe(403);
+
+    const alternateWorkspace = path.join(
+      path.dirname(owner.defaultWorkspacePath),
+      "alternate",
+    );
+    fs.mkdirSync(alternateWorkspace);
+    const switchedWorkspace = await executeCommand(origin, owner, token, {
+      id: "upload-alternate-workspace",
+      type: "new_session",
+      workspacePath: alternateWorkspace,
+    });
+    expect(switchedWorkspace.payload).toMatchObject({
+      command: "new_session",
+      success: true,
+    });
+    const wrongWorkspace = await executeCommand(origin, owner, token, {
+      id: "upload-wrong-workspace",
+      type: "steer",
+      message: "Try another Runtime Workspace",
+      files: [uploaded],
+    });
+    expect(wrongWorkspace.payload).toMatchObject({
+      command: "steer",
+      success: false,
+    });
+  });
+
+  it("isolates concurrent User uploads when identifiers are mixed", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-concurrent-user-upload-http-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const { origin } = await startAuthenticatedServer(
+      authenticatedServerSetup(runtimeRoot),
+    );
+    const aliceToken = signUser("alice-concurrent-upload", "Alice");
+    const bobToken = signUser("bob-concurrent-upload", "Bob");
+    const [alice, bob] = await Promise.all([
+      createClient(origin, aliceToken),
+      createClient(origin, bobToken),
+    ]);
+    const [aliceUpload, bobUpload] = await Promise.all([
+      uploadProjectFile(origin, alice, aliceToken, "alice.txt", "alice bytes"),
+      uploadProjectFile(origin, bob, bobToken, "bob.txt", "bob bytes"),
+    ]);
+
+    const mixedIdAndPath = await executeCommand(origin, bob, bobToken, {
+      id: "bob-mixed-upload-ref",
+      type: "prompt",
+      message: "Try mixed identifiers",
+      files: [{ ...aliceUpload, id: bobUpload.id }],
+    });
+    const forgedPreview = await fetch(
+      `${origin}/api/uploads/${encodeURIComponent(aliceUpload.id)}/preview?clientId=${encodeURIComponent(bob.client.id)}`,
+      { headers: { Authorization: `Bearer ${bobToken}` } },
+    );
+    const forgedDelete = await fetch(
+      `${origin}/api/uploads/${encodeURIComponent(aliceUpload.id)}/orphan?clientId=${encodeURIComponent(bob.client.id)}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${bobToken}` },
+        body: "{}",
+      },
+    );
+
+    expect(mixedIdAndPath.payload).toMatchObject({
+      command: "prompt",
+      success: false,
+    });
+    expect(forgedPreview.status).toBe(403);
+    expect([403, 404]).toContain(forgedDelete.status);
+    expect(fs.existsSync(aliceUpload.path)).toBe(true);
+    expect(fs.existsSync(bobUpload.path)).toBe(true);
   });
 });
