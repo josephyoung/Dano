@@ -9,6 +9,10 @@ import * as fs from "node:fs";
 import type * as http from "node:http";
 import * as path from "node:path";
 import { writeFile as writeFileAtomically } from "atomically";
+import type {
+  BridgeAuthenticationState,
+  BridgeLoginErrorCode,
+} from "../../types/protocol.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 import {
   OAuthProviderContractError,
@@ -383,22 +387,20 @@ export async function createOAuthAuthentication(
         if (readCookie(req.headers.cookie, AUTH_ERROR_COOKIE_NAME)) {
           res.setHeader("Set-Cookie", serializeExpiredAuthErrorCookie());
         }
-        const authErrorDto = authError
-          ? { authError: { code: authError.code } }
+        const loginErrorDto = authError
+          ? { loginError: { code: authError.code } }
           : {};
-        writeJson(
-          res,
-          200,
+        const authentication: BridgeAuthenticationState =
           current?.status === "authenticated"
             ? {
                 status: "authenticated",
                 user: toBrowserUserSummary(current.userContext.user),
-                ...authErrorDto,
+                ...loginErrorDto,
               }
             : current?.status === "reauth_required"
-              ? { status: "reauth_required", ...authErrorDto }
-            : { status: "anonymous", ...authErrorDto },
-        );
+              ? { status: "reauth_required", ...loginErrorDto }
+              : { status: "anonymous", ...loginErrorDto };
+        writeJson(res, 200, authentication);
         return true;
       }
       if (req.method === "GET" && url.pathname === "/api/auth/callback") {
@@ -602,7 +604,7 @@ interface StoredLoginSession {
 
 interface StoredAuthError {
   readonly version: 1;
-  readonly code: "provider_identity_invalid" | "provider_login_failed";
+  readonly code: BridgeLoginErrorCode;
   readonly expiresAt: number;
 }
 

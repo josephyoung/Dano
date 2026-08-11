@@ -2,6 +2,7 @@ import type {
   AccentColorPreset,
   AskUserQuestionAnswer,
   BridgeAuthenticationState,
+  BridgeLoginError,
   BridgeUserSummary,
   ClientMessage,
   FieldAssistCommandPayload,
@@ -329,7 +330,7 @@ function setActiveTreeSessionPath(sessionPath: string | null) {
 }
 
 let _connectionStatus = $state<ConnectionStatus>("disconnected");
-let _authentication = $state<BridgeAuthenticationState | undefined>(undefined);
+let _authentication = $state<BridgeAuthenticationState>({ status: "checking" });
 let _currentUser = $state<BridgeUserSummary | undefined>(undefined);
 let _accentColorPreset = $state<AccentColorPreset>(DEFAULT_ACCENT_COLOR_PRESET);
 let themeColorSelectionRevision = 0;
@@ -2970,7 +2971,7 @@ async function fetchInitialState() {
 function resetTransportState() {
   clientId = null;
   clientMessagesUrl = null;
-  _authentication = undefined;
+  _authentication = { status: "checking" };
   _currentUser = undefined;
   themeColorSelectionRevision += 1;
   themeColorTransportRevision += 1;
@@ -3003,13 +3004,8 @@ function stopTransportForReauthentication() {
   rejectPendingRequests("Login is required again");
 }
 
-interface CurrentAuthenticationResult {
-  authentication: BridgeAuthenticationState;
-  authError?: "provider_identity_invalid" | "provider_login_failed";
-}
-
 async function readCurrentAuthentication(): Promise<
-  CurrentAuthenticationResult | undefined
+  BridgeAuthenticationState | undefined
 > {
   try {
     const response = await fetch("/api/auth/current", {
@@ -3021,20 +3017,23 @@ async function readCurrentAuthentication(): Promise<
       return undefined;
     }
     const status = (value as { status?: unknown }).status;
-    const authErrorValue = (value as { authError?: unknown }).authError;
-    const authErrorCode =
-      authErrorValue && typeof authErrorValue === "object"
-        ? (authErrorValue as { code?: unknown }).code
+    const loginErrorValue = (value as { loginError?: unknown }).loginError;
+    const loginErrorCode =
+      loginErrorValue && typeof loginErrorValue === "object"
+        ? (loginErrorValue as { code?: unknown }).code
         : undefined;
-    const authError =
-      authErrorCode === "provider_identity_invalid" ||
-      authErrorCode === "provider_login_failed"
-        ? authErrorCode
+    const loginError: BridgeLoginError | undefined =
+      loginErrorCode === "provider_identity_invalid" ||
+      loginErrorCode === "provider_login_failed"
+        ? { code: loginErrorCode }
         : undefined;
-    if (status === "anonymous" || status === "reauth_required") {
+    if (status === "anonymous") {
+      return { status: "anonymous", ...(loginError ? { loginError } : {}) };
+    }
+    if (status === "reauth_required") {
       return {
-        authentication: { status },
-        ...(authError ? { authError } : {}),
+        status: "reauth_required",
+        ...(loginError ? { loginError } : {}),
       };
     }
     if (status !== "authenticated") return undefined;
@@ -3049,14 +3048,12 @@ async function readCurrentAuthentication(): Promise<
     const username = (user as { username: string }).username;
     const avatarUrl = (user as { avatarUrl?: unknown }).avatarUrl;
     return {
-      authentication: {
-        status: "authenticated",
-        user: {
-          username,
-          ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
-        },
+      status: "authenticated",
+      user: {
+        username,
+        ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
       },
-      ...(authError ? { authError } : {}),
+      ...(loginError ? { loginError } : {}),
     };
   } catch {
     return undefined;
@@ -3116,12 +3113,15 @@ async function connectOnce(): Promise<boolean> {
   try {
     const currentAuthentication = await readCurrentAuthentication();
     if (currentAuthentication) {
-      applyAuthentication(currentAuthentication.authentication);
-      if (currentAuthentication.authError) {
+      applyAuthentication(currentAuthentication);
+      if (
+        currentAuthentication.status !== "checking" &&
+        currentAuthentication.loginError
+      ) {
         pushNotification(t("authentication.loginFailed"), "error");
       }
     }
-    if (currentAuthentication?.authentication.status === "reauth_required") {
+    if (currentAuthentication?.status === "reauth_required") {
       _connectionStatus = "disconnected";
       return false;
     }

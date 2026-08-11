@@ -1219,7 +1219,7 @@
       onNewSession={handleExplicitNewSession}
       {newSessionPending}
       {showNewSession}
-      currentUser={bridge.currentUser}
+      authentication={bridge.authentication}
       onOpenTheme={openThemeSettings}
       onLogin={bridge.login}
       onLogout={bridge.logout}
@@ -1232,7 +1232,7 @@
     />
 
     <ReauthenticationDialog
-      open={bridge.authentication?.status === "reauth_required"}
+      open={bridge.authentication.status === "reauth_required"}
       onCancel={bridge.logout}
       onConfirm={bridge.login}
     />

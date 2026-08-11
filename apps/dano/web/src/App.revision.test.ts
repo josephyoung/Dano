@@ -7,6 +7,7 @@ const bridge = vi.hoisted(() => ({
   abortGeneration: vi.fn(),
   accentColorPreset: "green",
   activeSessionPath: "/sessions/history.jsonl",
+  authentication: { status: "anonymous" },
   availableModels: [],
   cancelQueuedMessage: vi.fn(),
   commands: [],

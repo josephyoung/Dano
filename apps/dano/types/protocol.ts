@@ -1155,13 +1155,30 @@ export interface BridgeUserSummary {
   readonly avatarUrl?: string;
 }
 
+export type BridgeLoginErrorCode =
+  | "provider_identity_invalid"
+  | "provider_login_failed";
+
+/** Recoverable, browser-safe failure from the latest login attempt. */
+export interface BridgeLoginError {
+  readonly code: BridgeLoginErrorCode;
+}
+
 /** Browser-safe authentication state for the current Dano client. */
 export type BridgeAuthenticationState =
-  | { readonly status: "anonymous" }
-  | { readonly status: "reauth_required" }
+  | { readonly status: "checking" }
+  | {
+      readonly status: "anonymous";
+      readonly loginError?: BridgeLoginError;
+    }
+  | {
+      readonly status: "reauth_required";
+      readonly loginError?: BridgeLoginError;
+    }
   | {
       readonly status: "authenticated";
       readonly user: BridgeUserSummary;
+      readonly loginError?: BridgeLoginError;
     };
 
 /** Stable keys accepted by the server-owned Theme Color preference. */
