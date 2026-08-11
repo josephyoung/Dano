@@ -3,6 +3,7 @@ import { BridgeRpcAdapter } from "./bridge/bridge-rpc-adapter.js";
 import { BridgeServer, type RpcConnectionHandlerFactory } from "./bridge/server.js";
 import { DetachedSessionRegistry } from "./bridge/session-registry.js";
 import type { UserContextResolver } from "./bridge/user-context.js";
+import { UserRuntimeRegistry } from "./bridge/user-runtime-registry.js";
 import type {
   BridgeClient,
   BridgeConfig,
@@ -11,8 +12,10 @@ import type {
 } from "./bridge/types.js";
 import {
   createDanoBackend,
+  type CreateDanoBackendOptions,
   type DanoBackend,
 } from "./backend.js";
+import type { DanoConfig } from "./bridge/dano-config.js";
 
 export interface StartDanoServerOptions {
   cwd?: string;
@@ -23,6 +26,7 @@ export interface StartDanoServerOptions {
   sessionRegistry?: DetachedSessionRegistry;
   onShutdown?: () => void;
   userContextResolver?: UserContextResolver;
+  danoConfig?: DanoConfig;
 }
 
 export interface DanoServerController {
@@ -40,28 +44,39 @@ export async function startDanoServer(
   const eventBus = new BridgeEventBus(config);
   const eventHandlers: Array<(event: BridgeEvent) => void> = [];
 
-  const backend =
-    options.backend ??
-    (await createDanoBackend({
-      cwd: options.cwd,
-      sessionPath: options.sessionPath,
-      sessionDir: options.sessionDir,
-    }));
-  const ownsBackend = !options.backend;
+  const userRuntimeRegistry = options.userContextResolver
+    ? new UserRuntimeRegistry((runtimeOptions: CreateDanoBackendOptions) =>
+        createDanoBackend({
+          ...runtimeOptions,
+          danoConfig: options.danoConfig,
+        }),
+      )
+    : undefined;
+  const backend = userRuntimeRegistry
+    ? undefined
+    : options.backend ??
+      (await createDanoBackend({
+        cwd: options.cwd,
+        sessionPath: options.sessionPath,
+        sessionDir: options.sessionDir,
+      }));
+  const ownsBackend = !userRuntimeRegistry && !options.backend;
 
-  const sessionRegistry =
-    options.sessionRegistry ??
-    backend.sessionRegistry ??
-    new DetachedSessionRegistry(
-      backend.context.state.cwd,
-      backend.context.askUserQuestion.tool,
-      {
-        modelRuntime: backend.session.modelRuntime,
-        settingsManager: backend.session.settingsManager,
-      },
-    );
-  const ownsSessionRegistry =
-    !options.sessionRegistry && !backend.sessionRegistry;
+  const sessionRegistry = backend
+    ? options.sessionRegistry ??
+      backend.sessionRegistry ??
+      new DetachedSessionRegistry(
+        backend.context.state.cwd,
+        backend.context.askUserQuestion.tool,
+        {
+          modelRuntime: backend.session.modelRuntime,
+          settingsManager: backend.session.settingsManager,
+        },
+      )
+    : undefined;
+  const ownsSessionRegistry = Boolean(
+    backend && !options.sessionRegistry && !backend.sessionRegistry,
+  );
 
   const emitEvent = (event: BridgeEvent): void => {
     for (const handler of eventHandlers) {
@@ -77,16 +92,33 @@ export async function startDanoServer(
     eventBus.emit(event);
   };
 
-  const handlerFactory: RpcConnectionHandlerFactory = connCtx => {
+  const handlerFactory: RpcConnectionHandlerFactory = async connCtx => {
+    const userRuntime =
+      connCtx.user && userRuntimeRegistry
+        ? await userRuntimeRegistry.get(connCtx.user)
+        : undefined;
+    const connectionBackend = userRuntime?.backend ?? backend;
+    const connectionSessionRegistry =
+      userRuntime?.backend.sessionRegistry ?? sessionRegistry;
+    if (!connectionBackend || !connectionSessionRegistry) {
+      throw new Error("Bridge runtime is unavailable");
+    }
+    const connectionConfig = userRuntime
+      ? {
+          ...connCtx.config,
+          defaultWorkspacePath: userRuntime.defaultWorkspacePath,
+        }
+      : connCtx.config;
     return new BridgeRpcAdapter(
       connCtx.client,
       connCtx.send,
-      backend.context,
-      connCtx.config,
+      connectionBackend.context,
+      connectionConfig,
       connCtx.eventBus,
       connCtx.emitEvent,
       connCtx.uploadRegistry,
-      sessionRegistry,
+      connectionSessionRegistry,
+      userRuntime,
     );
   };
 
@@ -105,11 +137,12 @@ export async function startDanoServer(
   } catch (error) {
     state = { status: "stopped" };
     if (ownsSessionRegistry) {
-      await sessionRegistry.dispose();
+      await sessionRegistry?.dispose();
     }
     if (ownsBackend) {
-      await backend.dispose();
+      await backend?.dispose();
     }
+    await userRuntimeRegistry?.dispose();
     eventBus.dispose();
     throw error;
   }
@@ -134,11 +167,12 @@ export async function startDanoServer(
         await server.stop();
         eventBus.dispose();
         if (ownsSessionRegistry) {
-          await sessionRegistry.dispose();
+          await sessionRegistry?.dispose();
         }
         if (ownsBackend) {
-          await backend.dispose();
+          await backend?.dispose();
         }
+        await userRuntimeRegistry?.dispose();
         state = { status: "stopped" };
         emitEvent({ type: "shutdown_complete" });
       } catch (error) {

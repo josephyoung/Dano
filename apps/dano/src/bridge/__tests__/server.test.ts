@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BridgeEventBus } from "../bridge-event-bus.js";
 import {
   BridgeServer,
-  type RpcConnectionHandler,
   type RpcConnectionHandlerFactory,
 } from "../server.js";
 import { createJwtUserContextResolver } from "../user-context.js";
@@ -43,7 +42,7 @@ afterEach(async () => {
 });
 
 function createServer(
-  factory?: (ctx: Parameters<RpcConnectionHandlerFactory>[0]) => RpcConnectionHandler,
+  factory?: RpcConnectionHandlerFactory,
   config: Partial<BridgeConfig> = {},
   auth?: {
     secret?: string;
@@ -63,11 +62,13 @@ function createServer(
   const eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
   const emitEvent = vi.fn();
   const handlerFactory: RpcConnectionHandlerFactory = ctx =>
-    factory?.(ctx) ?? {
-      handleClientMessage: vi.fn(),
-      currentGitCwd: () => workspaceDir,
-      dispose: vi.fn(),
-    };
+    factory
+      ? factory(ctx)
+      : {
+          handleClientMessage: vi.fn(),
+          currentGitCwd: () => workspaceDir,
+          dispose: vi.fn(),
+        };
   const userContextResolver = auth?.secret
     ? createJwtUserContextResolver({
         runtimeRootPath: runtimeRoot,
@@ -253,6 +254,24 @@ describe("BridgeServer HTTP/SSE transport", () => {
     expect(created.defaultWorkspacePath).toBe("/tmp/dano");
     expect(server.getClientCount()).toBe(1);
     expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "client_connect" }),
+    );
+  });
+
+  it("rolls back logical client state when runtime initialization fails", async () => {
+    const { server, emitEvent } = createServer(async () => {
+      throw new Error("runtime initialization failed");
+    });
+    const address = await server.start();
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/clients`,
+      { method: "POST", body: "{}" },
+    );
+
+    expect(response.status).toBe(500);
+    expect(server.getClientCount()).toBe(0);
+    expect(emitEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "client_connect" }),
     );
   });

@@ -21,6 +21,7 @@ import {
   type DanoConfig,
 } from "./bridge/dano-config.js";
 import { DetachedSessionRegistry } from "./bridge/session-registry.js";
+import { workspaceSessionDirectoryPath } from "./bridge/runtime-layout.js";
 import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
 import { createDanoDevReloadController } from "./dev-reload.js";
@@ -539,24 +540,14 @@ function migrateHeimdallRuntimeSettings(path: string): void {
   writeFileSync(path, `${JSON.stringify(root, null, 2)}\n`);
 }
 
-function workspaceSessionDirName(workspacePath: string): string {
-  return `--${workspacePath.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
-function workspaceSessionDirPath(
-  sessionsRootPath: string,
-  workspacePath: string,
-): string {
-  return join(sessionsRootPath, workspaceSessionDirName(workspacePath));
-}
-
 async function runDanoServer(
   runtime: DanoRuntime,
   config: BridgeConfig,
   options: DanoServerOptions,
   entryFile: string,
-  backend: DanoBackend,
-  sessionRegistry: DetachedSessionRegistry,
+  danoConfig: DanoConfig,
+  backend?: DanoBackend,
+  sessionRegistry?: DetachedSessionRegistry,
 ): Promise<boolean> {
   let resolveStopped: (() => void) | undefined;
   const stopped = new Promise<void>(resolve => {
@@ -567,6 +558,7 @@ async function runDanoServer(
     cwd: options.cwd,
     backend,
     sessionRegistry,
+    danoConfig,
     userContextResolver: options.userAuthentication
       ? createJwtUserContextResolver({
           runtimeRootPath: options.runtimeRootPath,
@@ -588,8 +580,16 @@ async function runDanoServer(
   if (options.staticDir) {
     console.log(`[dano] Static Dir: ${options.staticDir}`);
   }
-  console.log(`[dano] Default Workspace: ${config.defaultWorkspacePath}`);
-  console.log(`[dano] Sessions Root: ${options.sessionsRootPath}`);
+  if (config.defaultWorkspacePath) {
+    console.log(`[dano] Default Workspace: ${config.defaultWorkspacePath}`);
+  } else {
+    console.log("[dano] Runtime Workspace: isolated per User");
+  }
+  console.log(
+    options.userAuthentication
+      ? "[dano] Session Registry: isolated per User"
+      : `[dano] Sessions Root: ${options.sessionsRootPath}`,
+  );
 
   const requestStop = async (): Promise<void> => {
     await bridgeController.stop().catch(error => {
@@ -644,7 +644,9 @@ async function runDanoMain(): Promise<number> {
   const packageInfo = readDanoPackageInfo(options.cwd);
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
-  const defaultWorkspacePath = ensureDefaultWorkspace(options.defaultWorkspacePath);
+  const defaultWorkspacePath = options.userAuthentication
+    ? undefined
+    : ensureDefaultWorkspace(options.defaultWorkspacePath);
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
@@ -653,29 +655,36 @@ async function runDanoMain(): Promise<number> {
     options.cwd,
     options.productName,
   );
-  mkdirSync(options.sessionsRootPath, { recursive: true });
-  process.env.DANO_SESSIONS_ROOT = options.sessionsRootPath;
-  process.env.PI_WEB_SESSIONS_ROOT = options.sessionsRootPath;
-  const defaultSessionDir = workspaceSessionDirPath(
-    options.sessionsRootPath,
-    defaultWorkspacePath,
-  );
-  const backend = await createDanoBackend({
-    cwd: defaultWorkspacePath,
-    sessionDir: defaultSessionDir,
-    danoConfig,
-  });
-  const sessionRegistry =
-    backend.sessionRegistry ??
-    new DetachedSessionRegistry(
-      backend.context.state.cwd,
-      backend.context.askUserQuestion.tool,
-      {
-        modelRuntime: backend.session.modelRuntime,
-        settingsManager: backend.session.settingsManager,
-      },
-    );
-  const ownsSessionRegistry = !backend.sessionRegistry;
+  if (!options.userAuthentication) {
+    mkdirSync(options.sessionsRootPath, { recursive: true });
+    process.env.DANO_SESSIONS_ROOT = options.sessionsRootPath;
+    process.env.PI_WEB_SESSIONS_ROOT = options.sessionsRootPath;
+  }
+  const defaultSessionDir = defaultWorkspacePath
+    ? workspaceSessionDirectoryPath(
+        options.sessionsRootPath,
+        defaultWorkspacePath,
+      )
+    : undefined;
+  const backend = options.userAuthentication
+    ? undefined
+    : await createDanoBackend({
+        cwd: defaultWorkspacePath,
+        sessionDir: defaultSessionDir,
+        danoConfig,
+      });
+  const sessionRegistry = backend
+    ? backend.sessionRegistry ??
+      new DetachedSessionRegistry(
+        backend.context.state.cwd,
+        backend.context.askUserQuestion.tool,
+        {
+          modelRuntime: backend.session.modelRuntime,
+          settingsManager: backend.session.settingsManager,
+        },
+      )
+    : undefined;
+  const ownsSessionRegistry = Boolean(backend && !backend.sessionRegistry);
 
   try {
     while (true) {
@@ -701,6 +710,7 @@ async function runDanoMain(): Promise<number> {
         config,
         options,
         thisFile,
+        danoConfig,
         backend,
         sessionRegistry,
       );
@@ -713,9 +723,9 @@ async function runDanoMain(): Promise<number> {
     }
   } finally {
     if (ownsSessionRegistry) {
-      await sessionRegistry.dispose();
+      await sessionRegistry?.dispose();
     }
-    await backend.dispose();
+    await backend?.dispose();
   }
 }
 
