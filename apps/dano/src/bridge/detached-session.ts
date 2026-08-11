@@ -20,6 +20,7 @@ import { askUserQuestionTool } from "./ask-user-question.js";
 import { createCurlTool } from "./curl-tool.js";
 import { danoVersionTool } from "./dano-version-tool.js";
 import { configureDanoLlmResilience } from "./llm-resilience.js";
+import type { CredentialBroker } from "./credential-broker.js";
 
 function resolveHeimdallExtensionPath(): string {
   try {
@@ -41,6 +42,8 @@ export interface CreateDetachedAgentSessionOptions {
   modelRuntime?: CreateAgentSessionServicesOptions["modelRuntime"];
   settingsManager?: CreateAgentSessionServicesOptions["settingsManager"];
   askUserQuestionTool?: ToolDefinition;
+  credentialBroker?: CredentialBroker;
+  credentialBrokerScope?: string;
 }
 
 export interface CreateDetachedAgentSessionRuntimeResult {
@@ -54,7 +57,10 @@ export async function createDetachedAgentSessionRuntime(
   options: CreateDetachedAgentSessionOptions = {},
 ): Promise<CreateDetachedAgentSessionRuntimeResult> {
   let disposeActiveDanoLlmResilience: (() => void) | undefined;
+  let disposeCredentialBinding: (() => void) | undefined;
   const createRuntime: CreateAgentSessionRuntimeFactory = async runtimeOptions => {
+    disposeCredentialBinding?.();
+    disposeCredentialBinding = undefined;
     const services = await createAgentSessionServices({
       cwd: runtimeOptions.cwd,
       agentDir: runtimeOptions.agentDir,
@@ -80,8 +86,18 @@ export async function createDetachedAgentSessionRuntime(
         createWriteToolDefinition(runtimeOptions.cwd),
         danoVersionTool,
         options.askUserQuestionTool ?? askUserQuestionTool,
+        ...(options.credentialBroker && options.credentialBrokerScope
+          ? [options.credentialBroker.createTool(options.credentialBrokerScope)]
+          : []),
       ] as unknown as ToolDefinition[],
     });
+    disposeCredentialBinding =
+      options.credentialBroker && options.credentialBrokerScope
+        ? options.credentialBroker.observe(
+            options.credentialBrokerScope,
+            result.session,
+          )
+        : undefined;
     disposeActiveDanoLlmResilience = configureDanoLlmResilience(
       services.settingsManager,
       result.session,
@@ -101,6 +117,8 @@ export async function createDetachedAgentSessionRuntime(
   runtime.setBeforeSessionInvalidate(() => {
     disposeActiveDanoLlmResilience?.();
     disposeActiveDanoLlmResilience = undefined;
+    disposeCredentialBinding?.();
+    disposeCredentialBinding = undefined;
   });
 
   return {
@@ -108,6 +126,8 @@ export async function createDetachedAgentSessionRuntime(
     disposeDanoLlmResilience() {
       disposeActiveDanoLlmResilience?.();
       disposeActiveDanoLlmResilience = undefined;
+      disposeCredentialBinding?.();
+      disposeCredentialBinding = undefined;
     },
   };
 }

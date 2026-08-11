@@ -1244,6 +1244,28 @@ describe("OAuth authentication over HTTP", () => {
     ).toHaveLength(2);
   });
 
+  it("lets only server modules read the Credential owned by one Login Session", async () => {
+    const provider = successfulProvider("broker-user", "broker-access-token");
+    const { authentication, origin } = await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin);
+    const loginSessionId = loginCookie.slice("dano_login=".length);
+
+    await expect(
+      authentication.readProviderCredential(loginSessionId),
+    ).resolves.toEqual({ accessToken: "broker-access-token" });
+
+    await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: loginCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+    await expect(
+      authentication.readProviderCredential(loginSessionId),
+    ).resolves.toBeNull();
+  });
+
   it("logs out only the current Login Session and disconnects only its Bridge Clients", async () => {
     const revoked: string[] = [];
     const provider: OAuthProviderAdapter = {

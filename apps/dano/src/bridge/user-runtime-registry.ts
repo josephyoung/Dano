@@ -177,6 +177,7 @@ export class UserRuntimeRegistry {
     });
     const backend = await this.createBackend({
       cwd: defaultWorkspacePath,
+      credentialBrokerScope: userContext.user.id,
       sessionDir: workspaceSessionDirectoryPath(
         sessionsRootPath,
         defaultWorkspacePath,

@@ -78,6 +78,7 @@ describe("Pi 0.82.1 public interface baseline", () => {
       createAgentSession: expect.any(Function),
       createAgentSessionRuntime: expect.any(Function),
       createCodingTools: expect.any(Function),
+      defineTool: expect.any(Function),
       createExtensionRuntime: expect.any(Function),
       RpcClient: expect.any(Function),
       runRpcMode: expect.any(Function),

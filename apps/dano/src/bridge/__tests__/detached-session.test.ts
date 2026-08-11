@@ -135,6 +135,12 @@ describe("detached-session", () => {
     const editToolDefinition = { name: "edit" };
     const writeToolDefinition = { name: "write" };
     const configuredAskUserQuestionTool = { name: "configured-question" };
+    const providerRequestTool = { name: "provider_request" };
+    const releaseCredentialBinding = vi.fn();
+    const credentialBroker = {
+      createTool: vi.fn().mockReturnValue(providerRequestTool),
+      observe: vi.fn().mockReturnValue(releaseCredentialBinding),
+    };
     let sessionEventHandler: ((event: any) => void) | undefined;
     const sessionResult = {
       session: {
@@ -167,7 +173,11 @@ describe("detached-session", () => {
     const result = await createDetachedAgentSessionRuntime(
       tmpDir,
       sessionManager as never,
-      { askUserQuestionTool: configuredAskUserQuestionTool as never },
+      {
+        askUserQuestionTool: configuredAskUserQuestionTool as never,
+        credentialBroker: credentialBroker as never,
+        credentialBrokerScope: "user-a",
+      },
     );
 
     expect(createAgentSessionServicesMock).toHaveBeenCalledWith({
@@ -198,8 +208,14 @@ describe("detached-session", () => {
         writeToolDefinition,
         danoVersionTool,
         configuredAskUserQuestionTool,
+        providerRequestTool,
       ],
     });
+    expect(credentialBroker.createTool).toHaveBeenCalledWith("user-a");
+    expect(credentialBroker.observe).toHaveBeenCalledWith(
+      "user-a",
+      sessionResult.session,
+    );
     expect(result.runtime.session).toBe(sessionResult.session);
     expect(result.disposeDanoLlmResilience).toEqual(expect.any(Function));
 
@@ -242,6 +258,7 @@ describe("detached-session", () => {
     });
 
     result.disposeDanoLlmResilience();
+    expect(releaseCredentialBinding).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(sessionResult.session.abort).not.toHaveBeenCalled();
   });

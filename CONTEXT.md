@@ -77,6 +77,10 @@ _Avoid_: User, Browser Client, JWT Cookie, provider SSO session
 The encrypted server-side access and optional refresh credential owned by exactly one Dano Login Session. It is never browser or model data and is not shared merely because two Login Sessions resolve to the same User.
 _Avoid_: User credential, browser token, shared account token
 
+**Credential Broker**:
+The server-owned module that binds a provider request to the Dano Login Session that initiated its Assistant Turn, reads that session's Provider Credential, and forwards the request only to the configured provider origin. Skill instructions can use its generic provider request tool without receiving the credential.
+_Avoid_: browser proxy, business endpoint client, User credential lookup
+
 **User Folder**:
 The persistent directory under the Dano runtime users root that is mapped from one verified User ID. It holds user-owned data such as preferences and must remain isolated from other User Folders and Runtime Workspaces.
 _Avoid_: Runtime Workspace, session directory, client directory

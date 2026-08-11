@@ -1,0 +1,78 @@
+[
+  {
+    "name": "canonical headers",
+    "input": {
+      "method": "POST",
+      "path": "/records",
+      "headers": { "content-type": "application/json", "x-retry": "1" },
+      "body": { "enabled": true }
+    },
+    "expectedHeaders": { "content-type": "application/json", "x-retry": "1" }
+  },
+  {
+    "name": "safe JSON string headers",
+    "input": {
+      "method": "GET",
+      "path": "/records",
+      "headers": "  {\"x-page\":2,\"x-active\":true}  "
+    },
+    "expectedHeaders": { "x-page": "2", "x-active": "true" }
+  },
+  {
+    "name": "partial valid headers and forged ownership fields",
+    "input": {
+      "method": "GET",
+      "path": "/records",
+      "headers": { "x-valid": "yes", "x-invalid": { "nested": true } },
+      "userId": "forged-user",
+      "loginSessionId": "forged-session",
+      "token": "forged-token",
+      "origin": "https://outside.invalid"
+    },
+    "expectedHeaders": { "x-valid": "yes" }
+  },
+  {
+    "name": "malformed optional headers",
+    "input": {
+      "method": "GET",
+      "path": "/records",
+      "headers": "not-json"
+    },
+    "expectedHeaders": {}
+  },
+  {
+    "name": "null optional headers and body",
+    "input": {
+      "method": "POST",
+      "path": "/records",
+      "headers": null,
+      "body": null
+    },
+    "expectedHeaders": {},
+    "expectedBody": null
+  },
+  {
+    "name": "array optional headers and body",
+    "input": {
+      "method": "POST",
+      "path": "/records",
+      "headers": ["x-invalid", "value"],
+      "body": [1, { "enabled": true }]
+    },
+    "expectedHeaders": {},
+    "expectedBody": [1, { "enabled": true }]
+  },
+  {
+    "name": "all invalid optional header values",
+    "input": {
+      "method": "GET",
+      "path": "/records",
+      "headers": {
+        "x-null": null,
+        "x-array": ["value"],
+        "x-object": { "value": true }
+      }
+    },
+    "expectedHeaders": {}
+  }
+]

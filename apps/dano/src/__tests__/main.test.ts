@@ -382,6 +382,7 @@ describe("Dano main", () => {
       DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
       DANO_OAUTH_IDENTITY_ENDPOINT:
         "https://provider.example.test/identity",
+      DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test/base-path",
       DANO_OAUTH_CLIENT_ID: "dano-client",
       DANO_OAUTH_CLIENT_SECRET: "client-secret",
       DANO_OAUTH_SCOPE: "profile offline_access",
@@ -394,6 +395,7 @@ describe("Dano main", () => {
     expect(options.oauthAuthentication).toEqual({
       appOrigin: "https://dano.example.test",
       redirectUri: "https://dano.example.test/api/auth/callback",
+      providerApiOrigin: "https://provider-api.example.test",
       provider: {
         issuer: "https://provider.example.test/",
         authorizationEndpoint: "https://provider.example.test/authorize",
