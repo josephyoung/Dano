@@ -54,11 +54,15 @@ The single project folder Dano gives to Pi for one Dano session. Dano may know t
 _Avoid_: chat workspace, user workspace, project folder
 
 **User**:
-The stable person identity established from a server-verified token. A User is independent of browser clients, sessions, and Runtime Workspaces; none of those identifiers may stand in for a User.
-_Avoid_: client, session owner inferred from clientId, anonymous identity
+The stable server-established owner of Dano runtime data. An authenticated User is established from a server-verified token; an Anonymous User is established from a server-side opaque guest mapping. A User is independent of browser clients, sessions, and Runtime Workspaces; none of those identifiers may stand in for a User.
+_Avoid_: client, session owner inferred from clientId, browser-provided identity
+
+**Anonymous User**:
+A temporary User created or restored by the server from an opaque guest Cookie. Each Anonymous User owns an isolated User Folder and Runtime Workspace while remaining able to use ordinary Dano capabilities without authentication.
+_Avoid_: unauthenticated error, shared guest, client identity
 
 **User Context**:
-The server-owned request context produced after verifying a User token. It carries the authenticated User and the safely resolved User Folder; browser-provided identity fields never create or change it.
+The server-owned request context produced after resolving an authenticated or Anonymous User. It carries the User and the safely resolved User Folder; browser-provided identity fields never create or change it.
 _Avoid_: client context, browser identity, session context
 
 **User Folder**:

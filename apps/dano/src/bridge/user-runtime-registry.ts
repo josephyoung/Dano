@@ -5,7 +5,7 @@ import {
   type CreateDanoBackendOptions,
   type DanoBackend,
 } from "../backend.js";
-import type { AuthenticatedUserContext } from "./user-context.js";
+import type { UserContext } from "./user-context.js";
 import { workspaceSessionDirectoryPath } from "./runtime-layout.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 
@@ -32,7 +32,7 @@ export class UserRuntimeRegistry {
     private readonly createBackend: UserBackendFactory = createDanoBackend,
   ) {}
 
-  get(userContext: AuthenticatedUserContext): Promise<UserRuntimeContext> {
+  get(userContext: UserContext): Promise<UserRuntimeContext> {
     const existing = this.contexts.get(userContext.user.id);
     if (existing) return existing;
 
@@ -56,7 +56,7 @@ export class UserRuntimeRegistry {
   }
 
   private async create(
-    userContext: AuthenticatedUserContext,
+    userContext: UserContext,
   ): Promise<UserRuntimeContext> {
     const workspaceRootPath = path.join(userContext.folderPath, "workspaces");
     const defaultWorkspacePath = path.join(workspaceRootPath, "default");

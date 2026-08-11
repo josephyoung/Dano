@@ -23,9 +23,10 @@ import {
 import {
   toBrowserUserSummary,
   UserContextError,
-  type AuthenticatedUserContext,
+  type UserContext,
   type UserContextResolver,
 } from "./user-context.js";
+import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import {
   parseThemeColorPreference,
   readThemeColorPreference,
@@ -62,7 +63,7 @@ export interface RpcConnectionHandler {
 
 export interface RpcConnectionContext {
   client: BridgeClient;
-  user?: AuthenticatedUserContext;
+  user?: UserContext;
   config: BridgeConfig;
   eventBus: BridgeEventBus;
   uploadRegistry: UploadRegistry;
@@ -89,7 +90,8 @@ export class BridgeServer {
   private httpServer: http.Server | undefined;
   private handlers = new Map<string, RpcConnectionHandler>();
   private clients = new Map<string, BridgeClient>();
-  private clientUsers = new Map<string, AuthenticatedUserContext>();
+  private clientUsers = new Map<string, UserContext>();
+  private clientAuthentication = new Map<string, BridgeAuthenticationState>();
   private sseStreams = new Map<string, Set<() => void>>();
   private uploadRegistry: UploadRegistry;
   private cleanupInterval: ReturnType<typeof setInterval> | undefined;
@@ -226,6 +228,7 @@ export class BridgeServer {
     this.handlers.clear();
     this.clients.clear();
     this.clientUsers.clear();
+    this.clientAuthentication.clear();
 
     if (this.httpServer) {
       await new Promise<void>((resolve, reject) => {
@@ -697,7 +700,12 @@ export class BridgeServer {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    const user = await this.userContextResolver?.resolve(req.headers);
+    const resolution = this.userContextResolver?.resolveForClient
+      ? await this.userContextResolver.resolveForClient(req.headers)
+      : undefined;
+    const user =
+      resolution?.userContext ??
+      (await this.userContextResolver?.resolve(req.headers));
     if (this.userContextResolver && !user) {
       throw new UserContextError(401, "Authenticated User is required");
     }
@@ -710,6 +718,12 @@ export class BridgeServer {
 
     this.clients.set(client.id, client);
     if (user) this.clientUsers.set(client.id, user);
+    const authentication =
+      resolution?.authentication ??
+      (user ? browserAuthentication(user) : undefined);
+    if (authentication) {
+      this.clientAuthentication.set(client.id, authentication);
+    }
     const unregisterClient = this.eventBus.registerClient(client);
     let handler: RpcConnectionHandler;
     try {
@@ -727,6 +741,7 @@ export class BridgeServer {
     } catch (error) {
       unregisterClient();
       this.clientUsers.delete(client.id);
+      this.clientAuthentication.delete(client.id);
       this.clients.delete(client.id);
       throw error;
     }
@@ -737,9 +752,15 @@ export class BridgeServer {
       client,
     });
 
+    if (resolution?.setCookie) {
+      res.setHeader("Set-Cookie", resolution.setCookie);
+    }
     writeJson(res, 201, {
       client,
-      ...(user ? { currentUser: toBrowserUserSummary(user.user) } : {}),
+      ...(authentication ? { authentication } : {}),
+      ...(authentication?.status === "authenticated"
+        ? { currentUser: authentication.user }
+        : {}),
       eventsUrl: `/api/clients/${encodeURIComponent(client.id)}/events`,
       messagesUrl: `/api/clients/${encodeURIComponent(client.id)}/messages`,
       defaultWorkspacePath:
@@ -751,11 +772,17 @@ export class BridgeServer {
     res: http.ServerResponse,
     clientId: string,
   ): Promise<void> {
-    const boundUser = this.clientUsers.get(clientId);
-    if (!boundUser) {
+    const authentication = this.clientAuthentication.get(clientId);
+    if (!authentication) {
       throw new UserContextError(401, "Authenticated User is required");
     }
-    writeJson(res, 200, toBrowserUserSummary(boundUser.user));
+    writeJson(
+      res,
+      200,
+      authentication.status === "authenticated"
+        ? authentication.user
+        : authentication,
+    );
   }
 
   private async authenticateProtectedRequest(
@@ -803,7 +830,7 @@ export class BridgeServer {
   private async authenticateBoundClientRequest(
     req: http.IncomingMessage,
     clientId: string,
-  ): Promise<AuthenticatedUserContext | undefined> {
+  ): Promise<UserContext | undefined> {
     if (!this.clients.has(clientId)) {
       throw new HttpError(404, "Client was not found");
     }
@@ -959,6 +986,7 @@ export class BridgeServer {
     this.handlers.delete(clientId);
     this.clients.delete(clientId);
     this.clientUsers.delete(clientId);
+    this.clientAuthentication.delete(clientId);
     this.eventBus.unregisterClient(clientId);
     this.closeSseStreams(clientId);
   }
@@ -1219,6 +1247,15 @@ function isClientMessage(value: unknown): value is ClientMessage {
     return Boolean(data.payload && typeof data.payload === "object");
   }
   return false;
+}
+
+function browserAuthentication(
+  userContext: UserContext,
+): BridgeAuthenticationState {
+  const user = userContext.user;
+  return "username" in user
+    ? { status: "authenticated", user: toBrowserUserSummary(user) }
+    : { status: "anonymous" };
 }
 
 function formatSseMessage(message: ServerMessage): string {

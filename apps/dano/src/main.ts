@@ -10,8 +10,6 @@ import {
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDanoBackend } from "./backend.js";
-import type { DanoBackend } from "./backend.js";
 import {
   resolveProductName,
   syncSystemPrompt,
@@ -20,8 +18,7 @@ import {
   loadDanoConfig,
   type DanoConfig,
 } from "./bridge/dano-config.js";
-import { DetachedSessionRegistry } from "./bridge/session-registry.js";
-import { workspaceSessionDirectoryPath } from "./bridge/runtime-layout.js";
+import { createAnonymousUserContextResolver } from "./bridge/anonymous-user-context.js";
 import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
 import { createDanoDevReloadController } from "./dev-reload.js";
@@ -76,6 +73,7 @@ export interface DanoServerOptions {
   productName: string;
   emptyState: BridgeEmptyStateConfig;
   upload: UploadConfig;
+  guestCookieSecure: boolean;
   staticDir?: string;
   help: boolean;
   userAuthentication?: {
@@ -188,6 +186,16 @@ function readUserAuthentication(
     audience: optional(env.DANO_AUTH_JWT_AUDIENCE),
     cookieName: optional(env.DANO_AUTH_COOKIE_NAME),
   };
+}
+
+function readGuestCookieSecure(
+  env: Record<string, string | undefined>,
+): boolean {
+  if (env.NODE_ENV === "production") return true;
+  const configured = env.DANO_GUEST_COOKIE_SECURE?.trim().toLowerCase();
+  if (configured === "true") return true;
+  if (configured === "false") return false;
+  return false;
 }
 
 function readUploadConfig(
@@ -335,6 +343,7 @@ export function parseDanoServerOptions(
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
   const userAuthentication = readUserAuthentication(env);
+  const guestCookieSecure = readGuestCookieSecure(env);
   const staticDirOverride = env.DANO_STATIC_DIR?.trim();
   let help = false;
 
@@ -433,17 +442,13 @@ export function parseDanoServerOptions(
       ...upload,
       uploadDir: resolve(cwd, upload.uploadDir),
     },
+    guestCookieSecure,
     staticDir: staticDirOverride
       ? resolve(cwd, staticDirOverride)
       : resolveDefaultStaticDir(fileURLToPath(import.meta.url)),
     help,
     userAuthentication,
   };
-}
-
-function ensureDefaultWorkspace(path: string): string {
-  mkdirSync(path, { recursive: true });
-  return path;
 }
 
 export async function initializeDanoAgentSettings(
@@ -546,8 +551,6 @@ async function runDanoServer(
   options: DanoServerOptions,
   entryFile: string,
   danoConfig: DanoConfig,
-  backend?: DanoBackend,
-  sessionRegistry?: DetachedSessionRegistry,
 ): Promise<boolean> {
   let resolveStopped: (() => void) | undefined;
   const stopped = new Promise<void>(resolve => {
@@ -556,15 +559,17 @@ async function runDanoServer(
 
   const bridgeController = await runtime.startDanoServer(config, {
     cwd: options.cwd,
-    backend,
-    sessionRegistry,
     danoConfig,
-    userContextResolver: options.userAuthentication
-      ? createJwtUserContextResolver({
-          runtimeRootPath: options.runtimeRootPath,
-          ...options.userAuthentication,
-        })
-      : undefined,
+    userContextResolver: createAnonymousUserContextResolver({
+      runtimeRootPath: options.runtimeRootPath,
+      secureCookie: options.guestCookieSecure,
+      authenticatedResolver: options.userAuthentication
+        ? createJwtUserContextResolver({
+            runtimeRootPath: options.runtimeRootPath,
+            ...options.userAuthentication,
+          })
+        : undefined,
+    }),
     onShutdown: () => resolveStopped?.(),
   });
 
@@ -585,11 +590,7 @@ async function runDanoServer(
   } else {
     console.log("[dano] Runtime Workspace: isolated per User");
   }
-  console.log(
-    options.userAuthentication
-      ? "[dano] Session Registry: isolated per User"
-      : `[dano] Sessions Root: ${options.sessionsRootPath}`,
-  );
+  console.log("[dano] Session Registry: isolated per User");
 
   const requestStop = async (): Promise<void> => {
     await bridgeController.stop().catch(error => {
@@ -644,9 +645,7 @@ async function runDanoMain(): Promise<number> {
   const packageInfo = readDanoPackageInfo(options.cwd);
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
-  const defaultWorkspacePath = options.userAuthentication
-    ? undefined
-    : ensureDefaultWorkspace(options.defaultWorkspacePath);
+  const defaultWorkspacePath = undefined;
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
@@ -655,83 +654,46 @@ async function runDanoMain(): Promise<number> {
     options.cwd,
     options.productName,
   );
-  if (!options.userAuthentication) {
-    mkdirSync(options.sessionsRootPath, { recursive: true });
-    process.env.DANO_SESSIONS_ROOT = options.sessionsRootPath;
-    process.env.PI_WEB_SESSIONS_ROOT = options.sessionsRootPath;
-  }
-  const defaultSessionDir = defaultWorkspacePath
-    ? workspaceSessionDirectoryPath(
-        options.sessionsRootPath,
-        defaultWorkspacePath,
-      )
-    : undefined;
-  const backend = options.userAuthentication
-    ? undefined
-    : await createDanoBackend({
-        cwd: defaultWorkspacePath,
-        sessionDir: defaultSessionDir,
-        danoConfig,
-      });
-  const sessionRegistry = backend
-    ? backend.sessionRegistry ??
-      new DetachedSessionRegistry(
-        backend.context.state.cwd,
-        backend.context.askUserQuestion.tool,
-        {
-          modelRuntime: backend.session.modelRuntime,
-          settingsManager: backend.session.settingsManager,
-        },
-      )
-    : undefined;
-  const ownsSessionRegistry = Boolean(backend && !backend.sessionRegistry);
+  while (true) {
+    const runtime = await loadDanoRuntime(thisFile);
+    const config: BridgeConfig = {
+      ...runtime.DEFAULT_BRIDGE_CONFIG,
+      host: options.host,
+      port: options.port,
+      defaultWorkspacePath,
+      productName: options.productName,
+      emptyState: options.emptyState,
+      upload: options.upload,
+      quickActions: danoConfig.quickActions ?? [],
+      slashCommandsAndMentionsEnabled:
+        danoConfig.slashCommandsAndMentionsEnabled ?? false,
+      transcriptProcessSummaryEnabled:
+        danoConfig.transcriptProcessSummaryEnabled ?? false,
+      staticDir: options.staticDir,
+    };
 
-  try {
-    while (true) {
-      const runtime = await loadDanoRuntime(thisFile);
-      const config: BridgeConfig = {
-        ...runtime.DEFAULT_BRIDGE_CONFIG,
-        host: options.host,
-        port: options.port,
-        defaultWorkspacePath,
-        productName: options.productName,
-        emptyState: options.emptyState,
-        upload: options.upload,
-        quickActions: danoConfig.quickActions ?? [],
-        slashCommandsAndMentionsEnabled:
-          danoConfig.slashCommandsAndMentionsEnabled ?? false,
-        transcriptProcessSummaryEnabled:
-          danoConfig.transcriptProcessSummaryEnabled ?? false,
-        staticDir: options.staticDir,
-      };
+    const reloadRequested = await runDanoServer(
+      runtime,
+      config,
+      options,
+      thisFile,
+      danoConfig,
+    );
 
-      const reloadRequested = await runDanoServer(
-        runtime,
-        config,
-        options,
-        thisFile,
-        danoConfig,
-        backend,
-        sessionRegistry,
-      );
-
-      if (!reloadRequested) {
-        return 0;
-      }
-
-      console.log("[dano] Dano server runtime reloaded.");
+    if (!reloadRequested) {
+      return 0;
     }
-  } finally {
-    if (ownsSessionRegistry) {
-      await sessionRegistry?.dispose();
-    }
-    await backend?.dispose();
+
+    console.log("[dano] Dano server runtime reloaded.");
   }
 }
 
 const invokedPath = process.argv[1];
 const thisFile = fileURLToPath(import.meta.url);
-if (invokedPath && realpathSync(resolve(invokedPath)) === realpathSync(resolve(thisFile))) {
+if (
+  invokedPath &&
+  realpathSync(resolve(invokedPath)) === realpathSync(resolve(thisFile))
+) {
   runDanoMain().then(
     code => {
       process.exitCode = code;

@@ -372,6 +372,27 @@ describe("Dano main", () => {
     expect(options.userAuthentication).toBeUndefined();
   });
 
+  it("requires Secure guest Cookies in production and allows a local override", () => {
+    expect(
+      parseDanoServerOptions([], { NODE_ENV: "production" }).guestCookieSecure,
+    ).toBe(true);
+    expect(
+      parseDanoServerOptions([], { NODE_ENV: "development" }).guestCookieSecure,
+    ).toBe(false);
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        DANO_GUEST_COOKIE_SECURE: "false",
+      }).guestCookieSecure,
+    ).toBe(true);
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "development",
+        DANO_GUEST_COOKIE_SECURE: "true",
+      }).guestCookieSecure,
+    ).toBe(true);
+  });
+
   it("uses upload configuration from environment", () => {
     const options = parseDanoServerOptions([], {
       DANO_UPLOAD_DIR: " custom-uploads ",

@@ -1155,6 +1155,14 @@ export interface BridgeUserSummary {
   readonly avatarUrl?: string;
 }
 
+/** Browser-safe authentication state for the current Dano client. */
+export type BridgeAuthenticationState =
+  | { readonly status: "anonymous" }
+  | {
+      readonly status: "authenticated";
+      readonly user: BridgeUserSummary;
+    };
+
 /** Stable keys accepted by the server-owned Theme Color preference. */
 export const ACCENT_COLOR_PRESET_KEYS = [
   "default",

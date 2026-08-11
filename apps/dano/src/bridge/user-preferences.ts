@@ -7,7 +7,7 @@ import {
   type AccentColorPreset,
   type BridgeThemeColorPreference,
 } from "../../types/protocol.js";
-import type { AuthenticatedUserContext } from "./user-context.js";
+import type { UserContext } from "./user-context.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 
 const THEME_PREFERENCE_DIRECTORY = "preferences";
@@ -33,7 +33,7 @@ export function parseThemeColorPreference(
 }
 
 export async function readThemeColorPreference(
-  userContext: AuthenticatedUserContext,
+  userContext: UserContext,
 ): Promise<BridgeThemeColorPreference> {
   try {
     const content = await fs.promises.readFile(themePreferencePath(userContext), "utf8");
@@ -46,7 +46,7 @@ export async function readThemeColorPreference(
 }
 
 export async function saveThemeColorPreference(
-  userContext: AuthenticatedUserContext,
+  userContext: UserContext,
   preference: BridgeThemeColorPreference,
 ): Promise<void> {
   const queueKey = userContext.folderPath;
@@ -67,7 +67,7 @@ export async function saveThemeColorPreference(
 }
 
 async function writeThemeColorPreference(
-  userContext: AuthenticatedUserContext,
+  userContext: UserContext,
   preference: BridgeThemeColorPreference,
 ): Promise<void> {
   const directoryPath = path.join(
@@ -97,7 +97,7 @@ async function writeThemeColorPreference(
   }
 }
 
-function themePreferencePath(userContext: AuthenticatedUserContext): string {
+function themePreferencePath(userContext: UserContext): string {
   return path.join(
     userContext.folderPath,
     THEME_PREFERENCE_DIRECTORY,
