@@ -2445,6 +2445,11 @@ function handleServerMessage(raw: MessageEvent) {
     handleResponse(envelope.payload);
   } else if (envelope.type === "event") {
     handleEvent(envelope.payload);
+  } else if (envelope.type === "authentication") {
+    applyAuthentication(envelope.payload);
+    if (envelope.payload.status === "reauth_required") {
+      stopTransportForReauthentication();
+    }
   } else if (envelope.type === "extension_ui_request") {
     handleExtensionUIRequest(envelope.payload as RpcExtensionUIRequest);
   }
@@ -2980,6 +2985,63 @@ function resetTransportState() {
   }
 }
 
+function applyAuthentication(state: BridgeAuthenticationState) {
+  _authentication = state;
+  _currentUser = state.status === "authenticated" ? state.user : undefined;
+}
+
+function stopTransportForReauthentication() {
+  clientId = null;
+  clientMessagesUrl = null;
+  clearPromptPending();
+  stopHeartbeatWatchdog();
+  lastHeartbeatAt = 0;
+  eventSource?.close();
+  eventSource = null;
+  _connectionStatus = "disconnected";
+  _lastDisconnectReason = "";
+  rejectPendingRequests("Login is required again");
+}
+
+async function readCurrentAuthentication(): Promise<
+  BridgeAuthenticationState | undefined
+> {
+  try {
+    const response = await fetch("/api/auth/current", {
+      credentials: "same-origin",
+    });
+    if (!response.ok) return undefined;
+    const value = (await response.json()) as unknown;
+    if (!value || typeof value !== "object" || !("status" in value)) {
+      return undefined;
+    }
+    const status = (value as { status?: unknown }).status;
+    if (status === "anonymous" || status === "reauth_required") {
+      return { status };
+    }
+    if (status !== "authenticated") return undefined;
+    const user = (value as { user?: unknown }).user;
+    if (
+      !user ||
+      typeof user !== "object" ||
+      typeof (user as { username?: unknown }).username !== "string"
+    ) {
+      return undefined;
+    }
+    const username = (user as { username: string }).username;
+    const avatarUrl = (user as { avatarUrl?: unknown }).avatarUrl;
+    return {
+      status: "authenticated",
+      user: {
+        username,
+        ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function rejectPendingRequests(message: string) {
   for (const [id, pending] of pendingRequests) {
     clearTimeout(pending.timer);
@@ -3031,6 +3093,12 @@ async function connectOnce(): Promise<boolean> {
   resetTransportState();
 
   try {
+    const currentAuthentication = await readCurrentAuthentication();
+    if (currentAuthentication) applyAuthentication(currentAuthentication);
+    if (currentAuthentication?.status === "reauth_required") {
+      _connectionStatus = "disconnected";
+      return false;
+    }
     const createClient = () =>
       fetch("/api/clients", {
         method: "POST",
@@ -3061,8 +3129,11 @@ async function connectOnce(): Promise<boolean> {
     clientId = nextClientId;
     clientMessagesUrl = created.messagesUrl;
     defaultWorkspacePath = normalizeBridgePath(created.defaultWorkspacePath);
-    _authentication = created.authentication;
-    _currentUser = created.currentUser;
+    if (created.authentication) {
+      applyAuthentication(created.authentication);
+    } else {
+      _currentUser = created.currentUser;
+    }
     eventSource = new EventSource(created.eventsUrl);
   } catch (error) {
     markDisconnected(

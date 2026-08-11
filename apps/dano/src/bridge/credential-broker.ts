@@ -14,6 +14,14 @@ const AUTHENTICATION_REQUIRED = {
   },
 } as const;
 
+const REAUTHENTICATION_REQUIRED = {
+  ok: false,
+  error: {
+    code: "reauth_required",
+    message: "Login is required again for this provider request.",
+  },
+} as const;
+
 const credentialBrokerParameters = Type.Object({
   method: Type.String(),
   path: Type.String(),
@@ -66,7 +74,10 @@ export type ProviderResponse =
   | {
       readonly ok: false;
       readonly error: {
-        readonly code: "authentication_required" | "provider_request_failed";
+        readonly code:
+          | "authentication_required"
+          | "reauth_required"
+          | "provider_request_failed";
         readonly message: string;
       };
     }
@@ -98,6 +109,11 @@ export interface CredentialBrokerOptions {
   readonly readCredential: (
     loginSessionId: string,
   ) => Promise<ProviderCredential | null>;
+  readonly refreshCredential?: (
+    loginSessionId: string,
+  ) => Promise<ProviderCredential | null>;
+  readonly requireReauthentication?: (loginSessionId: string) => Promise<void>;
+  readonly isAccessTokenInvalid?: (response: Response) => boolean;
   readonly fetch?: typeof fetch;
 }
 
@@ -145,6 +161,12 @@ export class CredentialBroker {
     object,
     AssistantTurnBindingHandle
   >();
+  private readonly refreshes = new Map<
+    string,
+    Promise<ProviderCredential | null>
+  >();
+  private readonly reauthentication = new Map<string, Promise<void>>();
+  private readonly reauthenticationRequired = new Set<string>();
   private nextBindingId = 1;
 
   constructor(private readonly options: CredentialBrokerOptions) {
@@ -360,22 +382,55 @@ export class CredentialBroker {
 
     const binding = this.sessionState(scope, agentSessionId)?.activePiTurn;
     if (!binding?.loginSessionId) return AUTHENTICATION_REQUIRED;
+    if (this.reauthenticationRequired.has(binding.loginSessionId)) {
+      return REAUTHENTICATION_REQUIRED;
+    }
     const credential = await this.options.readCredential(binding.loginSessionId);
     if (!credential) return AUTHENTICATION_REQUIRED;
 
-    const headers = requestHeaders(request.headers, credential);
-    if (body !== undefined && typeof request.body !== "string") {
-      headers["content-type"] ??= "application/json";
-    }
-    try {
-      const response = await this.providerFetch(target!, {
+    const send = (requestCredential: ProviderCredential) => {
+      const headers = requestHeaders(request.headers, requestCredential);
+      if (body !== undefined && typeof request.body !== "string") {
+        headers["content-type"] ??= "application/json";
+      }
+      return this.providerFetch(target!, {
         method,
         headers,
         ...(body === undefined ? {} : { body }),
         redirect: "manual",
         signal,
       });
-      const secrets = [credential.accessToken, credential.refreshToken].filter(
+    };
+    try {
+      let response = await send(credential);
+      let responseCredential = credential;
+      if (this.accessTokenInvalid(response)) {
+        const latestCredential = await this.options.readCredential(
+          binding.loginSessionId,
+        );
+        const refreshed =
+          latestCredential?.accessToken !== credential.accessToken
+            ? latestCredential
+            : credential.refreshToken
+              ? await this.refreshLoginSession(binding.loginSessionId)
+              : null;
+        if (!refreshed) {
+          await this.markReauthenticationRequired(binding.loginSessionId);
+          return REAUTHENTICATION_REQUIRED;
+        }
+        responseCredential = refreshed;
+        response = await send(refreshed);
+        if (this.accessTokenInvalid(response)) {
+          await this.markReauthenticationRequired(binding.loginSessionId);
+          return REAUTHENTICATION_REQUIRED;
+        }
+      }
+      const secrets = [
+        credential.accessToken,
+        credential.refreshToken,
+        responseCredential.accessToken,
+        responseCredential.refreshToken,
+      ].filter(
         (value): value is string => Boolean(value),
       );
       return {
@@ -393,6 +448,43 @@ export class CredentialBroker {
         },
       };
     }
+  }
+
+  private accessTokenInvalid(response: Response): boolean {
+    return this.options.isAccessTokenInvalid?.(response) ?? response.status === 401;
+  }
+
+  private refreshLoginSession(
+    loginSessionId: string,
+  ): Promise<ProviderCredential | null> {
+    const existing = this.refreshes.get(loginSessionId);
+    if (existing) return existing;
+    const refresh = (this.options.refreshCredential?.(loginSessionId) ??
+      Promise.resolve(null))
+      .catch(() => null)
+      .finally(() => {
+        if (this.refreshes.get(loginSessionId) === refresh) {
+          this.refreshes.delete(loginSessionId);
+        }
+      });
+    this.refreshes.set(loginSessionId, refresh);
+    return refresh;
+  }
+
+  private markReauthenticationRequired(loginSessionId: string): Promise<void> {
+    this.reauthenticationRequired.add(loginSessionId);
+    const existing = this.reauthentication.get(loginSessionId);
+    if (existing) return existing;
+    const required = (this.options.requireReauthentication?.(loginSessionId) ??
+      Promise.resolve())
+      .catch(() => {})
+      .finally(() => {
+        if (this.reauthentication.get(loginSessionId) === required) {
+          this.reauthentication.delete(loginSessionId);
+        }
+      });
+    this.reauthentication.set(loginSessionId, required);
+    return required;
   }
 
   private handleSessionEvent(
