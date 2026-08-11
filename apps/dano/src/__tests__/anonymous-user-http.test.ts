@@ -226,6 +226,10 @@ describe("Anonymous User over HTTP/Bridge", () => {
       path.join(os.tmpdir(), "dano-anonymous-expiry-"),
     );
     runtimeRoots.push(runtimeRoot);
+    const anonymousSessionsPath = path.join(
+      runtimeRoot,
+      "anonymous-sessions",
+    );
     const sessionsRootPath = path.join(runtimeRoot, "sessions");
     const { origin } = await startAnonymousServer(
       runtimeRoot,
@@ -266,12 +270,13 @@ describe("Anonymous User over HTTP/Bridge", () => {
     );
     expect(disconnected.status).toBe(202);
     now = 3_002;
-    await waitUntil(() => !fs.existsSync(guest.body.defaultWorkspacePath));
+    await waitUntil(
+      () => fs.readdirSync(anonymousSessionsPath).length === 0,
+    );
 
+    expect(fs.existsSync(guest.body.defaultWorkspacePath)).toBe(false);
     expect(fs.existsSync(upload.path)).toBe(false);
-    expect(
-      fs.readdirSync(path.join(runtimeRoot, "anonymous-sessions")),
-    ).toEqual([]);
+    expect(fs.readdirSync(anonymousSessionsPath)).toEqual([]);
     expect(fs.readdirSync(path.join(runtimeRoot, "uploads", "records"))).toEqual(
       [],
     );
