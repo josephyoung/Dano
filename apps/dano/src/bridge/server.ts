@@ -49,6 +49,7 @@ class HttpError extends Error {
 }
 
 export interface RpcConnectionHandler {
+  readonly defaultWorkspacePath?: string;
   handleClientMessage(message: ClientMessage): void;
   currentGitCwd?(): string;
   dispose(): void;
@@ -66,7 +67,7 @@ export interface RpcConnectionContext {
 
 export type RpcConnectionHandlerFactory = (
   ctx: RpcConnectionContext,
-) => RpcConnectionHandler;
+) => RpcConnectionHandler | Promise<RpcConnectionHandler>;
 
 let clientSeqCounter = 0;
 
@@ -671,19 +672,26 @@ export class BridgeServer {
 
     this.clients.set(client.id, client);
     if (user) this.clientUsers.set(client.id, user);
-    this.eventBus.registerClient(client);
-
-    const handler = this.handlerFactory({
-      client,
-      user: user ?? undefined,
-      config: this.config,
-      eventBus: this.eventBus,
-      uploadRegistry: this.uploadRegistry,
-      emitEvent: this.emitEvent,
-      send: message => {
-        this.eventBus.sendToClient(client.id, message);
-      },
-    });
+    const unregisterClient = this.eventBus.registerClient(client);
+    let handler: RpcConnectionHandler;
+    try {
+      handler = await this.handlerFactory({
+        client,
+        user: user ?? undefined,
+        config: this.config,
+        eventBus: this.eventBus,
+        uploadRegistry: this.uploadRegistry,
+        emitEvent: this.emitEvent,
+        send: message => {
+          this.eventBus.sendToClient(client.id, message);
+        },
+      });
+    } catch (error) {
+      unregisterClient();
+      this.clientUsers.delete(client.id);
+      this.clients.delete(client.id);
+      throw error;
+    }
     this.handlers.set(client.id, handler);
 
     this.emitEvent({
@@ -696,7 +704,8 @@ export class BridgeServer {
       ...(user ? { currentUser: toBrowserUserSummary(user.user) } : {}),
       eventsUrl: `/api/clients/${encodeURIComponent(client.id)}/events`,
       messagesUrl: `/api/clients/${encodeURIComponent(client.id)}/messages`,
-      defaultWorkspacePath: this.config.defaultWorkspacePath,
+      defaultWorkspacePath:
+        handler.defaultWorkspacePath ?? this.config.defaultWorkspacePath,
     });
   }
 
