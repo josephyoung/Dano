@@ -105,6 +105,9 @@ vi.mock("./components/ExtensionDialog.svelte", async () => ({
 vi.mock("./components/ReconnectBanner.svelte", async () => ({
   default: (await import("./test/EmptyComponentHarness.svelte")).default,
 }));
+vi.mock("./components/ReauthenticationDialog.svelte", async () => ({
+  default: (await import("./test/EmptyComponentHarness.svelte")).default,
+}));
 vi.mock("./components/ThemeSettingsDialog.svelte", async () => ({
   default: (await import("./test/EmptyComponentHarness.svelte")).default,
 }));
