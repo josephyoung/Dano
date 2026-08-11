@@ -57,6 +57,14 @@ export function createAnonymousUserContextResolver(
     },
 
     async resolveForClient(headers) {
+      const authenticatedResolutionFromResolver =
+        await options.authenticatedResolver?.resolveForClient?.(headers);
+      if (
+        authenticatedResolutionFromResolver?.authentication.status ===
+        "authenticated"
+      ) {
+        return authenticatedResolutionFromResolver;
+      }
       const authenticated = await options.authenticatedResolver?.resolve(headers);
       if (authenticated) return authenticatedResolution(authenticated);
 
@@ -75,6 +83,31 @@ export function createAnonymousUserContextResolver(
           options.secureCookie,
         ),
       };
+    },
+
+    async resolveExisting(headers) {
+      const authenticatedResolutionFromResolver =
+        await options.authenticatedResolver?.resolveExisting?.(headers);
+      if (authenticatedResolutionFromResolver) {
+        return authenticatedResolutionFromResolver;
+      }
+      const authenticated = await options.authenticatedResolver?.resolve(headers);
+      if (authenticated) return authenticatedResolution(authenticated);
+      const guest = await resolveGuest(headers);
+      return guest
+        ? { userContext: guest, authentication: { status: "anonymous" } }
+        : null;
+    },
+
+    resolveAnonymous: resolveGuest,
+
+    async revokeAnonymous(headers, expectedUserId) {
+      const guestId = readCookie(headers, cookieName);
+      if (!guestId || !OPAQUE_GUEST_ID_PATTERN.test(guestId)) return false;
+      const stored = await readStoredSession(sessionsRootPath, guestId);
+      if (!stored || stored.userId !== expectedUserId) return false;
+      await fs.promises.rm(guestSessionPath(sessionsRootPath, guestId));
+      return true;
     },
   };
 }

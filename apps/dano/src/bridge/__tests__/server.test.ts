@@ -7,9 +7,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BridgeEventBus } from "../bridge-event-bus.js";
 import {
   BridgeServer,
+  type AuthHttpHandler,
   type RpcConnectionHandlerFactory,
 } from "../server.js";
-import { createJwtUserContextResolver } from "../user-context.js";
+import {
+  createJwtUserContextResolver,
+  type UserContextResolver,
+} from "../user-context.js";
+import { UserRuntimeRegistry } from "../user-runtime-registry.js";
 import {
   DEFAULT_BRIDGE_CONFIG,
   type BridgeConfig,
@@ -1019,6 +1024,139 @@ describe("BridgeServer HTTP/SSE transport", () => {
       type: "response",
       payload: { id: "cmd-1", success: true },
     });
+  });
+
+  it("rejects owner transfer while an accepted User command is still active", async () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dano-transfer-gate-"));
+    userRoots.push(runtimeRoot);
+    const source = {
+      user: { id: "guest-transfer-gate" },
+      folderPath: path.join(runtimeRoot, "users", "guest-transfer-gate"),
+    };
+    const target = {
+      user: { id: "authenticated-transfer-gate", username: "Test User" },
+      folderPath: path.join(runtimeRoot, "users", "authenticated-transfer-gate"),
+    };
+    fs.mkdirSync(path.join(source.folderPath, "workspaces", "default"), {
+      recursive: true,
+    });
+    fs.mkdirSync(target.folderPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(source.folderPath, "workspaces", "default", "kept.txt"),
+      "guest data",
+      "utf8",
+    );
+    let guestBindingActive = true;
+    const resolver: UserContextResolver = {
+      async resolve() {
+        return guestBindingActive ? source : null;
+      },
+      async resolveForClient() {
+        return guestBindingActive
+          ? { userContext: source, authentication: { status: "anonymous" } }
+          : null;
+      },
+      async resolveExisting() {
+        return guestBindingActive
+          ? { userContext: source, authentication: { status: "anonymous" } }
+          : null;
+      },
+      async resolveAnonymous() {
+        return guestBindingActive ? source : null;
+      },
+      async revokeAnonymous(_headers, expectedUserId) {
+        if (!guestBindingActive || expectedUserId !== source.user.id) return false;
+        guestBindingActive = false;
+        return true;
+      },
+    };
+    const authHandler: AuthHttpHandler = {
+      async handle(req, res, url, lifecycle) {
+        if (req.method !== "POST" || url.pathname !== "/api/test-transfer") {
+          return false;
+        }
+        await lifecycle.transferAnonymousUser(req.headers, source.user.id, target);
+        res.writeHead(204);
+        res.end();
+        return true;
+      },
+    };
+    let finishCommand!: () => void;
+    const commandGate = new Promise<void>(resolve => {
+      finishCommand = resolve;
+    });
+    const eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-transfer-upload-"));
+    uploadRoots.push(uploadDir);
+    const registry = new UserRuntimeRegistry(async () => {
+      throw new Error("test backend should not be created");
+    });
+    const server = new BridgeServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir },
+      },
+      ctx => ({
+        defaultWorkspacePath: path.join(source.folderPath, "workspaces", "default"),
+        handleClientMessage: () => commandGate,
+        dispose: vi.fn(),
+      }),
+      eventBus,
+      vi.fn(),
+      resolver,
+      authHandler,
+      registry,
+    );
+    servers.push(server);
+    const address = await server.start();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const client = await postJson<{
+      client: { id: string };
+      eventsUrl: string;
+      messagesUrl: string;
+    }>(`${origin}/api/clients`);
+    const sse = openSse(`${origin}${client.eventsUrl}`);
+    await vi.waitFor(() =>
+      expect(eventBus.hasActiveClientConnection(client.client.id)).toBe(true),
+    );
+
+    const accepted = await fetch(`${origin}${client.messagesUrl}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "command",
+        payload: { id: "held-command", type: "get_state" },
+      }),
+    });
+    expect(accepted.status).toBe(202);
+    const blocked = await fetch(`${origin}/api/test-transfer`, {
+      method: "POST",
+    });
+    expect(blocked.status).toBe(409);
+    expect(guestBindingActive).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(target.folderPath, "workspaces", "default", "kept.txt"),
+      ),
+    ).toBe(false);
+
+    finishCommand();
+    await vi.waitFor(async () => {
+      const completed = await fetch(`${origin}/api/test-transfer`, {
+        method: "POST",
+      });
+      expect(completed.status).toBe(204);
+    });
+    sse.close();
+    expect(guestBindingActive).toBe(false);
+    expect(
+      fs.readFileSync(
+        path.join(target.folderPath, "workspaces", "default", "kept.txt"),
+        "utf8",
+      ),
+    ).toBe("guest data");
   });
 
   it("returns 202 before an asynchronous provider-stage prompt error is presented", async () => {

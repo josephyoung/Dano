@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -10,7 +11,11 @@ import {
   type OAuthProviderAdapter,
 } from "../bridge/oauth-authentication.js";
 import { createOAuth2ProviderAdapter } from "../bridge/oauth-provider.js";
-import { DEFAULT_BRIDGE_CONFIG } from "../bridge/types.js";
+import {
+  DEFAULT_BRIDGE_CONFIG,
+  type ClientMessage,
+  type ServerMessage,
+} from "../bridge/types.js";
 import { startDanoServer, type DanoServerController } from "../server.js";
 
 const controllers: DanoServerController[] = [];
@@ -65,7 +70,15 @@ async function startOAuthServer(
   });
   authentications.push(authentication);
   const controller = await startDanoServer(
-    { ...DEFAULT_BRIDGE_CONFIG, host: "127.0.0.1", port: 0 },
+    {
+      ...DEFAULT_BRIDGE_CONFIG,
+      host: "127.0.0.1",
+      port: 0,
+      upload: {
+        ...DEFAULT_BRIDGE_CONFIG.upload,
+        uploadDir: path.join(runtimeRootPath, "uploads"),
+      },
+    },
     {
       captureSigint: false,
       userContextResolver: createAnonymousUserContextResolver({
@@ -166,7 +179,7 @@ describe("OAuth authentication over HTTP", () => {
         throw new Error("not used");
       },
     };
-    const { origin } = await startOAuthServer(provider);
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
 
     const response = await fetch(`${origin}/api/auth/current`);
 
@@ -520,6 +533,388 @@ describe("OAuth authentication over HTTP", () => {
     expect(cookieFrom(callback, "dano_login")).toMatch(/^dano_login=/);
   });
 
+  it("atomically transfers only the callback-bound Anonymous User data before login", async () => {
+    const provider = successfulProvider("transfer-owner", "transfer-token");
+    const { origin } = await startOAuthServer(provider);
+    const anonymous = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const anonymousBody = (await anonymous.json()) as {
+      client: { id: string };
+      defaultWorkspacePath: string;
+    };
+    const guestCookie = cookieFrom(anonymous, "dano_guest");
+    fs.writeFileSync(
+      path.join(anonymousBody.defaultWorkspacePath, "guest-note.txt"),
+      "owned by the callback guest",
+      "utf8",
+    );
+    const savedPreference = await fetch(
+      `${origin}/api/clients/${anonymousBody.client.id}/preferences/theme`,
+      {
+        method: "PUT",
+        headers: {
+          Cookie: guestCookie,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ accentColorPreset: "purple" }),
+      },
+    );
+    expect(savedPreference.status).toBe(200);
+
+    const started = await fetch(`${origin}/api/auth/login?returnTo=/chat`, {
+      headers: { Cookie: guestCookie },
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fixture&state=${state}`,
+      { headers: { Cookie: guestCookie }, redirect: "manual" },
+    );
+    const loginCookie = cookieFrom(callback, "dano_login");
+    const authenticated = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { Cookie: loginCookie, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const authenticatedBody = (await authenticated.json()) as {
+      client: { id: string };
+      defaultWorkspacePath: string;
+    };
+
+    expect(authenticated.status).toBe(201);
+    expect(
+      fs.readFileSync(
+        path.join(authenticatedBody.defaultWorkspacePath, "guest-note.txt"),
+        "utf8",
+      ),
+    ).toBe("owned by the callback guest");
+    const transferredPreference = await fetch(
+      `${origin}/api/clients/${authenticatedBody.client.id}/preferences/theme`,
+      { headers: { Cookie: loginCookie } },
+    );
+    expect(await transferredPreference.json()).toEqual({
+      accentColorPreset: "purple",
+    });
+
+    const staleGuest = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { Cookie: guestCookie, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const staleGuestBody = (await staleGuest.json()) as {
+      client: { id: string };
+      defaultWorkspacePath: string;
+    };
+    expect(staleGuest.headers.get("set-cookie")).toMatch(/^dano_guest=/);
+    expect(staleGuestBody.defaultWorkspacePath).not.toBe(
+      authenticatedBody.defaultWorkspacePath,
+    );
+    expect(
+      fs.existsSync(path.join(staleGuestBody.defaultWorkspacePath, "guest-note.txt")),
+    ).toBe(false);
+  });
+
+  it("rolls back a failed Anonymous User transfer and keeps the guest usable", async () => {
+    const externalUserId = "rollback-owner";
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider(externalUserId, "rollback-token"),
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const anonymous = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const anonymousBody = (await anonymous.json()) as {
+      client: { id: string };
+      defaultWorkspacePath: string;
+    };
+    const guestCookie = cookieFrom(anonymous, "dano_guest");
+    const retainedPath = path.join(
+      anonymousBody.defaultWorkspacePath,
+      "a-retained.txt",
+    );
+    fs.writeFileSync(retainedPath, "guest remains owner", "utf8");
+    const unavailableUpload = await uploadProjectFile(
+      origin,
+      anonymousBody as TestBridgeClient,
+      guestCookie,
+      "unavailable.txt",
+      "removed before owner transfer",
+    );
+    fs.rmSync(unavailableUpload.path);
+    const started = await fetch(`${origin}/api/auth/login`, {
+      headers: { Cookie: guestCookie },
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fixture&state=${state}`,
+      { headers: { Cookie: guestCookie }, redirect: "manual" },
+    );
+
+    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect(revoked).toEqual(["rollback-token"]);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toEqual([]);
+    expect(fs.readFileSync(retainedPath, "utf8")).toBe("guest remains owner");
+    const canonicalUserId = `oauth_${createHash("sha256")
+      .update(externalUserId)
+      .digest("hex")}`;
+    expect(
+      fs.existsSync(
+        path.join(
+          runtimeRootPath,
+          "users",
+          canonicalUserId,
+          "workspaces",
+          "default",
+          "a-retained.txt",
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      (
+        await fetch(
+          `${origin}/api/clients/${anonymousBody.client.id}/preferences/theme`,
+          { headers: { Cookie: guestCookie } },
+        )
+      ).status,
+    ).toBe(200);
+  });
+
+  it("merges guest sessions without replacing an authenticated User's existing data", async () => {
+    const provider = successfulProvider("merge-owner", "merge-token");
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const existingLoginCookie = await completeLogin(origin, "existing-login");
+    const existingClient = await createAuthenticatedClient(
+      origin,
+      existingLoginCookie,
+    );
+    expect(
+      (
+        await fetch(
+          `${origin}/api/clients/${existingClient.client.id}/preferences/theme`,
+          {
+            method: "PUT",
+            headers: {
+              Cookie: existingLoginCookie,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ accentColorPreset: "blue" }),
+          },
+        )
+      ).status,
+    ).toBe(200);
+    fs.writeFileSync(
+      path.join(existingClient.defaultWorkspacePath, "shared.txt"),
+      "authenticated value",
+      "utf8",
+    );
+    const existingState = await executeCommand(
+      origin,
+      existingClient,
+      existingLoginCookie,
+      { id: "existing-state", type: "get_state" },
+    );
+    const existingSession = (
+      existingState.payload as {
+        data?: { sessionFile?: string; sessionId?: string };
+      }
+    ).data;
+    const existingSessionPath = existingSession?.sessionFile;
+    expect(existingSessionPath).toBeTruthy();
+    fs.writeFileSync(
+      existingSessionPath!,
+      `${JSON.stringify({
+        type: "session",
+        id: existingSession?.sessionId,
+        timestamp: "2026-08-11T00:00:00.000Z",
+        cwd: existingClient.defaultWorkspacePath,
+      })}\n`,
+      "utf8",
+    );
+
+    const anonymous = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const guestClient = (await anonymous.json()) as TestBridgeClient;
+    const guestCookie = cookieFrom(anonymous, "dano_guest");
+    fs.writeFileSync(
+      path.join(guestClient.defaultWorkspacePath, "shared.txt"),
+      "guest value",
+      "utf8",
+    );
+    const binaryValue = Buffer.from([0, 255, 254, 128, 65, 0]);
+    fs.writeFileSync(
+      path.join(guestClient.defaultWorkspacePath, "binary.bin"),
+      binaryValue,
+    );
+    expect(
+      (
+        await fetch(
+          `${origin}/api/clients/${guestClient.client.id}/preferences/theme`,
+          {
+            method: "PUT",
+            headers: {
+              Cookie: guestCookie,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ accentColorPreset: "purple" }),
+          },
+        )
+      ).status,
+    ).toBe(200);
+    const guestState = await executeCommand(origin, guestClient, guestCookie, {
+      id: "guest-state",
+      type: "get_state",
+    });
+    const guestSession = (
+      guestState.payload as {
+        data?: { sessionFile?: string; sessionId?: string };
+      }
+    ).data;
+    const guestSessionPath = guestSession?.sessionFile;
+    expect(guestSessionPath).toBeTruthy();
+    fs.writeFileSync(
+      guestSessionPath!,
+      `${JSON.stringify({
+        type: "session",
+        id: guestSession?.sessionId,
+        timestamp: "2026-08-11T00:00:00.000Z",
+        cwd: guestClient.defaultWorkspacePath,
+      })}\n`,
+      "utf8",
+    );
+    const guestUpload = await uploadProjectFile(
+      origin,
+      guestClient,
+      guestCookie,
+      "guest-upload.txt",
+      "guest upload keeps its resource id",
+    );
+
+    const started = await fetch(`${origin}/api/auth/login`, {
+      headers: { Cookie: guestCookie },
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=merge-login&state=${state}`,
+      { headers: { Cookie: guestCookie }, redirect: "manual" },
+    );
+    expect(cookieFrom(callback, "dano_login")).toMatch(/^dano_login=/);
+
+    expect(
+      fs.readFileSync(
+        path.join(existingClient.defaultWorkspacePath, "shared.txt"),
+        "utf8",
+      ),
+    ).toBe("authenticated value");
+    expect(
+      fs.readFileSync(
+        path.join(
+          existingClient.defaultWorkspacePath,
+          "shared.anonymous-1.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("guest value");
+    expect(
+      fs.readFileSync(
+        path.join(existingClient.defaultWorkspacePath, "binary.bin"),
+      ),
+    ).toEqual(binaryValue);
+    const mergedPreference = await fetch(
+      `${origin}/api/clients/${existingClient.client.id}/preferences/theme`,
+      { headers: { Cookie: existingLoginCookie } },
+    );
+    expect(await mergedPreference.json()).toEqual({
+      accentColorPreset: "blue",
+    });
+    expect(
+      fs.readdirSync(
+        path.join(
+          path.dirname(path.dirname(existingClient.defaultWorkspacePath)),
+          "preferences",
+        ),
+      ),
+    ).toEqual(["theme.json"]);
+    const sessions = await executeCommand(
+      origin,
+      existingClient,
+      existingLoginCookie,
+      {
+        id: "merged-sessions",
+        type: "list_sessions",
+        workspacePath: existingClient.defaultWorkspacePath,
+      },
+    );
+    const sessionPaths = (
+      sessions.payload as { data?: { sessions?: Array<{ path: string }> } }
+    ).data?.sessions?.map(session => session.path) ?? [];
+    expect(sessionPaths).toHaveLength(2);
+    expect(
+      sessionPaths.map(sessionPath =>
+        (JSON.parse(fs.readFileSync(sessionPath, "utf8")) as { id: string }).id,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        existingSession?.sessionId,
+        guestSession?.sessionId,
+      ]),
+    );
+    expect(
+      sessionPaths.every(sessionPath =>
+        fs
+          .readFileSync(sessionPath, "utf8")
+          .includes(existingClient.defaultWorkspacePath),
+      ),
+    ).toBe(true);
+    const uploadRecords = fs
+      .readdirSync(path.join(runtimeRootPath, "uploads", "records"))
+      .map(name =>
+        JSON.parse(
+          fs.readFileSync(
+            path.join(runtimeRootPath, "uploads", "records", name),
+            "utf8",
+          ),
+        ) as {
+          upload: { id: string; ownerUserId: string; path: string };
+        },
+      );
+    const transferredUpload = uploadRecords.find(
+      record => record.upload.id === guestUpload.id,
+    )?.upload;
+    expect(transferredUpload).toMatchObject({
+      id: guestUpload.id,
+      ownerUserId: expect.stringMatching(/^oauth_/),
+    });
+    expect(transferredUpload?.path.startsWith(existingClient.defaultWorkspacePath)).toBe(
+      true,
+    );
+    expect(fs.readFileSync(transferredUpload!.path, "utf8")).toBe(
+      "guest upload keeps its resource id",
+    );
+  });
+
   it("rejects cross-origin and scheme-relative return paths", async () => {
     const provider: OAuthProviderAdapter = {
       authorizationUrl() {
@@ -849,6 +1244,168 @@ describe("OAuth authentication over HTTP", () => {
     ).toHaveLength(2);
   });
 
+  it("logs out only the current Login Session and disconnects only its Bridge Clients", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("shared-logout-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: {
+            userId: "shared-logout-user",
+            displayName: "Shared User",
+          },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const firstCookie = await completeLogin(origin, "first-login");
+    const secondCookie = await completeLogin(origin, "second-login");
+    const firstClient = await createAuthenticatedClient(origin, firstCookie);
+    const secondClient = await createAuthenticatedClient(origin, secondCookie);
+    expect(firstClient.defaultWorkspacePath).toBe(
+      secondClient.defaultWorkspacePath,
+    );
+    fs.writeFileSync(
+      path.join(firstClient.defaultWorkspacePath, "authenticated-only.txt"),
+      "do not copy on logout",
+      "utf8",
+    );
+    expect(
+      (
+        await fetch(`${origin}/api/clients/${firstClient.client.id}/messages`, {
+          method: "POST",
+          headers: {
+            Cookie: secondCookie,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "command",
+            payload: { id: "wrong-login-session", type: "get_state" },
+          }),
+        })
+      ).status,
+    ).toBe(401);
+
+    const logout = await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: firstCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+
+    expect(logout.status).toBe(200);
+    expect(logout.headers.get("set-cookie")).toMatch(
+      /^dano_login=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/,
+    );
+    expect(revoked).toEqual(["access-first-login"]);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: firstCookie },
+        })
+      ).json(),
+    ).toEqual({ status: "anonymous" });
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: secondCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+    expect(
+      (
+        await fetch(
+          `${origin}/api/clients/${firstClient.client.id}/messages`,
+          {
+            method: "POST",
+            headers: {
+              Cookie: firstCookie,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "command",
+              payload: { id: "old-client", type: "get_state" },
+            }),
+          },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(
+          `${origin}/api/clients/${secondClient.client.id}/user`,
+          { headers: { Cookie: secondCookie } },
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(1);
+    const anonymous = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { Cookie: firstCookie, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const anonymousClient = (await anonymous.json()) as TestBridgeClient & {
+      authentication: { status: string };
+    };
+    const anonymousCookie = cookieFrom(anonymous, "dano_guest");
+    expect(anonymousClient.authentication).toEqual({ status: "anonymous" });
+    expect(anonymousClient.defaultWorkspacePath).not.toBe(
+      firstClient.defaultWorkspacePath,
+    );
+    expect(
+      fs.existsSync(
+        path.join(anonymousClient.defaultWorkspacePath, "authenticated-only.txt"),
+      ),
+    ).toBe(false);
+    const anonymousState = await executeCommand(
+      origin,
+      anonymousClient,
+      anonymousCookie,
+      { id: "anonymous-after-logout", type: "get_state" },
+    );
+    expect(anonymousState.payload).toMatchObject({
+      command: "get_state",
+      success: true,
+    });
+  });
+
+  it("rejects cross-origin logout without revoking the Login Session", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("csrf-user", "csrf-token"),
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin } = await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin);
+
+    const rejected = await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: loginCookie,
+        Origin: "https://outside.example.test",
+      },
+    });
+
+    expect(rejected.status).toBe(403);
+    expect(revoked).toEqual([]);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: loginCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+  });
+
   it("preserves the adapter-verified opaque userId exactly when deriving User ownership", async () => {
     let externalUserId = "opaque-user";
     const provider: OAuthProviderAdapter = {
@@ -910,7 +1467,10 @@ function successfulProvider(
   };
 }
 
-async function completeLogin(origin: string): Promise<string> {
+async function completeLogin(
+  origin: string,
+  code = "fixture",
+): Promise<string> {
   const started = await fetch(`${origin}/api/auth/login`, {
     redirect: "manual",
   });
@@ -918,13 +1478,129 @@ async function completeLogin(origin: string): Promise<string> {
     "state",
   )!;
   const callback = await fetch(
-    `${origin}/api/auth/callback?code=fixture&state=${state}`,
+    `${origin}/api/auth/callback?code=${encodeURIComponent(code)}&state=${state}`,
     {
       headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
       redirect: "manual",
     },
   );
   return cookieFrom(callback, "dano_login");
+}
+
+async function createAuthenticatedClient(origin: string, cookie: string) {
+  const response = await fetch(`${origin}/api/clients`, {
+    method: "POST",
+    headers: { Cookie: cookie, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  expect(response.status).toBe(201);
+  return (await response.json()) as TestBridgeClient;
+}
+
+type TestBridgeClient = {
+  client: { id: string };
+  defaultWorkspacePath: string;
+  eventsUrl: string;
+  messagesUrl: string;
+};
+
+function waitForResponse(
+  url: string,
+  cookie: string,
+  correlationId: string,
+): { close(): void; ready: Promise<void>; result: Promise<ServerMessage> } {
+  let request: http.ClientRequest;
+  let markReady!: () => void;
+  const ready = new Promise<void>(resolve => {
+    markReady = resolve;
+  });
+  const result = new Promise<ServerMessage>((resolve, reject) => {
+    let buffer = "";
+    const timeout = setTimeout(() => {
+      request.destroy();
+      reject(new Error(`Timed out waiting for ${correlationId}`));
+    }, 2_000);
+    request = http.get(url, { headers: { Cookie: cookie } }, response => {
+      markReady();
+      response.setEncoding("utf8");
+      response.on("data", chunk => {
+        buffer += chunk;
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary !== -1) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame
+            .split(/\r?\n/)
+            .filter(line => line.startsWith("data: "))
+            .map(line => line.slice(6))
+            .join("\n");
+          if (data) {
+            const message = JSON.parse(data) as ServerMessage;
+            if (
+              message.type === "response" &&
+              message.payload.id === correlationId
+            ) {
+              clearTimeout(timeout);
+              resolve(message);
+              return;
+            }
+          }
+          boundary = buffer.indexOf("\n\n");
+        }
+      });
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+  });
+  return { ready, result, close: () => request.destroy() };
+}
+
+async function executeCommand(
+  origin: string,
+  client: TestBridgeClient,
+  cookie: string,
+  payload: Extract<ClientMessage, { type: "command" }>["payload"],
+): Promise<ServerMessage> {
+  const correlationId = payload.id;
+  if (!correlationId) throw new Error("Test commands require an id");
+  const response = waitForResponse(
+    `${origin}${client.eventsUrl}`,
+    cookie,
+    correlationId,
+  );
+  try {
+    await response.ready;
+    const posted = await fetch(`${origin}${client.messagesUrl}`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "command", payload } satisfies ClientMessage),
+    });
+    expect(posted.status).toBe(202);
+    return await response.result;
+  } finally {
+    response.close();
+  }
+}
+
+async function uploadProjectFile(
+  origin: string,
+  client: TestBridgeClient,
+  cookie: string,
+  name: string,
+  content: string,
+) {
+  const body = new TextEncoder().encode(content);
+  const sha256 = createHash("sha256").update(body).digest("hex");
+  const response = await fetch(
+    `${origin}/api/uploads?clientId=${encodeURIComponent(client.client.id)}&name=${encodeURIComponent(name)}&mimeType=text/plain&sha256=${sha256}`,
+    { method: "POST", headers: { Cookie: cookie }, body },
+  );
+  expect(response.status).toBe(201);
+  return (await response.json()) as {
+    id: string;
+    path: string;
+    previewUrl: string;
+  };
 }
 
 function sessionHours(hours: number): number {

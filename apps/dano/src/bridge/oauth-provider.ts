@@ -26,6 +26,7 @@ export interface OAuthProviderAdapter {
     readonly identity: ExternalIdentity;
     readonly credential: ProviderCredential;
   }>;
+  revokeCredential?(credential: ProviderCredential): Promise<void>;
 }
 
 export interface OAuth2ProviderAdapterOptions {
@@ -99,6 +100,10 @@ export function createOAuth2ProviderAdapter(
             : {}),
         },
       };
+    },
+
+    async revokeCredential(credential) {
+      await oauth.tokenRevocation(configuration, credential.accessToken);
     },
   };
 }

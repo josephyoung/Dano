@@ -20,7 +20,7 @@ export type {
   OAuthProviderAdapter,
   ProviderCredential,
 } from "./oauth-provider.js";
-import type { AuthHttpHandler } from "./server.js";
+import type { AuthHttpHandler, AuthHttpLifecycle } from "./server.js";
 import {
   ensureUserFolder,
   toBrowserUserSummary,
@@ -156,22 +156,61 @@ export async function createOAuthAuthentication(
   const resolve = async (
     headers: http.IncomingHttpHeaders,
   ): Promise<AuthenticatedUserContext | null> => {
+    return (await resolveLoginSession(headers))?.userContext ?? null;
+  };
+
+  const resolveLoginSession = async (
+    headers: http.IncomingHttpHeaders,
+  ): Promise<{
+    loginSessionId: string;
+    userContext: AuthenticatedUserContext;
+  } | null> => {
     const sessionId = readCookie(headers.cookie, LOGIN_COOKIE_NAME);
     if (!sessionId) return null;
     const session = await loadSession(sessionId, true);
     if (!session) return null;
     return {
-      user: session.user,
-      folderPath: await ensureUserFolder(usersRootPath, session.user.id),
+      loginSessionId: sessionId,
+      userContext: {
+        user: session.user,
+        folderPath: await ensureUserFolder(usersRootPath, session.user.id),
+      },
     };
   };
 
   return {
     resolve,
+    async resolveForClient(headers) {
+      const resolved = await resolveLoginSession(headers);
+      return resolved
+        ? {
+            userContext: resolved.userContext,
+            authentication: {
+              status: "authenticated",
+              user: toBrowserUserSummary(resolved.userContext.user),
+            },
+            loginSessionId: resolved.loginSessionId,
+          }
+        : null;
+    },
+    async resolveExisting(headers) {
+      const resolved = await resolveLoginSession(headers);
+      return resolved
+        ? {
+            userContext: resolved.userContext,
+            authentication: {
+              status: "authenticated",
+              user: toBrowserUserSummary(resolved.userContext.user),
+            },
+            loginSessionId: resolved.loginSessionId,
+          }
+        : null;
+    },
     async handle(
       req: http.IncomingMessage,
       res: http.ServerResponse,
       url: URL,
+      lifecycle: AuthHttpLifecycle,
     ): Promise<boolean> {
       if (req.method === "GET" && url.pathname === "/api/auth/current") {
         const current = await resolve(req.headers);
@@ -194,9 +233,40 @@ export async function createOAuthAuthentication(
           redirectUri: redirectUri.href,
           provider: options.provider,
           encryptionKey: options.credentialEncryptionKey,
+          usersRootPath,
           now,
           stateTtlMs,
+          lifecycle,
         });
+        return true;
+      }
+      if (url.pathname === "/api/auth/logout") {
+        if (req.method !== "POST") {
+          writeJson(res, 405, { error: "Logout requires POST" });
+          return true;
+        }
+        if (!sameOrigin(req.headers.origin, appOrigin)) {
+          writeJson(res, 403, { error: "Logout origin is invalid" });
+          return true;
+        }
+        const sessionId = readCookie(req.headers.cookie, LOGIN_COOKIE_NAME);
+        if (sessionId) {
+          const session = await loadSession(sessionId, false);
+          if (session) {
+            const credential = decryptCredential(
+              session.credential,
+              options.credentialEncryptionKey,
+              digest(sessionId),
+            );
+            await fs.promises.rm(loginSessionPath(sessionsPath, sessionId), {
+              force: true,
+            });
+            lifecycle.disconnectLoginSession(sessionId);
+            await options.provider.revokeCredential?.(credential).catch(() => {});
+          }
+        }
+        res.setHeader("Set-Cookie", serializeExpiredLoginCookie());
+        writeJson(res, 200, { status: "anonymous" });
         return true;
       }
       if (req.method !== "GET" || url.pathname !== "/api/auth/login") return false;
@@ -217,6 +287,9 @@ export async function createOAuthAuthentication(
       const browserBinding =
         guestBinding ?? existingFlowBinding ?? randomOpaqueId();
       const browserBindingHash = digest(browserBinding);
+      const anonymousUser = guestBinding
+        ? await lifecycle.resolveAnonymousUser(req.headers)
+        : null;
       const pendingLogin = await withBrowserLock(
         browserLocks,
         browserBindingHash,
@@ -236,6 +309,9 @@ export async function createOAuthAuthentication(
               version: 1,
               browserBindingHash,
               returnTo,
+              ...(anonymousUser
+                ? { anonymousUserId: anonymousUser.user.id }
+                : {}),
               createdAt: now(),
             } satisfies StoredLoginTransaction)}\n`,
             { encoding: "utf8", flag: "wx", mode: 0o600 },
@@ -280,6 +356,7 @@ interface StoredLoginTransaction {
   readonly version: 1;
   readonly browserBindingHash: string;
   readonly returnTo: string;
+  readonly anonymousUserId?: string;
   readonly createdAt: number;
 }
 
@@ -310,8 +387,10 @@ async function handleCallback(
     redirectUri: string;
     provider: OAuthProviderAdapter;
     encryptionKey: OAuthAuthenticationOptions["credentialEncryptionKey"];
+    usersRootPath: string;
     now: () => number;
     stateTtlMs: number;
+    lifecycle: AuthHttpLifecycle;
   },
 ): Promise<void> {
   const state = url.searchParams.get("state") ?? "";
@@ -361,10 +440,24 @@ async function handleCallback(
         sessionKey,
       ),
     };
-    await writeLoginSession(
-      loginSessionPath(options.sessionsPath, sessionId),
-      session,
-    );
+    const sessionPath = loginSessionPath(options.sessionsPath, sessionId);
+    await writeLoginSession(sessionPath, session);
+    try {
+      if (consumed.transaction.anonymousUserId) {
+        await options.lifecycle.transferAnonymousUser(
+          req.headers,
+          consumed.transaction.anonymousUserId,
+          {
+            user,
+            folderPath: await ensureUserFolder(options.usersRootPath, user.id),
+          },
+        );
+      }
+    } catch (error) {
+      await fs.promises.rm(sessionPath, { force: true }).catch(() => {});
+      await options.provider.revokeCredential?.(credential).catch(() => {});
+      throw error;
+    }
     redirectAfterCallback(res, consumed.transaction.returnTo, sessionId);
   } catch {
     redirectAfterCallback(res, consumed.transaction.returnTo);
@@ -494,6 +587,8 @@ function parseLoginTransaction(serialized: string): StoredLoginTransaction {
     value.version !== 1 ||
     typeof value.browserBindingHash !== "string" ||
     typeof value.returnTo !== "string" ||
+    (value.anonymousUserId !== undefined &&
+      typeof value.anonymousUserId !== "string") ||
     typeof value.createdAt !== "number"
   ) {
     throw new Error("OAuth login transaction is invalid");
@@ -629,6 +724,19 @@ function serializeLoginCookie(sessionId: string): string {
   return `${serializeCookie(LOGIN_COOKIE_NAME, sessionId)}; Max-Age=${Math.floor(
     SESSION_ABSOLUTE_TTL_MS / 1000,
   )}`;
+}
+
+function serializeExpiredLoginCookie(): string {
+  return `${serializeCookie(LOGIN_COOKIE_NAME, "")}; Max-Age=0`;
+}
+
+function sameOrigin(value: string | undefined, appOrigin: string): boolean {
+  if (!value) return false;
+  try {
+    return new URL(value).origin === appOrigin;
+  } catch {
+    return false;
+  }
 }
 
 function redirectAfterCallback(

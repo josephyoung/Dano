@@ -5269,6 +5269,7 @@ export class BridgeRpcAdapter {
   private readonly pendingDetachedPromptTimers = new Set<
     ReturnType<typeof setTimeout>
   >();
+  private readonly pendingDetachedPrompts = new Set<Promise<void>>();
 
   // Detached-session registry subscription.
   private unsubscribeRegistryEvents: (() => void) | undefined;
@@ -5344,6 +5345,16 @@ export class BridgeRpcAdapter {
 
   currentSessionId(): string {
     return this.sessionRuntime.currentSessionManager().getSessionId();
+  }
+
+  isBusy(): boolean {
+    const state = this.sessionRuntime.buildActiveState();
+    return (
+      state.isStreaming ||
+      state.isCompacting ||
+      this.pendingDetachedPromptTimers.size > 0 ||
+      this.pendingDetachedPrompts.size > 0
+    );
   }
 
   private currentUploadAccess(
@@ -6077,14 +6088,14 @@ export class BridgeRpcAdapter {
       return;
     }
 
-    this.handleClientMessage(message);
+    void this.handleClientMessage(message);
   }
 
-  handleClientMessage(message: ClientMessage): void {
+  handleClientMessage(message: ClientMessage): void | Promise<void> {
     if (this.disposed) return;
 
     if (message.type === "command") {
-      void this.handleCommand(message.payload);
+      return this.handleCommand(message.payload);
     } else if (message.type === "extension_ui_response") {
       this.handleUIResponse(message.payload);
     } else {
@@ -6315,8 +6326,9 @@ export class BridgeRpcAdapter {
           this.pendingDetachedPromptTimers.delete(promptTimer);
           if (this.disposed) return;
 
-          void session
-            .prompt(injectedMessage, promptOptions)
+          let promptOperation!: Promise<void>;
+          promptOperation = Promise.resolve()
+            .then(() => session.prompt(injectedMessage, promptOptions))
             .catch(error => {
               const message =
                 error instanceof Error ? error.message : String(error);
@@ -6340,7 +6352,11 @@ export class BridgeRpcAdapter {
               });
               this.sendEvent(toRpcAgentEndEvent({}, sessionPath));
               if (sessionPath) this.sessionStatsPusher.queue(sessionPath);
+            })
+            .finally(() => {
+              this.pendingDetachedPrompts.delete(promptOperation);
             });
+          this.pendingDetachedPrompts.add(promptOperation);
         }, 0);
         this.pendingDetachedPromptTimers.add(promptTimer);
 

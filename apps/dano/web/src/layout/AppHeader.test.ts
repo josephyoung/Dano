@@ -13,6 +13,8 @@ type AppHeaderProps = {
   showNewSession?: boolean;
   currentUser?: { username: string; avatarUrl?: string };
   onOpenTheme?: () => void;
+  onLogin?: () => void;
+  onLogout?: () => void | Promise<void>;
 };
 
 async function renderHeader(
@@ -69,12 +71,14 @@ describe("AppHeader", () => {
     }
   });
 
-  it("shows only the theme entry and authenticated User summary", async () => {
+  it("shows the authenticated User and logout in the existing Menu", async () => {
+    const onLogout = vi.fn();
     const { component, target } = await renderHeader({
       currentUser: {
         username: "Alice",
         avatarUrl: "https://example.test/alice.png",
       },
+      onLogout,
     });
 
     try {
@@ -85,6 +89,10 @@ describe("AppHeader", () => {
       expect(menu).not.toBeNull();
       expect(menu.querySelector(".theme-menu-item")?.textContent).toContain("主题色");
       expect(menu.querySelector(".header-user-summary")?.textContent).toContain("Alice");
+      expect(menu.querySelector(".login-menu-item")).toBeNull();
+      menu.querySelector<HTMLButtonElement>(".logout-menu-item")!.click();
+      await tick();
+      expect(onLogout).toHaveBeenCalledOnce();
       expect(menu.querySelector<HTMLImageElement>(".header-user-avatar")?.src).toBe(
         "https://example.test/alice.png",
       );
@@ -118,17 +126,21 @@ describe("AppHeader", () => {
     }
   });
 
-  it("uses the default visual placeholder until User data arrives", async () => {
-    const { component, target } = await renderHeader();
+  it("shows login in the existing Menu for an Anonymous User", async () => {
+    const onLogin = vi.fn();
+    const { component, target } = await renderHeader({ onLogin });
 
     try {
       target.querySelector<HTMLButtonElement>(".menu-button")!.click();
       await tick();
 
-      const summary = document.querySelector(".header-user-summary")!;
-      expect(summary.textContent).toContain("默认用户");
-      expect(summary.querySelector(".header-user-placeholder")).not.toBeNull();
-      expect(summary.querySelector("img")).toBeNull();
+      const login = document.querySelector<HTMLButtonElement>(".login-menu-item")!;
+      expect(login.textContent).toContain("登录");
+      expect(document.querySelector(".header-user-summary")).toBeNull();
+      expect(document.querySelector(".logout-menu-item")).toBeNull();
+      login.click();
+      await tick();
+      expect(onLogin).toHaveBeenCalledOnce();
     } finally {
       await unmount(component);
     }
