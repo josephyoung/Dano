@@ -283,6 +283,42 @@ export class UploadRegistry {
     return this.getTotalBytes() + incomingSize <= this.config.maxTotalBytes;
   }
 
+  transferOwnership(
+    sourceUserId: string,
+    targetUserId: string,
+    mapPath: (candidatePath: string) => string,
+  ): () => void {
+    const originals = [...this.uploads.values()]
+      .filter(upload => upload.ownerUserId === sourceUserId)
+      .map(upload => ({ ...upload, previousClientIds: [...upload.previousClientIds] }));
+    const rollback = () => {
+      for (const upload of originals) {
+        this.uploads.set(upload.id, upload);
+        this.persist(upload);
+      }
+    };
+    try {
+      for (const original of originals) {
+        const transferred: StoredUpload = {
+          ...original,
+          ownerUserId: targetUserId,
+          path: mapPath(original.path),
+          workspacePath: original.workspacePath
+            ? mapPath(original.workspacePath)
+            : undefined,
+        };
+        this.assertManagedPath(transferred.path);
+        this.assertOwnershipMetadata(transferred, transferred.path);
+        this.uploads.set(transferred.id, transferred);
+        this.persist(transferred);
+      }
+    } catch (error) {
+      rollback();
+      throw error;
+    }
+    return rollback;
+  }
+
   getTotalBytes(): number {
     let total = 0;
     const seenPaths = new Set<string>();

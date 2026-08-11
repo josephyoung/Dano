@@ -1,5 +1,7 @@
 <script lang="ts">
   import CircleUserRound from "@lucide/svelte/icons/circle-user-round";
+  import LogIn from "@lucide/svelte/icons/log-in";
+  import LogOut from "@lucide/svelte/icons/log-out";
   import Menu from "@lucide/svelte/icons/menu";
   import Palette from "@lucide/svelte/icons/palette";
   import SquarePen from "@lucide/svelte/icons/square-pen";
@@ -18,6 +20,8 @@
     showNewSession = true,
     currentUser,
     onOpenTheme,
+    onLogin,
+    onLogout,
   }: {
     connectionStatus: ConnectionStatus;
     disconnectReason?: string;
@@ -27,10 +31,13 @@
     showNewSession?: boolean;
     currentUser?: BridgeUserSummary;
     onOpenTheme?: () => void;
+    onLogin?: () => void;
+    onLogout?: () => void | Promise<void>;
   } = $props();
 
   let menuOpen = $state(false);
   let failedAvatarUrl = $state<string | null>(null);
+  let logoutPending = $state(false);
 
   const statusMeta = $derived.by(() => {
     switch (connectionStatus) {
@@ -54,6 +61,22 @@
     menuOpen = false;
     onOpenTheme?.();
   }
+
+  function login() {
+    menuOpen = false;
+    onLogin?.();
+  }
+
+  async function logout() {
+    if (logoutPending) return;
+    logoutPending = true;
+    try {
+      await onLogout?.();
+    } finally {
+      logoutPending = false;
+      menuOpen = false;
+    }
+  }
 </script>
 
 <header class="app-header">
@@ -74,30 +97,52 @@
         collisionPadding={10}
         trapFocus={false}
       >
-        <Button class="theme-menu-item" variant="ghost" type="button" onclick={openTheme}>
+        <Button class="header-menu-item theme-menu-item" variant="ghost" type="button" onclick={openTheme}>
           <Palette size={16} aria-hidden="true" />
           <span>{t("appHeader.themeColor")}</span>
         </Button>
         <div class="header-menu-separator" role="separator"></div>
-        <div class="header-user-summary">
-          {#if currentUser?.avatarUrl && currentUser.avatarUrl !== failedAvatarUrl}
-            <img
-              class="header-user-avatar"
-              src={currentUser.avatarUrl}
-              alt=""
-              width="20"
-              height="20"
-              onerror={() => (failedAvatarUrl = currentUser?.avatarUrl ?? null)}
-            />
-          {:else}
-            <CircleUserRound
-              class="header-user-placeholder"
-              size={17}
-              aria-hidden="true"
-            />
-          {/if}
-          <span>{currentUser?.username ?? t("appHeader.defaultUser")}</span>
-        </div>
+        {#if currentUser}
+          <div class="header-user-summary">
+            {#if currentUser.avatarUrl && currentUser.avatarUrl !== failedAvatarUrl}
+              <img
+                class="header-user-avatar"
+                src={currentUser.avatarUrl}
+                alt=""
+                width="20"
+                height="20"
+                onerror={() => (failedAvatarUrl = currentUser?.avatarUrl ?? null)}
+              />
+            {:else}
+              <CircleUserRound
+                class="header-user-placeholder"
+                size={17}
+                aria-hidden="true"
+              />
+            {/if}
+            <span class="header-user-name">{currentUser.username}</span>
+          </div>
+          <Button
+            class="header-menu-item logout-menu-item"
+            variant="ghost"
+            type="button"
+            disabled={logoutPending}
+            onclick={logout}
+          >
+            <LogOut data-icon="inline-start" aria-hidden="true" />
+            <span>{t("appHeader.logout")}</span>
+          </Button>
+        {:else}
+          <Button
+            class="header-menu-item login-menu-item"
+            variant="ghost"
+            type="button"
+            onclick={login}
+          >
+            <LogIn data-icon="inline-start" aria-hidden="true" />
+            <span>{t("appHeader.login")}</span>
+          </Button>
+        {/if}
       </Popover.Content>
     </Popover.Root>
     <Button
@@ -241,7 +286,7 @@
 
   :global(.connection-status:focus-visible),
   :global(.menu-button:focus-visible),
-  :global(.theme-menu-item:focus-visible) {
+  :global(.header-menu-item:focus-visible) {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
@@ -294,7 +339,7 @@
       0 12px 32px color-mix(in srgb, var(--text) 14%, transparent);
   }
 
-  :global(.theme-menu-item) {
+  :global(.header-menu-item) {
     display: grid;
     grid-template-columns: 20px minmax(0, 1fr) auto;
     align-items: center;
@@ -315,12 +360,12 @@
       transform 150ms ease;
   }
 
-  :global(.theme-menu-item:hover),
-  :global(.theme-menu-item:focus-visible) {
+  :global(.header-menu-item:hover),
+  :global(.header-menu-item:focus-visible) {
     background: var(--surface-hover);
   }
 
-  :global(.theme-menu-item:active) {
+  :global(.header-menu-item:active) {
     transform: scale(0.96);
   }
 
@@ -339,6 +384,14 @@
     color: var(--text);
     font-size: 0.82rem;
     font-weight: 600;
+    min-width: 0;
+  }
+
+  :global(.header-user-name) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   :global(.header-user-avatar) {

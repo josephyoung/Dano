@@ -124,6 +124,51 @@ describe("Bridge prompt acceptance", () => {
     bridge.disconnect();
   });
 
+  it("starts login with the current same-origin Dano return path", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+    window.history.replaceState({}, "", "/chat?session=one#latest");
+    const assign = vi
+      .spyOn(window.location, "assign")
+      .mockImplementation(() => undefined);
+
+    bridge.login();
+
+    expect(assign).toHaveBeenCalledWith(
+      "/api/auth/login?returnTo=%2Fchat%3Fsession%3Done%23latest",
+    );
+    bridge.disconnect();
+  });
+
+  it("posts same-origin logout and reloads into a fresh Anonymous User", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      { username: "Alice" },
+      { status: "authenticated", user: { username: "Alice" } },
+    );
+    const logoutFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ status: "anonymous" })));
+    vi.stubGlobal("fetch", logoutFetch);
+    const reload = vi
+      .spyOn(window.location, "reload")
+      .mockImplementation(() => undefined);
+
+    await bridge.logout();
+
+    expect(logoutFetch).toHaveBeenCalledWith("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    expect(reload).toHaveBeenCalledOnce();
+    bridge.disconnect();
+  });
+
   it("serializes first-client bootstrap across tabs before creating a guest", async () => {
     const request = vi.fn(
       async (_name: string, callback: () => Promise<Response>) => callback(),

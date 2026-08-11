@@ -305,7 +305,11 @@ describe("BridgeRpcAdapter", () => {
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(sessionFile);
 
-      const promptSpy = vi.fn().mockResolvedValue(undefined);
+      let finishPrompt!: () => void;
+      const promptGate = new Promise<void>(resolve => {
+        finishPrompt = resolve;
+      });
+      const promptSpy = vi.fn().mockReturnValue(promptGate);
       createAgentSessionMock.mockResolvedValue({
         session: {
           sessionFile: undefined, // will be set by autoCreateSession
@@ -331,15 +335,13 @@ describe("BridgeRpcAdapter", () => {
         type: "prompt",
         message: "Hello",
       };
-      (
-        ws as unknown as { trigger: (event: string, data: Buffer) => void }
-      ).trigger(
-        "message",
-        Buffer.from(JSON.stringify({ type: "command", payload: command })),
-      );
+      await adapter.handleClientMessage({ type: "command", payload: command });
 
-      // Wait for async handling
-      await new Promise(r => setTimeout(r, 30));
+      expect(adapter.isBusy()).toBe(true);
+      await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledOnce());
+      expect(adapter.isBusy()).toBe(true);
+      finishPrompt();
+      await vi.waitFor(() => expect(adapter.isBusy()).toBe(false));
 
       // Should NOT call pi.sendUserMessage (that would trigger TUI switch)
       expect(context.actions.sendUserMessage).not.toHaveBeenCalled();

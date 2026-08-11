@@ -137,6 +137,7 @@ export async function startDanoServer(
     emitEvent,
     options.userContextResolver,
     options.authHttpHandler,
+    userRuntimeRegistry,
   );
   let state: BridgeState = { status: "starting", port: config.port };
 

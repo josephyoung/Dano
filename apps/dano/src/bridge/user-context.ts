@@ -32,6 +32,7 @@ export type UserContext = AuthenticatedUserContext | AnonymousUserContext;
 export interface ClientUserResolution {
   readonly userContext: UserContext;
   readonly authentication: BridgeAuthenticationState;
+  readonly loginSessionId?: string;
   readonly setCookie?: string;
 }
 
@@ -39,7 +40,17 @@ export interface UserContextResolver {
   resolve(headers: IncomingHttpHeaders): Promise<UserContext | null>;
   resolveForClient?(
     headers: IncomingHttpHeaders,
-  ): Promise<ClientUserResolution>;
+  ): Promise<ClientUserResolution | null>;
+  resolveExisting?(
+    headers: IncomingHttpHeaders,
+  ): Promise<ClientUserResolution | null>;
+  resolveAnonymous?(
+    headers: IncomingHttpHeaders,
+  ): Promise<UserContext | null>;
+  revokeAnonymous?(
+    headers: IncomingHttpHeaders,
+    expectedUserId: string,
+  ): Promise<boolean>;
 }
 
 export interface AuthenticatedUserContextResolver extends UserContextResolver {

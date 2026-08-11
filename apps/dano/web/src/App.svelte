@@ -1220,6 +1220,8 @@
       {showNewSession}
       currentUser={bridge.currentUser}
       onOpenTheme={openThemeSettings}
+      onLogin={bridge.login}
+      onLogout={bridge.logout}
     />
 
     <ReconnectBanner
