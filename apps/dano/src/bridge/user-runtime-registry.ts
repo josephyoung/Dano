@@ -22,6 +22,10 @@ export type UserBackendFactory = (
   options: CreateDanoBackendOptions,
 ) => Promise<DanoBackend>;
 
+export interface UserRuntimeRegistryOptions {
+  readonly sessionsRootPath?: string;
+}
+
 export class UserRuntimeRegistry {
   private readonly contexts = new Map<
     string,
@@ -30,6 +34,7 @@ export class UserRuntimeRegistry {
 
   constructor(
     private readonly createBackend: UserBackendFactory = createDanoBackend,
+    private readonly options: UserRuntimeRegistryOptions = {},
   ) {}
 
   get(userContext: UserContext): Promise<UserRuntimeContext> {
@@ -60,7 +65,12 @@ export class UserRuntimeRegistry {
   ): Promise<UserRuntimeContext> {
     const workspaceRootPath = path.join(userContext.folderPath, "workspaces");
     const defaultWorkspacePath = path.join(workspaceRootPath, "default");
-    const sessionsRootPath = path.join(userContext.folderPath, "sessions");
+    const sessionsRootPath = this.options.sessionsRootPath
+      ? path.join(
+          path.resolve(this.options.sessionsRootPath),
+          path.basename(userContext.folderPath),
+        )
+      : path.join(userContext.folderPath, "sessions");
     const unsafeRuntimeDirectory = () =>
       new Error("User runtime path is not a safe directory");
     await ensureSafeDirectory(workspaceRootPath, {
@@ -70,6 +80,12 @@ export class UserRuntimeRegistry {
     await ensureSafeDirectory(defaultWorkspacePath, {
       unsafeDirectoryError: unsafeRuntimeDirectory,
     });
+    if (this.options.sessionsRootPath) {
+      await ensureSafeDirectory(path.resolve(this.options.sessionsRootPath), {
+        recursive: true,
+        unsafeDirectoryError: unsafeRuntimeDirectory,
+      });
+    }
     await ensureSafeDirectory(sessionsRootPath, {
       unsafeDirectoryError: unsafeRuntimeDirectory,
     });

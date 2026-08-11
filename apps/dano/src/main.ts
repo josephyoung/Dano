@@ -94,7 +94,7 @@ Options:
   --host <host>              Host to bind (default: ${DEFAULT_DANO_HOST})
   --port <number>            Port to bind (default: ${DEFAULT_DANO_PORT})
   --default-workspace <path> Deprecated; new sessions use DANO_RUNTIME_DIR/workspaces/ws_<random>
-  --sessions-root <path>     Directory for session jsonl files (env: DANO_SESSIONS_ROOT, default: <default-workspace>/${DEFAULT_DANO_SESSIONS_DIR})
+  --sessions-root <path>     Base directory for per-User session roots (env: DANO_SESSIONS_ROOT, default: DANO_RUNTIME_DIR/${DEFAULT_DANO_SESSIONS_DIR})
   --empty-state-text <text>  Empty transcript text (env: DANO_EMPTY_STATE_TEXT, default: ${DEFAULT_EMPTY_STATE.content})
   --empty-state-html <html>  Empty transcript HTML (env: DANO_EMPTY_STATE_HTML)
   --help                     Show this help
@@ -149,11 +149,12 @@ function readAgentConfigDir(
 
 function readSessionsRootPath(
   env: Record<string, string | undefined>,
-): string | undefined {
+  runtimeRootPath: string,
+): string {
   return (
     env.DANO_SESSIONS_ROOT?.trim() ||
     env.PI_WEB_SESSIONS_ROOT?.trim() ||
-    undefined
+    join(runtimeRootPath, DEFAULT_DANO_SESSIONS_DIR)
   );
 }
 
@@ -335,7 +336,7 @@ export function parseDanoServerOptions(
   let host = readHost(env);
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
-  let sessionsRootPath = readSessionsRootPath(env);
+  let sessionsRootPath = readSessionsRootPath(env, runtimeRootPath);
   const productName = resolveProductName(
     env.DANO_PRODUCT_NAME,
     danoConfig.productName,
@@ -431,11 +432,7 @@ export function parseDanoServerOptions(
       cwd,
       readAgentConfigDir(env, resolvedRuntimeRootPath),
     ),
-    sessionsRootPath: resolve(
-      cwd,
-      sessionsRootPath ??
-        join(resolvedDefaultWorkspacePath, DEFAULT_DANO_SESSIONS_DIR),
-    ),
+    sessionsRootPath: resolve(cwd, sessionsRootPath),
     productName,
     emptyState,
     upload: {
@@ -559,6 +556,7 @@ async function runDanoServer(
 
   const bridgeController = await runtime.startDanoServer(config, {
     cwd: options.cwd,
+    sessionsRootPath: options.sessionsRootPath,
     danoConfig,
     userContextResolver: createAnonymousUserContextResolver({
       runtimeRootPath: options.runtimeRootPath,

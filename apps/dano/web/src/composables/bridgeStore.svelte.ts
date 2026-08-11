@@ -44,6 +44,7 @@ import {
   ACCENT_COLOR_PRESET_KEYS,
   DEFAULT_ACCENT_COLOR_PRESET,
 } from "@dano/types/protocol";
+import { createBrowserClient } from "./browserClientBootstrap";
 import {
   normalizeRpcModel,
   upsertModel,
@@ -3030,11 +3031,13 @@ async function connectOnce(): Promise<boolean> {
   resetTransportState();
 
   try {
-    const createResponse = await fetch("/api/clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
+    const createClient = () =>
+      fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    const createResponse = await createBrowserClient(createClient);
 
     if (!createResponse.ok) {
       throw new Error(

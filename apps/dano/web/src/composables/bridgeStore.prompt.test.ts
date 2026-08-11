@@ -124,6 +124,29 @@ describe("Bridge prompt acceptance", () => {
     bridge.disconnect();
   });
 
+  it("serializes first-client bootstrap across tabs before creating a guest", async () => {
+    const request = vi.fn(
+      async (_name: string, callback: () => Promise<Response>) => callback(),
+    );
+    vi.stubGlobal("navigator", {
+      locks: { request },
+      sendBeacon: () => true,
+    });
+
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "dano-anonymous-user-bootstrap",
+      expect.any(Function),
+    );
+    bridge.disconnect();
+  });
+
   it("waits for HTTP 202 without restoring pending after an earlier server event", async () => {
     const promptResponse = deferred<Response>();
     const bridge = await connectBridge(promptResponse.promise);
