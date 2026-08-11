@@ -372,6 +372,52 @@ describe("Dano main", () => {
     expect(options.userAuthentication).toBeUndefined();
   });
 
+  it("configures one OAuth confidential client from server environment", () => {
+    const key = Buffer.alloc(32, 5).toString("base64url");
+    const options = parseDanoServerOptions([], {
+      DANO_RUNTIME_DIR: "/tmp/dano-runtime",
+      DANO_OAUTH_ISSUER: "https://provider.example.test",
+      DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+        "https://provider.example.test/authorize",
+      DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
+      DANO_OAUTH_IDENTITY_ENDPOINT:
+        "https://provider.example.test/identity",
+      DANO_OAUTH_CLIENT_ID: "dano-client",
+      DANO_OAUTH_CLIENT_SECRET: "client-secret",
+      DANO_OAUTH_SCOPE: "profile offline_access",
+      DANO_OAUTH_REDIRECT_URI:
+        "https://dano.example.test/api/auth/callback",
+      DANO_OAUTH_CREDENTIAL_KEY: key,
+      DANO_OAUTH_CREDENTIAL_KEY_VERSION: "key-v1",
+    });
+
+    expect(options.oauthAuthentication).toEqual({
+      appOrigin: "https://dano.example.test",
+      redirectUri: "https://dano.example.test/api/auth/callback",
+      provider: {
+        issuer: "https://provider.example.test/",
+        authorizationEndpoint: "https://provider.example.test/authorize",
+        tokenEndpoint: "https://provider.example.test/token",
+        identityEndpoint: "https://provider.example.test/identity",
+        clientId: "dano-client",
+        clientSecret: "client-secret",
+        scope: "profile offline_access",
+      },
+      credentialEncryptionKey: {
+        version: "key-v1",
+        key: Buffer.alloc(32, 5),
+      },
+    });
+  });
+
+  it("rejects a partially configured OAuth client", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        DANO_OAUTH_CLIENT_ID: "only-one-value",
+      }),
+    ).toThrow("OAuth configuration is incomplete");
+  });
+
   it("requires Secure guest Cookies in production and allows a local override", () => {
     expect(
       parseDanoServerOptions([], { NODE_ENV: "production" }).guestCookieSecure,

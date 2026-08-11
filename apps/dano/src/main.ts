@@ -19,6 +19,11 @@ import {
   type DanoConfig,
 } from "./bridge/dano-config.js";
 import { createAnonymousUserContextResolver } from "./bridge/anonymous-user-context.js";
+import { createOAuthAuthentication } from "./bridge/oauth-authentication.js";
+import {
+  createOAuth2ProviderAdapter,
+  type OAuth2ProviderAdapterOptions,
+} from "./bridge/oauth-provider.js";
 import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
 import { createDanoDevReloadController } from "./dev-reload.js";
@@ -81,6 +86,18 @@ export interface DanoServerOptions {
     issuer?: string;
     audience?: string;
     cookieName?: string;
+  };
+  oauthAuthentication?: {
+    appOrigin: string;
+    redirectUri: string;
+    provider: Omit<
+      OAuth2ProviderAdapterOptions,
+      "allowInsecureRequests" | "timeoutMs"
+    >;
+    credentialEncryptionKey: {
+      version: string;
+      key: Uint8Array;
+    };
   };
 }
 
@@ -186,6 +203,61 @@ function readUserAuthentication(
     issuer: optional(env.DANO_AUTH_JWT_ISSUER),
     audience: optional(env.DANO_AUTH_JWT_AUDIENCE),
     cookieName: optional(env.DANO_AUTH_COOKIE_NAME),
+  };
+}
+
+function readOAuthAuthentication(
+  env: Record<string, string | undefined>,
+): DanoServerOptions["oauthAuthentication"] {
+  const names = [
+    "DANO_OAUTH_ISSUER",
+    "DANO_OAUTH_AUTHORIZATION_ENDPOINT",
+    "DANO_OAUTH_TOKEN_ENDPOINT",
+    "DANO_OAUTH_IDENTITY_ENDPOINT",
+    "DANO_OAUTH_CLIENT_ID",
+    "DANO_OAUTH_CLIENT_SECRET",
+    "DANO_OAUTH_SCOPE",
+    "DANO_OAUTH_REDIRECT_URI",
+    "DANO_OAUTH_CREDENTIAL_KEY",
+    "DANO_OAUTH_CREDENTIAL_KEY_VERSION",
+  ] as const;
+  const values = Object.fromEntries(
+    names.map(name => [name, env[name]?.trim() || undefined]),
+  ) as Record<(typeof names)[number], string | undefined>;
+  if (names.every(name => values[name] === undefined)) return undefined;
+  if (names.some(name => values[name] === undefined)) {
+    throw new Error("OAuth configuration is incomplete");
+  }
+  const redirectUri = new URL(values.DANO_OAUTH_REDIRECT_URI!);
+  if (redirectUri.pathname !== "/api/auth/callback") {
+    throw new Error("OAuth redirect URI must use /api/auth/callback");
+  }
+  const encodedKey = values.DANO_OAUTH_CREDENTIAL_KEY!;
+  if (!/^[A-Za-z0-9_-]+$/.test(encodedKey)) {
+    throw new Error("OAuth credential key must be base64url");
+  }
+  const key = Buffer.from(encodedKey, "base64url");
+  if (key.byteLength !== 32) {
+    throw new Error("OAuth credential key must decode to 32 bytes");
+  }
+  return {
+    appOrigin: redirectUri.origin,
+    redirectUri: redirectUri.href,
+    provider: {
+      issuer: new URL(values.DANO_OAUTH_ISSUER!).href,
+      authorizationEndpoint: new URL(
+        values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!,
+      ).href,
+      tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
+      identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
+      clientId: values.DANO_OAUTH_CLIENT_ID!,
+      clientSecret: values.DANO_OAUTH_CLIENT_SECRET!,
+      scope: values.DANO_OAUTH_SCOPE!,
+    },
+    credentialEncryptionKey: {
+      version: values.DANO_OAUTH_CREDENTIAL_KEY_VERSION!,
+      key,
+    },
   };
 }
 
@@ -344,6 +416,7 @@ export function parseDanoServerOptions(
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
   const userAuthentication = readUserAuthentication(env);
+  const oauthAuthentication = readOAuthAuthentication(env);
   const guestCookieSecure = readGuestCookieSecure(env);
   const staticDirOverride = env.DANO_STATIC_DIR?.trim();
   let help = false;
@@ -445,6 +518,7 @@ export function parseDanoServerOptions(
       : resolveDefaultStaticDir(fileURLToPath(import.meta.url)),
     help,
     userAuthentication,
+    oauthAuthentication,
   };
 }
 
@@ -554,22 +628,42 @@ async function runDanoServer(
     resolveStopped = resolve;
   });
 
-  const bridgeController = await runtime.startDanoServer(config, {
-    cwd: options.cwd,
-    sessionsRootPath: options.sessionsRootPath,
-    danoConfig,
-    userContextResolver: createAnonymousUserContextResolver({
-      runtimeRootPath: options.runtimeRootPath,
-      secureCookie: options.guestCookieSecure,
-      authenticatedResolver: options.userAuthentication
-        ? createJwtUserContextResolver({
-            runtimeRootPath: options.runtimeRootPath,
-            ...options.userAuthentication,
-          })
-        : undefined,
-    }),
-    onShutdown: () => resolveStopped?.(),
-  });
+  const oauthAuthentication = options.oauthAuthentication
+    ? await createOAuthAuthentication({
+        runtimeRootPath: options.runtimeRootPath,
+        appOrigin: options.oauthAuthentication.appOrigin,
+        redirectUri: options.oauthAuthentication.redirectUri,
+        provider: createOAuth2ProviderAdapter(
+          options.oauthAuthentication.provider,
+        ),
+        credentialEncryptionKey:
+          options.oauthAuthentication.credentialEncryptionKey,
+      })
+    : undefined;
+  const jwtAuthentication = options.userAuthentication
+    ? createJwtUserContextResolver({
+        runtimeRootPath: options.runtimeRootPath,
+        ...options.userAuthentication,
+      })
+    : undefined;
+  let bridgeController;
+  try {
+    bridgeController = await runtime.startDanoServer(config, {
+      cwd: options.cwd,
+      sessionsRootPath: options.sessionsRootPath,
+      danoConfig,
+      userContextResolver: createAnonymousUserContextResolver({
+        runtimeRootPath: options.runtimeRootPath,
+        secureCookie: options.guestCookieSecure,
+        authenticatedResolver: oauthAuthentication ?? jwtAuthentication,
+      }),
+      authHttpHandler: oauthAuthentication,
+      onShutdown: () => resolveStopped?.(),
+    });
+  } catch (error) {
+    await oauthAuthentication?.dispose();
+    throw error;
+  }
 
   const bridgeUrl = bridgeController.getBridgeUrl();
   if (!bridgeUrl) {
@@ -612,6 +706,7 @@ async function runDanoServer(
   } finally {
     process.off("SIGTERM", onSigterm);
     devReload?.dispose();
+    await oauthAuthentication?.dispose();
   }
 
   return devReload?.reloadRequested() ?? false;
