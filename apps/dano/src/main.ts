@@ -19,6 +19,7 @@ import {
   type DanoConfig,
 } from "./bridge/dano-config.js";
 import { createAnonymousUserContextResolver } from "./bridge/anonymous-user-context.js";
+import { CredentialBroker } from "./bridge/credential-broker.js";
 import { createOAuthAuthentication } from "./bridge/oauth-authentication.js";
 import {
   createOAuth2ProviderAdapter,
@@ -90,6 +91,7 @@ export interface DanoServerOptions {
   oauthAuthentication?: {
     appOrigin: string;
     redirectUri: string;
+    providerApiOrigin: string;
     provider: Omit<
       OAuth2ProviderAdapterOptions,
       "allowInsecureRequests" | "timeoutMs"
@@ -214,6 +216,7 @@ function readOAuthAuthentication(
     "DANO_OAUTH_AUTHORIZATION_ENDPOINT",
     "DANO_OAUTH_TOKEN_ENDPOINT",
     "DANO_OAUTH_IDENTITY_ENDPOINT",
+    "DANO_OAUTH_API_ORIGIN",
     "DANO_OAUTH_CLIENT_ID",
     "DANO_OAUTH_CLIENT_SECRET",
     "DANO_OAUTH_SCOPE",
@@ -243,6 +246,7 @@ function readOAuthAuthentication(
   return {
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
+    providerApiOrigin: new URL(values.DANO_OAUTH_API_ORIGIN!).origin,
     provider: {
       issuer: new URL(values.DANO_OAUTH_ISSUER!).href,
       authorizationEndpoint: new URL(
@@ -646,6 +650,14 @@ async function runDanoServer(
         ...options.userAuthentication,
       })
     : undefined;
+  const credentialBroker =
+    oauthAuthentication && options.oauthAuthentication
+      ? new CredentialBroker({
+          providerApiOrigin: options.oauthAuthentication.providerApiOrigin,
+          readCredential: loginSessionId =>
+            oauthAuthentication.readProviderCredential(loginSessionId),
+        })
+      : undefined;
   let bridgeController;
   try {
     bridgeController = await runtime.startDanoServer(config, {
@@ -658,6 +670,7 @@ async function runDanoServer(
         authenticatedResolver: oauthAuthentication ?? jwtAuthentication,
       }),
       authHttpHandler: oauthAuthentication,
+      credentialBroker,
       onShutdown: () => resolveStopped?.(),
     });
   } catch (error) {

@@ -56,6 +56,9 @@ export interface OAuthAuthenticationOptions {
 export interface OAuthAuthentication
   extends AuthenticatedUserContextResolver,
     AuthHttpHandler {
+  readProviderCredential(
+    loginSessionId: string,
+  ): Promise<ProviderCredential | null>;
   dispose(): Promise<void>;
 }
 
@@ -180,6 +183,16 @@ export async function createOAuthAuthentication(
 
   return {
     resolve,
+    async readProviderCredential(loginSessionId) {
+      const session = await loadSession(loginSessionId, true);
+      return session
+        ? decryptCredential(
+            session.credential,
+            options.credentialEncryptionKey,
+            digest(loginSessionId),
+          )
+        : null;
+    },
     async resolveForClient(headers) {
       const resolved = await resolveLoginSession(headers);
       return resolved

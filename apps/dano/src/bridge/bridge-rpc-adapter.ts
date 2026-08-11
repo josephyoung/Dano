@@ -96,6 +96,10 @@ import type {
 import { detectWorkspaceEnvironments } from "./workspace-environment.js";
 import type { UploadAccess, UploadRegistry } from "./upload-registry.js";
 import type { FieldAssistService } from "./field-assist.js";
+import type {
+  AssistantTurnBindingHandle,
+  CredentialBroker,
+} from "./credential-broker.js";
 import {
   canApplyFormInteractionTransition,
   createFormInteractionForQuestion,
@@ -3341,6 +3345,20 @@ function queuedAgentMessages(
   return Array.isArray(queue?.messages) ? queue.messages : [];
 }
 
+function queuedFollowUpEntries(session: AgentSession): object[] {
+  return queuedAgentMessages(session, "followUpQueue").filter(
+    (entry): entry is object => typeof entry === "object" && entry !== null,
+  );
+}
+
+function queuedFollowUpEntryAt(
+  session: AgentSession,
+  index: number,
+): object | undefined {
+  const entry = queuedAgentMessages(session, "followUpQueue")[index];
+  return typeof entry === "object" && entry !== null ? entry : undefined;
+}
+
 function trackedQueuedMessages(
   session: AgentSession,
   queueName: "_steeringMessages" | "_followUpMessages",
@@ -5292,6 +5310,8 @@ export class BridgeRpcAdapter {
     uploadRegistry: UploadRegistry,
     sessionRegistry?: DetachedSessionRegistry,
     private readonly runtimeScope?: BridgeRuntimeScope,
+    private readonly credentialBroker?: CredentialBroker,
+    private readonly loginSessionId?: string,
   ) {
     this.defaultWorkspacePath = config.defaultWorkspacePath;
     this.client = client;
@@ -5369,6 +5389,25 @@ export class BridgeRpcAdapter {
       sessionId,
       sourceSessionId,
     };
+  }
+
+  private queueAssistantTurn(
+    sessionId: string,
+  ): AssistantTurnBindingHandle | undefined {
+    const scope = this.runtimeScope?.userId;
+    return scope
+      ? this.credentialBroker?.queueAssistantTurn(
+          scope,
+          sessionId,
+          this.loginSessionId,
+        )
+      : undefined;
+  }
+
+  private cancelQueuedAssistantTurn(
+    binding: AssistantTurnBindingHandle | undefined,
+  ): void {
+    this.credentialBroker?.cancelQueuedAssistantTurn(binding);
   }
 
   /* ------------------------------------------------------------------------
@@ -6300,7 +6339,7 @@ export class BridgeRpcAdapter {
         const promptExpansionOptions = this.slashCommandsAndMentionsEnabled
           ? {}
           : { expandPromptTemplates: false as const };
-        const promptOptions = session.isStreaming
+        const defaultPromptOptions = session.isStreaming
           ? {
               source: "rpc" as const,
               images,
@@ -6326,10 +6365,47 @@ export class BridgeRpcAdapter {
           this.pendingDetachedPromptTimers.delete(promptTimer);
           if (this.disposed) return;
 
+          const isQueuedFollowUp =
+            session.isStreaming && command.streamingBehavior === "followUp";
+          const binding =
+            !session.isStreaming || isQueuedFollowUp
+              ? this.queueAssistantTurn(session.sessionId)
+              : undefined;
+          const promptOptions = this.credentialBroker
+            ? session.isStreaming
+              ? {
+                  source: "rpc" as const,
+                  images,
+                  streamingBehavior: command.streamingBehavior ?? "steer",
+                  ...promptExpansionOptions,
+                }
+              : {
+                  source: "rpc" as const,
+                  images,
+                  ...promptExpansionOptions,
+                  preflightResult: (success: boolean) => {
+                    if (!success) {
+                      this.cancelQueuedAssistantTurn(binding);
+                    }
+                  },
+                }
+            : defaultPromptOptions;
           let promptOperation!: Promise<void>;
-          promptOperation = Promise.resolve()
-            .then(() => session.prompt(injectedMessage, promptOptions))
+          const executePrompt = () =>
+            Promise.resolve(session.prompt(injectedMessage, promptOptions));
+          const startedPrompt =
+            isQueuedFollowUp && this.credentialBroker
+              ? this.credentialBroker.enqueueAssociatedAssistantTurn(
+                  binding,
+                  () => queuedFollowUpEntries(session),
+                  executePrompt,
+                )
+              : executePrompt().then(() => {
+                  this.cancelQueuedAssistantTurn(binding);
+                });
+          promptOperation = startedPrompt
             .catch(error => {
+              this.cancelQueuedAssistantTurn(binding);
               const message =
                 error instanceof Error ? error.message : String(error);
               const sessionPath = session.sessionFile ?? null;
@@ -6472,15 +6548,28 @@ export class BridgeRpcAdapter {
         });
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
-          void session
-            .followUp(injectedMessage, images)
+          const binding = this.queueAssistantTurn(session.sessionId);
+          const enqueueFollowUp = () =>
+            Promise.resolve(session.followUp(injectedMessage, images));
+          const followUpOperation = this.credentialBroker
+            ? this.credentialBroker.enqueueAssociatedAssistantTurn(
+                binding,
+                () => queuedFollowUpEntries(session),
+                enqueueFollowUp,
+              )
+            : enqueueFollowUp();
+          void followUpOperation
             .catch(error => {
+              this.cancelQueuedAssistantTurn(binding);
               console.error(
                 `BridgeRpcAdapter[${this.client.id}]: Detached follow_up failed:`,
                 error,
               );
             });
         } else {
+          this.queueAssistantTurn(
+            this.sessionRuntime.currentSessionManager().getSessionId(),
+          );
           this.context.actions.sendUserMessage(
             buildUserMessageContent(injectedMessage, images),
             {
@@ -6519,6 +6608,12 @@ export class BridgeRpcAdapter {
             session.abortCompaction();
           } else {
             clearSteeringQueue(session);
+            if (this.runtimeScope) {
+              this.credentialBroker?.clearQueuedAssistantTurns(
+                this.runtimeScope.userId,
+                session.sessionId,
+              );
+            }
             await session.abort();
           }
         } else if (this.context.state.isCompacting()) {
@@ -6942,7 +7037,9 @@ export class BridgeRpcAdapter {
 
         const session = await this.sessionRuntime.ensureDetachedSession();
         try {
+          const queueEntry = queuedFollowUpEntryAt(session, command.index);
           const removed = dequeueFollowUpMessage(session, command.index);
+          this.credentialBroker?.cancelQueuedAssistantTurnForEntry(queueEntry);
           return {
             id: correlationId,
             type: "response",

@@ -20,6 +20,7 @@ import {
   type DanoBackend,
 } from "./backend.js";
 import type { DanoConfig } from "./bridge/dano-config.js";
+import type { CredentialBroker } from "./bridge/credential-broker.js";
 
 export interface StartDanoServerOptions {
   cwd?: string;
@@ -33,6 +34,7 @@ export interface StartDanoServerOptions {
   userContextResolver?: UserContextResolver;
   authHttpHandler?: AuthHttpHandler;
   danoConfig?: DanoConfig;
+  credentialBroker?: CredentialBroker;
 }
 
 export interface DanoServerController {
@@ -56,6 +58,7 @@ export async function startDanoServer(
           createDanoBackend({
             ...runtimeOptions,
             danoConfig: options.danoConfig,
+            credentialBroker: options.credentialBroker,
           }),
         { sessionsRootPath: options.sessionsRootPath },
       )
@@ -67,6 +70,7 @@ export async function startDanoServer(
         cwd: options.cwd,
         sessionPath: options.sessionPath,
         sessionDir: options.sessionDir,
+        credentialBroker: options.credentialBroker,
       }));
   const ownsBackend = !userRuntimeRegistry && !options.backend;
 
@@ -79,6 +83,7 @@ export async function startDanoServer(
         {
           modelRuntime: backend.session.modelRuntime,
           settingsManager: backend.session.settingsManager,
+          credentialBroker: options.credentialBroker,
         },
       )
     : undefined;
@@ -127,6 +132,8 @@ export async function startDanoServer(
       connCtx.uploadRegistry,
       connectionSessionRegistry,
       userRuntime,
+      options.credentialBroker,
+      connCtx.loginSessionId,
     );
   };
 

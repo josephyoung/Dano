@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type AgentSessionEvent,
+} from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createAgentSessionMock } = vi.hoisted(() => ({
@@ -12,6 +15,14 @@ const { createAgentSessionMock } = vi.hoisted(() => ({
 vi.mock("../detached-session.js", () => ({
   createDetachedAgentSessionRuntime: async (...args: unknown[]) => {
     const sessionManager = args[1] as SessionManager;
+    const options = args[2] as
+      | {
+          credentialBroker?: {
+            observe(scope: string, session: never): () => void;
+          };
+          credentialBrokerScope?: string;
+        }
+      | undefined;
     const mocked = await createAgentSessionMock(...args);
     const created =
       mocked ??
@@ -41,6 +52,13 @@ vi.mock("../detached-session.js", () => ({
     let rebindSession:
       | ((session: typeof created.session) => Promise<void>)
       | undefined;
+    const disposeCredentialBinding =
+      options?.credentialBroker && options.credentialBrokerScope
+        ? options.credentialBroker.observe(
+            options.credentialBrokerScope,
+            created.session as never,
+          )
+        : undefined;
     return {
       runtime: {
         session: created.session,
@@ -69,7 +87,7 @@ vi.mock("../detached-session.js", () => ({
         dispose: created.session.dispose ?? vi.fn(),
       },
       disposeDanoLlmResilience:
-        created.disposeDanoLlmResilience ?? vi.fn(),
+        created.disposeDanoLlmResilience ?? disposeCredentialBinding ?? vi.fn(),
     };
   },
 }));
@@ -92,6 +110,7 @@ import {
   readFormInteractions,
   transitionFormInteraction,
 } from "../form-interaction.js";
+import { CredentialBroker } from "../credential-broker.js";
 
 interface MockTransport {
   send: ReturnType<typeof vi.fn<(message: string) => void>>;
@@ -352,6 +371,409 @@ describe("BridgeRpcAdapter", () => {
         correlationId: "cmd-1",
       });
 
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("binds prompt and follow-up ownership without letting steering change the active Turn", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-turn-owner-"));
+      const sessionManager = SessionManager.create(tmpDir, tmpDir);
+      (
+        context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
+      ).mockReturnValue(sessionManager.getSessionFile());
+      (
+        context.state.sessionManager.getSessionDir as ReturnType<typeof vi.fn>
+      ).mockReturnValue(tmpDir);
+      (
+        context.state.sessionManager.getCwd as ReturnType<typeof vi.fn>
+      ).mockReturnValue(tmpDir);
+      const session = {
+        sessionFile: sessionManager.getSessionFile(),
+        sessionId: sessionManager.getSessionId(),
+        isStreaming: false,
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => {}),
+        agent: { followUpQueue: { messages: [] as object[] } },
+        prompt: vi.fn().mockImplementation(
+          async (_message: string, options?: { streamingBehavior?: string }) => {
+            if (options?.streamingBehavior === "followUp") {
+              session.agent.followUpQueue.messages.push({
+                role: "user",
+                content: "following prompt",
+              });
+            }
+          },
+        ),
+        steer: vi.fn().mockResolvedValue(undefined),
+        followUp: vi.fn().mockImplementation(async () => {
+          session.agent.followUpQueue.messages.push({
+            role: "user",
+            content: "follow",
+          });
+        }),
+        sessionManager,
+      };
+      createAgentSessionMock.mockResolvedValue({ session });
+      const credentialBroker = {
+        queueAssistantTurn: vi.fn().mockImplementation(
+          (scope: string, sessionId: string) => ({
+            scope,
+            agentSessionId: sessionId,
+            id: 1,
+          }),
+        ),
+        associateQueuedAssistantTurn: vi.fn(),
+        enqueueAssociatedAssistantTurn: vi.fn(
+          async (_binding, _entries, enqueue) => enqueue(),
+        ),
+        cancelQueuedAssistantTurn: vi.fn(),
+        clearQueuedAssistantTurns: vi.fn(),
+      } as unknown as CredentialBroker;
+      const runtimeScope = {
+        userId: "user-a",
+        sessionsRootPath: tmpDir,
+        ownsSessionPath: () => true,
+        ownsWorkspacePath: () => true,
+      };
+      adapter.dispose();
+      adapter = new BridgeRpcAdapter(
+        client,
+        message => ws.send(JSON.stringify(message)),
+        context,
+        DEFAULT_BRIDGE_CONFIG,
+        eventBus,
+        emitEvent as any,
+        uploadRegistry as any,
+        undefined,
+        runtimeScope,
+        credentialBroker,
+        "login-session-a",
+      );
+
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: { id: "first", type: "prompt", message: "first" },
+      });
+      await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
+      expect(credentialBroker.queueAssistantTurn).toHaveBeenLastCalledWith(
+        "user-a",
+        session.sessionId,
+        "login-session-a",
+      );
+      await vi.waitFor(() =>
+        expect(credentialBroker.cancelQueuedAssistantTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scope: "user-a",
+            agentSessionId: session.sessionId,
+          }),
+        ),
+      );
+
+      session.isStreaming = true;
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: { id: "steer", type: "steer", message: "steer" },
+      });
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: { id: "follow", type: "follow_up", message: "follow" },
+      });
+      await vi.waitFor(() => expect(session.followUp).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(
+          credentialBroker.enqueueAssociatedAssistantTurn,
+        ).toHaveBeenCalled(),
+      );
+      expect(session.steer).toHaveBeenCalledOnce();
+      expect(credentialBroker.queueAssistantTurn).toHaveBeenCalledTimes(2);
+
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: {
+          id: "steering-prompt",
+          type: "prompt",
+          message: "steering prompt",
+          streamingBehavior: "steer",
+        },
+      });
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: {
+          id: "following-prompt",
+          type: "prompt",
+          message: "following prompt",
+          streamingBehavior: "followUp",
+        },
+      });
+      await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledTimes(3));
+      expect(credentialBroker.queueAssistantTurn).toHaveBeenCalledTimes(3);
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("preserves Turn ownership across reconnect and concurrent Adapter follow-ups", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-reconnect-"));
+      const storedManager = SessionManager.create(tmpDir, tmpDir);
+      storedManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "Stored session" }],
+        timestamp: 1,
+      });
+      const sessionPath = storedManager.getSessionFile();
+      if (!sessionPath) throw new Error("session file was not created");
+      fs.writeFileSync(
+        sessionPath,
+        [
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            id: storedManager.getSessionId(),
+            timestamp: new Date().toISOString(),
+            cwd: tmpDir,
+          }),
+          ...storedManager.getEntries().map(entry => JSON.stringify(entry)),
+        ].join("\n"),
+      );
+      const seenAuthorization: string[] = [];
+      const credentialBroker = new CredentialBroker({
+        providerApiOrigin: "https://provider.test",
+        readCredential: async loginSessionId => ({
+          accessToken:
+            loginSessionId === "login-session-a" ? "access-a" : "access-b",
+        }),
+        fetch: vi.fn(async (_url: URL, init?: RequestInit) => {
+          seenAuthorization.push(
+            new Headers(init?.headers).get("authorization") ?? "",
+          );
+          return new Response("ok");
+        }) as typeof fetch,
+      });
+      const runtimeScope = {
+        userId: "user-a",
+        sessionsRootPath: tmpDir,
+        ownsSessionPath: () => true,
+        ownsWorkspacePath: () => true,
+      };
+      const createRestoredSession = (sessionManager: SessionManager) => {
+        const listeners = new Set<(event: AgentSessionEvent) => void>();
+        const followUpQueue: object[] = [];
+        const followUpMessages: string[] = [];
+        const emit = (event: AgentSessionEvent) => {
+          for (const listener of listeners) listener(event);
+        };
+        return {
+          sessionFile: sessionManager.getSessionFile(),
+          sessionId: sessionManager.getSessionId(),
+          sessionManager,
+          isStreaming: false,
+          agent: { followUpQueue: { messages: followUpQueue } },
+          _followUpMessages: followUpMessages,
+          _emitQueueUpdate: vi.fn(),
+          bindExtensions: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn((listener: (event: AgentSessionEvent) => void) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          }),
+          prompt: vi.fn(
+            async (
+              message: string,
+              options?: { preflightResult?: (success: boolean) => void },
+            ) => {
+              options?.preflightResult?.(true);
+              emit({
+                type: "message_start",
+                message: { role: "user", content: message, timestamp: 1 },
+              } as AgentSessionEvent);
+              emit({ type: "turn_start" } as AgentSessionEvent);
+            },
+          ),
+          followUp: vi.fn(async (message: string) => {
+            followUpMessages.push(message);
+            followUpQueue.push({
+              role: "user",
+              content: [{ type: "text", text: message }],
+              timestamp: Date.now(),
+            });
+          }),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn().mockResolvedValue(undefined),
+          getSessionStats: vi.fn().mockReturnValue({
+            contextUsage: undefined,
+            totalMessages: 0,
+            cost: 0,
+            tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          }),
+          emit,
+        };
+      };
+      createAgentSessionMock.mockImplementation(
+        async (_cwd: string, sessionManager: SessionManager) => ({
+          session: createRestoredSession(sessionManager),
+        }),
+      );
+      const createRegistry = () =>
+        new DetachedSessionRegistry(tmpDir, askUserQuestionRuntime.tool, {
+          credentialBroker,
+          credentialBrokerScope: "user-a",
+        });
+      let registry = createRegistry();
+      const createAdapter = (
+        nextClient: BridgeClient,
+        loginSessionId: string,
+      ) =>
+        new BridgeRpcAdapter(
+          nextClient,
+          message => ws.send(JSON.stringify(message)),
+          context,
+          DEFAULT_BRIDGE_CONFIG,
+          eventBus,
+          emitEvent as any,
+          uploadRegistry as any,
+          registry,
+          runtimeScope,
+          credentialBroker,
+          loginSessionId,
+        );
+      const selectAndPrompt = async (
+        targetAdapter: BridgeRpcAdapter,
+        suffix: string,
+      ) => {
+        await targetAdapter.handleClientMessage({
+          type: "command",
+          payload: {
+            id: `switch-${suffix}`,
+            type: "switch_session",
+            sessionPath,
+          },
+        });
+        const switchResponse = (ws.send as ReturnType<typeof vi.fn>).mock.calls
+          .map(call => JSON.parse(call[0] as string))
+          .find(
+            call =>
+              call.type === "response" &&
+              call.payload?.id === `switch-${suffix}`,
+          );
+        expect(switchResponse?.payload?.error).toBeUndefined();
+        expect(switchResponse?.payload).toMatchObject({ success: true });
+        await targetAdapter.handleClientMessage({
+          type: "command",
+          payload: { id: `prompt-${suffix}`, type: "prompt", message: suffix },
+        });
+        await vi.waitFor(() =>
+          expect(createAgentSessionMock).toHaveBeenCalled(),
+        );
+      };
+
+      adapter.dispose();
+      const firstClient = { ...client, id: "bridge-client-a" };
+      adapter = createAdapter(firstClient, "login-session-a");
+      await selectAndPrompt(adapter, "first-turn");
+      await vi.waitFor(async () => {
+        await credentialBroker.request(
+          "user-a",
+          storedManager.getSessionId(),
+          { method: "GET", path: "/before-reconnect" },
+        );
+        expect(seenAuthorization.at(-1)).toBe("Bearer access-a");
+      });
+
+      adapter.dispose();
+      const reconnectedClient = { ...client, id: "bridge-client-b" };
+      adapter = createAdapter(reconnectedClient, "login-session-b");
+      await credentialBroker.request("user-a", storedManager.getSessionId(), {
+        method: "GET",
+        path: "/after-client-rebuild",
+      });
+      expect(seenAuthorization.at(-1)).toBe("Bearer access-a");
+
+      adapter.dispose();
+      await registry.dispose();
+      registry = createRegistry();
+      const restoredClient = { ...client, id: "bridge-client-c" };
+      adapter = createAdapter(restoredClient, "login-session-b");
+      const callsBeforeRestore = createAgentSessionMock.mock.calls.length;
+      await selectAndPrompt(adapter, "restored-turn");
+      await vi.waitFor(() =>
+        expect(createAgentSessionMock.mock.calls.length).toBeGreaterThan(
+          callsBeforeRestore,
+        ),
+      );
+      await vi.waitFor(async () => {
+        await credentialBroker.request(
+          "user-a",
+          storedManager.getSessionId(),
+          { method: "GET", path: "/after-restore" },
+        );
+        expect(seenAuthorization.at(-1)).toBe("Bearer access-b");
+      });
+
+      const restoredSession = registry.getActiveSession(sessionPath) as
+        | ReturnType<typeof createRestoredSession>
+        | null;
+      if (!restoredSession) throw new Error("restored session was not active");
+      restoredSession.emit({ type: "agent_settled" } as AgentSessionEvent);
+      restoredSession.isStreaming = true;
+      const loginAAdapter = createAdapter(
+        { ...client, id: "bridge-client-d" },
+        "login-session-a",
+      );
+      await loginAAdapter.handleClientMessage({
+        type: "command",
+        payload: {
+          id: "switch-concurrent-a",
+          type: "switch_session",
+          sessionPath,
+        },
+      });
+      await Promise.all([
+        loginAAdapter.handleClientMessage({
+          type: "command",
+          payload: {
+            id: "follow-a",
+            type: "follow_up",
+            message: "from-login-a",
+          },
+        }),
+        adapter.handleClientMessage({
+          type: "command",
+          payload: {
+            id: "follow-b",
+            type: "follow_up",
+            message: "from-login-b",
+          },
+        }),
+      ]);
+      await vi.waitFor(() =>
+        expect(restoredSession.agent.followUpQueue.messages).toHaveLength(2),
+      );
+      await Promise.resolve();
+      expect(restoredSession._followUpMessages).toEqual([
+        "from-login-a",
+        "from-login-b",
+      ]);
+
+      await loginAAdapter.handleClientMessage({
+        type: "command",
+        payload: {
+          id: "remove-login-a-follow-up",
+          type: "dequeue_follow_up_message",
+          index: 0,
+        },
+      });
+      const [remainingFollowUp] =
+        restoredSession.agent.followUpQueue.messages;
+      restoredSession.emit({
+        type: "message_start",
+        message: remainingFollowUp,
+      } as AgentSessionEvent);
+      restoredSession.emit({ type: "turn_start" } as AgentSessionEvent);
+      await credentialBroker.request("user-a", storedManager.getSessionId(), {
+        method: "GET",
+        path: "/after-concurrent-dequeue",
+      });
+      expect(seenAuthorization.at(-1)).toBe("Bearer access-b");
+
+      loginAAdapter.dispose();
+      await registry.dispose();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
@@ -5033,6 +5455,56 @@ describe("BridgeRpcAdapter", () => {
       expect(context.actions.abort).toHaveBeenCalledTimes(1);
     });
 
+    it("projects provider_request results as JSON-safe transcript data", async () => {
+      const handler = (context.events.subscribe as ReturnType<typeof vi.fn>)
+        .mock.calls[0]?.[0] as
+        | ((event: Record<string, unknown>) => void)
+        | undefined;
+      const message = {
+        id: "provider-result",
+        role: "toolResult",
+        toolCallId: "provider-call",
+        toolName: "provider_request",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              status: 200,
+              headers: { "content-type": "application/json" },
+              body: '{"items":[]}',
+            }),
+          },
+        ],
+        details: {
+          ok: true,
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: '{"items":[]}',
+        },
+        isError: false,
+      };
+
+      handler?.({ type: "message_start", message });
+      handler?.({ type: "message_end", message });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const upsert = lastTranscriptUpsert(
+        (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(call =>
+          JSON.parse(call[0] as string),
+        ),
+      );
+      const projection = JSON.parse(JSON.stringify(upsert?.payload.message));
+
+      expect(projection).toMatchObject({
+        id: "provider-result",
+        role: "toolResult",
+        toolName: "provider_request",
+      });
+      expect(JSON.stringify(projection)).not.toMatch(
+        /access-token|refresh-token|loginSessionId|userId|authorization|cookie/i,
+      );
+    });
+
     it("aborts the active detached session after a terminal question failure", async () => {
       const tmpDir = fs.mkdtempSync(
         path.join(os.tmpdir(), "dano-terminal-question-"),
@@ -8990,6 +9462,28 @@ describe("BridgeRpcAdapter", () => {
 
     it("dequeues queued follow-up messages from the detached session", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-dequeue-"));
+      const credentialBroker = {
+        cancelQueuedAssistantTurnForEntry: vi.fn(),
+      } as unknown as CredentialBroker;
+      adapter.dispose();
+      adapter = new BridgeRpcAdapter(
+        client,
+        message => ws.send(JSON.stringify(message)),
+        context,
+        DEFAULT_BRIDGE_CONFIG,
+        eventBus,
+        emitEvent as any,
+        uploadRegistry as any,
+        undefined,
+        {
+          userId: "user-a",
+          sessionsRootPath: tmpDir,
+          ownsSessionPath: () => true,
+          ownsWorkspacePath: () => true,
+        },
+        credentialBroker,
+        "login-session-a",
+      );
       const sessionManager = SessionManager.create(tmpDir, tmpDir);
       sessionManager.appendMessage({
         role: "user",
@@ -9147,6 +9641,9 @@ describe("BridgeRpcAdapter", () => {
       });
       expect(session._followUpMessages).toEqual(["Queued first"]);
       expect(session.agent.followUpQueue.messages).toHaveLength(1);
+      expect(
+        credentialBroker.cancelQueuedAssistantTurnForEntry,
+      ).toHaveBeenCalledWith(queuedMessages[1]);
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });

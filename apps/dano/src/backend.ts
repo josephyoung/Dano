@@ -28,6 +28,7 @@ import type { BridgeRpcAdapterContext } from "./bridge/bridge-rpc-adapter.js";
 import type {
   RpcSlashCommand,
 } from "../types/protocol.js";
+import type { CredentialBroker } from "./bridge/credential-broker.js";
 
 export interface DanoBackend {
   readonly context: BridgeRpcAdapterContext;
@@ -41,6 +42,8 @@ export interface CreateDanoBackendOptions {
   sessionPath?: string;
   sessionDir?: string;
   danoConfig?: DanoConfig;
+  credentialBroker?: CredentialBroker;
+  credentialBrokerScope?: string;
 }
 
 function listSessionCommands(session: AgentSession): RpcSlashCommand[] {
@@ -293,6 +296,8 @@ export async function createDanoBackend(
     sessionManager,
     {
       askUserQuestionTool: askUserQuestion.tool,
+      credentialBroker: options.credentialBroker,
+      credentialBrokerScope: options.credentialBrokerScope,
     },
   );
 
@@ -302,6 +307,8 @@ export async function createDanoBackend(
     {
       modelRuntime: result.runtime.session.modelRuntime,
       settingsManager: result.runtime.session.settingsManager,
+      credentialBroker: options.credentialBroker,
+      credentialBrokerScope: options.credentialBrokerScope,
     },
   );
   await sessionRegistry.adoptRuntime(
