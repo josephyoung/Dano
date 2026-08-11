@@ -1,6 +1,7 @@
 import type {
   AccentColorPreset,
   AskUserQuestionAnswer,
+  BridgeAuthenticationState,
   BridgeUserSummary,
   ClientMessage,
   FieldAssistCommandPayload,
@@ -327,6 +328,7 @@ function setActiveTreeSessionPath(sessionPath: string | null) {
 }
 
 let _connectionStatus = $state<ConnectionStatus>("disconnected");
+let _authentication = $state<BridgeAuthenticationState | undefined>(undefined);
 let _currentUser = $state<BridgeUserSummary | undefined>(undefined);
 let _accentColorPreset = $state<AccentColorPreset>(DEFAULT_ACCENT_COLOR_PRESET);
 let themeColorSelectionRevision = 0;
@@ -390,6 +392,7 @@ let _prefillText = $state<string | null>(null);
 // ---------------------------------------------------------------------------
 
 let connectionStatus = $derived(_connectionStatus);
+let authentication = $derived(_authentication);
 let currentUser = $derived(_currentUser);
 let accentColorPreset = $derived(_accentColorPreset);
 let transcript = $derived(_transcript);
@@ -2961,6 +2964,7 @@ async function fetchInitialState() {
 function resetTransportState() {
   clientId = null;
   clientMessagesUrl = null;
+  _authentication = undefined;
   _currentUser = undefined;
   themeColorSelectionRevision += 1;
   themeColorTransportRevision += 1;
@@ -3043,6 +3047,7 @@ async function connectOnce(): Promise<boolean> {
       eventsUrl?: string;
       messagesUrl?: string;
       defaultWorkspacePath?: string | null;
+      authentication?: BridgeAuthenticationState;
       currentUser?: BridgeUserSummary;
     };
     const nextClientId = created.client?.id;
@@ -3053,6 +3058,7 @@ async function connectOnce(): Promise<boolean> {
     clientId = nextClientId;
     clientMessagesUrl = created.messagesUrl;
     defaultWorkspacePath = normalizeBridgePath(created.defaultWorkspacePath);
+    _authentication = created.authentication;
     _currentUser = created.currentUser;
     eventSource = new EventSource(created.eventsUrl);
   } catch (error) {
@@ -3136,6 +3142,9 @@ export function initBridge() {
     },
     get currentUser() {
       return currentUser;
+    },
+    get authentication() {
+      return authentication;
     },
     get accentColorPreset() {
       return accentColorPreset;

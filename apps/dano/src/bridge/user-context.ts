@@ -2,7 +2,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import * as path from "node:path";
-import type { BridgeUserSummary } from "../../types/protocol.js";
+import type {
+  BridgeAuthenticationState,
+  BridgeUserSummary,
+} from "../../types/protocol.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 
 const USER_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/;
@@ -19,8 +22,30 @@ export interface AuthenticatedUserContext {
   readonly folderPath: string;
 }
 
+export interface AnonymousUserContext {
+  readonly user: { readonly id: string };
+  readonly folderPath: string;
+}
+
+export type UserContext = AuthenticatedUserContext | AnonymousUserContext;
+
+export interface ClientUserResolution {
+  readonly userContext: UserContext;
+  readonly authentication: BridgeAuthenticationState;
+  readonly setCookie?: string;
+}
+
 export interface UserContextResolver {
-  resolve(headers: IncomingHttpHeaders): Promise<AuthenticatedUserContext | null>;
+  resolve(headers: IncomingHttpHeaders): Promise<UserContext | null>;
+  resolveForClient?(
+    headers: IncomingHttpHeaders,
+  ): Promise<ClientUserResolution>;
+}
+
+export interface AuthenticatedUserContextResolver extends UserContextResolver {
+  resolve(
+    headers: IncomingHttpHeaders,
+  ): Promise<AuthenticatedUserContext | null>;
 }
 
 export class UserContextError extends Error {
@@ -60,7 +85,7 @@ export function toBrowserUserSummary(user: AuthenticatedUser): BridgeUserSummary
 
 export function createJwtUserContextResolver(
   options: JwtUserContextResolverOptions,
-): UserContextResolver {
+): AuthenticatedUserContextResolver {
   const secret = options.secret.trim();
   if (!secret) throw new Error("JWT secret must not be empty");
   const cookieName = options.cookieName?.trim() || DEFAULT_COOKIE_NAME;
@@ -213,7 +238,10 @@ function safeAvatarUrl(value: unknown): string | undefined {
   }
 }
 
-async function ensureUserFolder(usersRootPath: string, userId: string): Promise<string> {
+export async function ensureUserFolder(
+  usersRootPath: string,
+  userId: string,
+): Promise<string> {
   await ensureSafeDirectory(usersRootPath, {
     recursive: true,
     unsafeDirectoryError: () =>

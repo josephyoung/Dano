@@ -1,6 +1,9 @@
 /** @vitest-environment happy-dom */
 
-import type { BridgeUserSummary } from "@dano/types/protocol";
+import type {
+  BridgeAuthenticationState,
+  BridgeUserSummary,
+} from "@dano/types/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function deferred<T>() {
@@ -45,6 +48,7 @@ async function connectBridge(
   promptResponse: Promise<Response> | (() => Promise<Response>),
   onPromptRequest?: (init: RequestInit | undefined) => void,
   currentUser?: BridgeUserSummary,
+  authentication?: BridgeAuthenticationState,
 ) {
   const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
     if (String(input) === "/api/clients") {
@@ -54,6 +58,7 @@ async function connectBridge(
           eventsUrl: "/events",
           messagesUrl: "/messages",
           ...(currentUser ? { currentUser } : {}),
+          ...(authentication ? { authentication } : {}),
         }),
         { status: 201, headers: { "content-type": "application/json" } },
       );
@@ -103,6 +108,19 @@ describe("Bridge prompt acceptance", () => {
       username: "Alice",
       avatarUrl: "https://example.test/alice.png",
     });
+    bridge.disconnect();
+  });
+
+  it("exposes Anonymous as a normal server-projected authentication state", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    expect(bridge.currentUser).toBeUndefined();
     bridge.disconnect();
   });
 
