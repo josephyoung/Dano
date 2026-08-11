@@ -632,14 +632,15 @@ async function runDanoServer(
     resolveStopped = resolve;
   });
 
-  const oauthAuthentication = options.oauthAuthentication
+  const oauthProvider = options.oauthAuthentication
+    ? createOAuth2ProviderAdapter(options.oauthAuthentication.provider)
+    : undefined;
+  const oauthAuthentication = options.oauthAuthentication && oauthProvider
     ? await createOAuthAuthentication({
         runtimeRootPath: options.runtimeRootPath,
         appOrigin: options.oauthAuthentication.appOrigin,
         redirectUri: options.oauthAuthentication.redirectUri,
-        provider: createOAuth2ProviderAdapter(
-          options.oauthAuthentication.provider,
-        ),
+        provider: oauthProvider,
         credentialEncryptionKey:
           options.oauthAuthentication.credentialEncryptionKey,
       })
@@ -650,15 +651,29 @@ async function runDanoServer(
         ...options.userAuthentication,
       })
     : undefined;
+  let bridgeController:
+    | Awaited<ReturnType<DanoRuntime["startDanoServer"]>>
+    | undefined;
   const credentialBroker =
     oauthAuthentication && options.oauthAuthentication
       ? new CredentialBroker({
           providerApiOrigin: options.oauthAuthentication.providerApiOrigin,
           readCredential: loginSessionId =>
             oauthAuthentication.readProviderCredential(loginSessionId),
+          refreshCredential: loginSessionId =>
+            oauthAuthentication.refreshProviderCredential(loginSessionId),
+          isAccessTokenInvalid: response =>
+            oauthProvider?.isAccessTokenInvalid?.(response) ??
+            response.status === 401,
+          requireReauthentication: async loginSessionId => {
+            try {
+              await oauthAuthentication.requireReauthentication(loginSessionId);
+            } finally {
+              bridgeController?.requireReauthentication(loginSessionId);
+            }
+          },
         })
       : undefined;
-  let bridgeController;
   try {
     bridgeController = await runtime.startDanoServer(config, {
       cwd: options.cwd,

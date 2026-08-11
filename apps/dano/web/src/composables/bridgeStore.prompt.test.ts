@@ -124,6 +124,58 @@ describe("Bridge prompt acceptance", () => {
     bridge.disconnect();
   });
 
+  it("restores reauthentication from auth current without creating a Bridge Client", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        return new Response(JSON.stringify({ status: "reauth_required" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+
+    await vi.waitFor(() =>
+      expect(bridge.authentication).toEqual({ status: "reauth_required" }),
+    );
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      "/api/clients",
+      expect.anything(),
+    );
+    expect(eventSources).toHaveLength(0);
+    bridge.disconnect();
+  });
+
+  it("applies a server-projected reauthentication state from SSE without reconnecting", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      { username: "Alice" },
+      { status: "authenticated", user: { username: "Alice" } },
+    );
+
+    eventSources[0]!.send({
+      type: "authentication",
+      payload: { status: "reauth_required" },
+    });
+    await vi.waitFor(() =>
+      expect(bridge.authentication).toEqual({ status: "reauth_required" }),
+    );
+    eventSources[0]!.close();
+    eventSources[0]!.dispatchEvent(new Event("error"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(bridge.currentUser).toBeUndefined();
+    expect(eventSources).toHaveLength(1);
+    bridge.disconnect();
+  });
+
   it("starts login with the current same-origin Dano return path", async () => {
     const bridge = await connectBridge(
       Promise.resolve(new Response(null, { status: 202 })),

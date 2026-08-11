@@ -135,6 +135,281 @@ describe("Credential Broker", () => {
     );
   });
 
+  it("coalesces concurrent access-token failures into one Login Session refresh", async () => {
+    let credential = {
+      accessToken: "expired-access",
+      refreshToken: "rotating-refresh",
+    };
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => {
+      releaseRefresh = resolve;
+    });
+    const refreshCredential = vi.fn(async () => {
+      await refreshGate;
+      credential = {
+        accessToken: "renewed-access",
+        refreshToken: "rotated-refresh",
+      };
+      return credential;
+    });
+    const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      return authorization === "Bearer expired-access"
+        ? new Response("expired", { status: 401 })
+        : new Response("renewed", { status: 200 });
+    });
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => credential,
+      refreshCredential,
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    const first = credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/first",
+    });
+    const second = credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/second",
+    });
+    await vi.waitFor(() => expect(refreshCredential).toHaveBeenCalledOnce());
+    releaseRefresh();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ ok: true, status: 200, body: "renewed" }),
+      expect.objectContaining({ ok: true, status: 200, body: "renewed" }),
+    ]);
+    expect(refreshCredential).toHaveBeenCalledWith("login_a");
+    expect(providerFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("reuses a completed rotation for a late concurrent 401", async () => {
+    let credential = {
+      accessToken: "expired-access",
+      refreshToken: "initial-refresh",
+    };
+    let releaseLateFailure!: () => void;
+    const lateFailure = new Promise<void>(resolve => {
+      releaseLateFailure = resolve;
+    });
+    let expiredRequests = 0;
+    const refreshCredential = vi.fn(async () => {
+      credential = {
+        accessToken: "renewed-access",
+        refreshToken: "rotated-refresh",
+      };
+      return credential;
+    });
+    const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (authorization === "Bearer expired-access") {
+        expiredRequests += 1;
+        if (expiredRequests === 2) await lateFailure;
+        return new Response("expired", { status: 401 });
+      }
+      return new Response("renewed", { status: 200 });
+    });
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => credential,
+      refreshCredential,
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    const first = credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/first",
+    });
+    const second = credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/second",
+    });
+    await expect(first).resolves.toMatchObject({ ok: true, status: 200 });
+    releaseLateFailure();
+    await expect(second).resolves.toMatchObject({ ok: true, status: 200 });
+
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(providerFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("requires reauthentication only for the Login Session whose refresh fails", async () => {
+    const credentials = {
+      login_a: { accessToken: "expired-a", refreshToken: "refresh-a" },
+      login_b: { accessToken: "access-b", refreshToken: "refresh-b" },
+    };
+    const requireReauthentication = vi.fn(async () => {});
+    const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      return authorization === "Bearer access-b"
+        ? new Response("session-b", { status: 200 })
+        : new Response("private provider failure", { status: 401 });
+    });
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async loginSessionId => credentials[loginSessionId as keyof typeof credentials],
+      refreshCredential: async loginSessionId => {
+        if (loginSessionId === "login_a") throw new Error("refresh-a-secret");
+        return credentials.login_b;
+      },
+      requireReauthentication,
+      fetch: providerFetch as typeof fetch,
+    });
+    const first = observableSession("agent-a");
+    const second = observableSession("agent-b");
+    credentialBroker.observe(TEST_SCOPE, first.session);
+    credentialBroker.observe(TEST_SCOPE, second.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-b", "login_b");
+    first.emit(userMessageEvent("first"));
+    second.emit(userMessageEvent("second"));
+    first.emit(turnStartEvent());
+    second.emit(turnStartEvent());
+
+    const [failed, unaffected] = await Promise.all([
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/a",
+      }),
+      credentialBroker.request(TEST_SCOPE, "agent-b", {
+        method: "GET",
+        path: "/b",
+      }),
+    ]);
+
+    expect(failed).toEqual({
+      ok: false,
+      error: {
+        code: "reauth_required",
+        message: "Login is required again for this provider request.",
+      },
+    });
+    expect(JSON.stringify(failed)).not.toMatch(/private provider failure|refresh-a-secret|expired-a|refresh-a/);
+    expect(unaffected).toMatchObject({ ok: true, status: 200, body: "session-b" });
+    expect(requireReauthentication).toHaveBeenCalledOnce();
+    expect(requireReauthentication).toHaveBeenCalledWith("login_a");
+  });
+
+  it("does not loop refresh when the retried request still rejects the access token", async () => {
+    const refreshCredential = vi.fn(async () => ({
+      accessToken: "still-invalid",
+      refreshToken: "rotated-refresh",
+    }));
+    const requireReauthentication = vi.fn(async () => {});
+    const providerFetch = vi.fn(async () =>
+      new Response("invalid", { status: 401 }),
+    );
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "expired-access",
+        refreshToken: "initial-refresh",
+      }),
+      refreshCredential,
+      requireReauthentication,
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    await expect(
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/still-invalid",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "reauth_required" },
+    });
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    expect(requireReauthentication).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the rotated Credential when the retried request has a transport failure", async () => {
+    const refreshCredential = vi.fn(async () => ({
+      accessToken: "renewed-access",
+      refreshToken: "rotated-refresh",
+    }));
+    const requireReauthentication = vi.fn(async () => {});
+    const providerFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired", { status: 401 }))
+      .mockRejectedValueOnce(new Error("temporary network failure"));
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "expired-access",
+        refreshToken: "initial-refresh",
+      }),
+      refreshCredential,
+      requireReauthentication,
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    await expect(
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/temporary-failure",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "provider_request_failed",
+        message: "The provider request failed.",
+      },
+    });
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(requireReauthentication).not.toHaveBeenCalled();
+  });
+
+  it("requires reauthentication without calling refresh when no refresh token exists", async () => {
+    const refreshCredential = vi.fn();
+    const requireReauthentication = vi.fn(async () => {});
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({ accessToken: "expired-access" }),
+      refreshCredential,
+      requireReauthentication,
+      fetch: vi.fn(async () => new Response("invalid", { status: 401 })) as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    await expect(
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/invalid",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "reauth_required" },
+    });
+    expect(refreshCredential).not.toHaveBeenCalled();
+    expect(requireReauthentication).toHaveBeenCalledOnce();
+  });
+
   it("exposes the Broker through a Pi public custom tool without identity arguments", async () => {
     const credentialBroker = broker({
       credentials: { login_a: "access-a" },

@@ -299,6 +299,19 @@ export class BridgeServer {
     return Array.from(this.clients.values());
   }
 
+  requireReauthentication(loginSessionId: string): void {
+    for (const [clientId, boundSessionId] of [
+      ...this.clientLoginSessions,
+    ]) {
+      if (boundSessionId !== loginSessionId) continue;
+      this.eventBus.sendToClient(clientId, {
+        type: "authentication",
+        payload: { status: "reauth_required" },
+      });
+      this.disconnectClient(clientId);
+    }
+  }
+
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,

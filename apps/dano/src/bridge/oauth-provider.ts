@@ -26,6 +26,10 @@ export interface OAuthProviderAdapter {
     readonly identity: ExternalIdentity;
     readonly credential: ProviderCredential;
   }>;
+  refreshCredential?(
+    credential: ProviderCredential,
+  ): Promise<ProviderCredential>;
+  isAccessTokenInvalid?(response: Response): boolean;
   revokeCredential?(credential: ProviderCredential): Promise<void>;
 }
 
@@ -91,20 +95,49 @@ export function createOAuth2ProviderAdapter(
       const expiresIn = tokens.expiresIn();
       return {
         identity,
-        credential: {
-          accessToken: tokens.access_token,
-          ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
-          ...(tokens.token_type ? { tokenType: tokens.token_type } : {}),
-          ...(expiresIn !== undefined
-            ? { expiresAt: Date.now() + expiresIn * 1000 }
-            : {}),
-        },
+        credential: tokenResponseCredential(tokens, expiresIn),
       };
+    },
+
+    async refreshCredential(credential) {
+      if (!credential.refreshToken) {
+        throw new Error("Provider refresh credential is unavailable");
+      }
+      const tokens = await oauth.refreshTokenGrant(
+        configuration,
+        credential.refreshToken,
+      );
+      const expiresIn = tokens.expiresIn();
+      return tokenResponseCredential(tokens, expiresIn, credential.refreshToken);
+    },
+
+    isAccessTokenInvalid(response) {
+      return response.status === 401;
     },
 
     async revokeCredential(credential) {
       await oauth.tokenRevocation(configuration, credential.accessToken);
     },
+  };
+}
+
+function tokenResponseCredential(
+  tokens: {
+    readonly access_token: string;
+    readonly refresh_token?: string;
+    readonly token_type?: string;
+  },
+  expiresIn: number | undefined,
+  fallbackRefreshToken?: string,
+): ProviderCredential {
+  const refreshToken = tokens.refresh_token ?? fallbackRefreshToken;
+  return {
+    accessToken: tokens.access_token,
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(tokens.token_type ? { tokenType: tokens.token_type } : {}),
+    ...(expiresIn !== undefined
+      ? { expiresAt: Date.now() + expiresIn * 1000 }
+      : {}),
   };
 }
 

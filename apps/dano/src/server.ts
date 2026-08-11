@@ -41,6 +41,7 @@ export interface DanoServerController {
   getState(): BridgeState;
   getBridgeUrl(): string | undefined;
   getClients(): BridgeClient[];
+  requireReauthentication(loginSessionId: string): void;
   stop(): Promise<void>;
   subscribe(handler: (event: BridgeEvent) => void): () => void;
 }
@@ -226,6 +227,10 @@ export async function startDanoServer(
 
     getClients() {
       return server.getClients();
+    },
+
+    requireReauthentication(loginSessionId) {
+      server.requireReauthentication(loginSessionId);
     },
 
     stop() {

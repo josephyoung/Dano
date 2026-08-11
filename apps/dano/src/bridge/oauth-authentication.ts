@@ -27,6 +27,7 @@ import {
   type AuthenticatedUser,
   type AuthenticatedUserContext,
   type AuthenticatedUserContextResolver,
+  UserContextError,
 } from "./user-context.js";
 
 const FLOW_COOKIE_NAME = "dano_oauth_flow";
@@ -59,6 +60,10 @@ export interface OAuthAuthentication
   readProviderCredential(
     loginSessionId: string,
   ): Promise<ProviderCredential | null>;
+  refreshProviderCredential(
+    loginSessionId: string,
+  ): Promise<ProviderCredential | null>;
+  requireReauthentication(loginSessionId: string): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -118,8 +123,13 @@ export async function createOAuthAuthentication(
   }, options.sessionGcIntervalMs ?? SESSION_GC_INTERVAL_MS);
   cleanupInterval.unref?.();
   const browserLocks = new Map<string, Promise<void>>();
+  const loginSessionLocks = new Map<string, Promise<void>>();
+  const credentialRefreshes = new Map<
+    string,
+    Promise<ProviderCredential | null>
+  >();
 
-  const loadSession = async (
+  const loadSessionUnlocked = async (
     sessionId: string,
     touch: boolean,
   ): Promise<StoredLoginSession | null> => {
@@ -128,11 +138,13 @@ export async function createOAuthAuthentication(
     let session: StoredLoginSession;
     try {
       session = parseLoginSession(await fs.promises.readFile(recordPath, "utf8"));
-      decryptCredential(
-        session.credential,
-        options.credentialEncryptionKey,
-        digest(sessionId),
-      );
+      if (session.status === "active") {
+        decryptCredential(
+          session.credential!,
+          options.credentialEncryptionKey,
+          digest(sessionId),
+        );
+      }
     } catch {
       await fs.promises.rm(recordPath, { force: true }).catch(() => {});
       return null;
@@ -145,7 +157,7 @@ export async function createOAuthAuthentication(
       await fs.promises.rm(recordPath, { force: true }).catch(() => {});
       return null;
     }
-    if (touch) {
+    if (touch && session.status === "active") {
       session = { ...session, lastActiveAt: currentTime };
       try {
         await writeLoginSession(recordPath, session);
@@ -156,23 +168,43 @@ export async function createOAuthAuthentication(
     return session;
   };
 
+  const loadSession = (
+    sessionId: string,
+    touch: boolean,
+  ): Promise<StoredLoginSession | null> =>
+    touch
+      ? withKeyLock(loginSessionLocks, sessionId, () =>
+          loadSessionUnlocked(sessionId, true),
+        )
+      : loadSessionUnlocked(sessionId, false);
+
   const resolve = async (
     headers: http.IncomingHttpHeaders,
   ): Promise<AuthenticatedUserContext | null> => {
-    return (await resolveLoginSession(headers))?.userContext ?? null;
+    const resolved = await resolveLoginSession(headers);
+    return resolved?.status === "authenticated" ? resolved.userContext : null;
   };
 
   const resolveLoginSession = async (
     headers: http.IncomingHttpHeaders,
-  ): Promise<{
-    loginSessionId: string;
-    userContext: AuthenticatedUserContext;
-  } | null> => {
+  ): Promise<
+    | {
+        status: "authenticated";
+        loginSessionId: string;
+        userContext: AuthenticatedUserContext;
+      }
+    | { status: "reauth_required"; loginSessionId: string }
+    | null
+  > => {
     const sessionId = readCookie(headers.cookie, LOGIN_COOKIE_NAME);
     if (!sessionId) return null;
     const session = await loadSession(sessionId, true);
     if (!session) return null;
+    if (session.status === "reauth_required") {
+      return { status: "reauth_required", loginSessionId: sessionId };
+    }
     return {
+      status: "authenticated",
       loginSessionId: sessionId,
       userContext: {
         user: session.user,
@@ -185,7 +217,7 @@ export async function createOAuthAuthentication(
     resolve,
     async readProviderCredential(loginSessionId) {
       const session = await loadSession(loginSessionId, true);
-      return session
+      return session?.status === "active" && session.credential
         ? decryptCredential(
             session.credential,
             options.credentialEncryptionKey,
@@ -193,8 +225,78 @@ export async function createOAuthAuthentication(
           )
         : null;
     },
+    refreshProviderCredential(loginSessionId) {
+      const existing = credentialRefreshes.get(loginSessionId);
+      if (existing) return existing;
+      const refresh = withKeyLock(
+        loginSessionLocks,
+        loginSessionId,
+        async () => {
+          const session = await loadSessionUnlocked(loginSessionId, true);
+          if (
+            !session ||
+            session.status !== "active" ||
+            !session.credential ||
+            !options.provider.refreshCredential
+          ) {
+            return null;
+          }
+          const credential = decryptCredential(
+            session.credential,
+            options.credentialEncryptionKey,
+            digest(loginSessionId),
+          );
+          if (!credential.refreshToken) return null;
+          const refreshed = validCredential(
+            await options.provider.refreshCredential(credential),
+          );
+          const rotated = {
+            ...refreshed,
+            refreshToken: refreshed.refreshToken ?? credential.refreshToken,
+          };
+          await writeLoginSession(loginSessionPath(sessionsPath, loginSessionId), {
+            ...session,
+            credential: encryptCredential(
+              rotated,
+              options.credentialEncryptionKey,
+              digest(loginSessionId),
+            ),
+          });
+          return rotated;
+        },
+      ).finally(() => {
+        if (credentialRefreshes.get(loginSessionId) === refresh) {
+          credentialRefreshes.delete(loginSessionId);
+        }
+      });
+      credentialRefreshes.set(loginSessionId, refresh);
+      return refresh;
+    },
+    async requireReauthentication(loginSessionId) {
+      await withKeyLock(loginSessionLocks, loginSessionId, async () => {
+        const session = await loadSessionUnlocked(loginSessionId, false);
+        if (!session || session.status === "reauth_required") return;
+        const { credential: _credential, ...withoutCredential } = session;
+        const recordPath = loginSessionPath(sessionsPath, loginSessionId);
+        try {
+          await writeLoginSession(recordPath, {
+            ...withoutCredential,
+            status: "reauth_required",
+          });
+        } catch (error) {
+          await fs.promises.rm(recordPath, { force: true }).catch(() => {});
+          throw error;
+        }
+      });
+    },
     async resolveForClient(headers) {
       const resolved = await resolveLoginSession(headers);
+      if (resolved?.status === "reauth_required") {
+        throw new UserContextError(
+          401,
+          "Dano Login Session requires reauthentication",
+        );
+      }
       return resolved
         ? {
             userContext: resolved.userContext,
@@ -208,6 +310,12 @@ export async function createOAuthAuthentication(
     },
     async resolveExisting(headers) {
       const resolved = await resolveLoginSession(headers);
+      if (resolved?.status === "reauth_required") {
+        throw new UserContextError(
+          401,
+          "Dano Login Session requires reauthentication",
+        );
+      }
       return resolved
         ? {
             userContext: resolved.userContext,
@@ -226,15 +334,17 @@ export async function createOAuthAuthentication(
       lifecycle: AuthHttpLifecycle,
     ): Promise<boolean> {
       if (req.method === "GET" && url.pathname === "/api/auth/current") {
-        const current = await resolve(req.headers);
+        const current = await resolveLoginSession(req.headers);
         writeJson(
           res,
           200,
-          current
+          current?.status === "authenticated"
             ? {
                 status: "authenticated",
-                user: toBrowserUserSummary(current.user),
+                user: toBrowserUserSummary(current.userContext.user),
               }
+            : current?.status === "reauth_required"
+              ? { status: "reauth_required" }
             : { status: "anonymous" },
         );
         return true;
@@ -264,17 +374,28 @@ export async function createOAuthAuthentication(
         }
         const sessionId = readCookie(req.headers.cookie, LOGIN_COOKIE_NAME);
         if (sessionId) {
-          const session = await loadSession(sessionId, false);
-          if (session) {
-            const credential = decryptCredential(
-              session.credential,
-              options.credentialEncryptionKey,
-              digest(sessionId),
-            );
-            await fs.promises.rm(loginSessionPath(sessionsPath, sessionId), {
-              force: true,
-            });
-            lifecycle.disconnectLoginSession(sessionId);
+          const credential = await withKeyLock(
+            loginSessionLocks,
+            sessionId,
+            async () => {
+              const session = await loadSessionUnlocked(sessionId, false);
+              if (!session) return null;
+              const current =
+                session.status === "active" && session.credential
+                  ? decryptCredential(
+                      session.credential,
+                      options.credentialEncryptionKey,
+                      digest(sessionId),
+                    )
+                  : null;
+              await fs.promises.rm(loginSessionPath(sessionsPath, sessionId), {
+                force: true,
+              });
+              return current;
+            },
+          );
+          lifecycle.disconnectLoginSession(sessionId);
+          if (credential) {
             await options.provider.revokeCredential?.(credential).catch(() => {});
           }
         }
@@ -303,7 +424,18 @@ export async function createOAuthAuthentication(
       const anonymousUser = guestBinding
         ? await lifecycle.resolveAnonymousUser(req.headers)
         : null;
-      const pendingLogin = await withBrowserLock(
+      const currentLoginSessionId = readCookie(
+        req.headers.cookie,
+        LOGIN_COOKIE_NAME,
+      );
+      const currentLoginSession = currentLoginSessionId
+        ? await loadSession(currentLoginSessionId, false)
+        : null;
+      const replacedLoginSessionId =
+        currentLoginSession?.status === "reauth_required"
+          ? currentLoginSessionId
+          : null;
+      const pendingLogin = await withKeyLock(
         browserLocks,
         browserBindingHash,
         async () => {
@@ -324,6 +456,9 @@ export async function createOAuthAuthentication(
               returnTo,
               ...(anonymousUser
                 ? { anonymousUserId: anonymousUser.user.id }
+                : {}),
+              ...(replacedLoginSessionId
+                ? { replacedLoginSessionId }
                 : {}),
               createdAt: now(),
             } satisfies StoredLoginTransaction)}\n`,
@@ -370,6 +505,7 @@ interface StoredLoginTransaction {
   readonly browserBindingHash: string;
   readonly returnTo: string;
   readonly anonymousUserId?: string;
+  readonly replacedLoginSessionId?: string;
   readonly createdAt: number;
 }
 
@@ -383,11 +519,12 @@ interface StoredEncryptedCredential {
 
 interface StoredLoginSession {
   readonly version: 1;
+  readonly status: "active" | "reauth_required";
   readonly user: AuthenticatedUser;
   readonly createdAt: number;
   readonly lastActiveAt: number;
   readonly absoluteExpiresAt: number;
-  readonly credential: StoredEncryptedCredential;
+  readonly credential?: StoredEncryptedCredential;
 }
 
 async function handleCallback(
@@ -443,6 +580,7 @@ async function handleCallback(
     const createdAt = options.now();
     const session: StoredLoginSession = {
       version: 1,
+      status: "active",
       user,
       createdAt,
       lastActiveAt: createdAt,
@@ -464,6 +602,15 @@ async function handleCallback(
             user,
             folderPath: await ensureUserFolder(options.usersRootPath, user.id),
           },
+        );
+      }
+      if (consumed.transaction.replacedLoginSessionId) {
+        await fs.promises.rm(
+          loginSessionPath(
+            options.sessionsPath,
+            consumed.transaction.replacedLoginSessionId,
+          ),
+          { force: true },
         );
       }
     } catch (error) {
@@ -602,6 +749,9 @@ function parseLoginTransaction(serialized: string): StoredLoginTransaction {
     typeof value.returnTo !== "string" ||
     (value.anonymousUserId !== undefined &&
       typeof value.anonymousUserId !== "string") ||
+    (value.replacedLoginSessionId !== undefined &&
+      (typeof value.replacedLoginSessionId !== "string" ||
+        !OPAQUE_ID_PATTERN.test(value.replacedLoginSessionId))) ||
     typeof value.createdAt !== "number"
   ) {
     throw new Error("OAuth login transaction is invalid");
@@ -619,7 +769,8 @@ function parseLoginSession(serialized: string): StoredLoginSession {
     typeof value.createdAt !== "number" ||
     typeof value.lastActiveAt !== "number" ||
     typeof value.absoluteExpiresAt !== "number" ||
-    !value.credential
+    (value.status !== "active" && value.status !== "reauth_required") ||
+    (value.status === "active" && !value.credential)
   ) {
     throw new Error("OAuth Login Session is invalid");
   }
@@ -652,7 +803,7 @@ async function countPendingTransactions(
   return count;
 }
 
-async function withBrowserLock<T>(
+async function withKeyLock<T>(
   locks: Map<string, Promise<void>>,
   key: string,
   operation: () => Promise<T>,

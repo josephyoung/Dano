@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnonymousUserContextResolver } from "../bridge/anonymous-user-context.js";
 import {
   createOAuthAuthentication,
@@ -108,7 +108,7 @@ function cookieFrom(response: Response, name: string): string {
 async function startFakeProvider(options: {
   tokenDelayMs?: number;
   tokenStatus?: number;
-  tokenResponse?: unknown;
+  tokenResponse?: unknown | ((request: URLSearchParams) => unknown);
   identity?: unknown;
 } = {}) {
   const tokenRequests: URLSearchParams[] = [];
@@ -126,7 +126,9 @@ async function startFakeProvider(options: {
           });
           res.end(
             JSON.stringify(
-              options.tokenResponse ?? {
+              (typeof options.tokenResponse === "function"
+                ? options.tokenResponse(tokenRequests.at(-1)!)
+                : options.tokenResponse) ?? {
                 access_token: "fake-access-token",
                 refresh_token: "fake-refresh-token",
                 token_type: "Bearer",
@@ -385,6 +387,52 @@ describe("OAuth authentication over HTTP", () => {
     expect(fakeProvider.identityAuthorization).toEqual([
       "Bearer fake-access-token",
     ]);
+  });
+
+  it("uses openid-client to refresh and retains a refresh token omitted during rotation", async () => {
+    const fakeProvider = await startFakeProvider({
+      tokenResponse(request: URLSearchParams) {
+        return request.get("grant_type") === "refresh_token"
+          ? {
+              access_token: "renewed-access-token",
+              token_type: "Bearer",
+              expires_in: 1800,
+            }
+          : {
+              access_token: "initial-access-token",
+              refresh_token: "initial-refresh-token",
+              token_type: "Bearer",
+              expires_in: 3600,
+            };
+      },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "profile offline_access",
+      allowInsecureRequests: true,
+    });
+
+    const refreshed = await provider.refreshCredential?.({
+      accessToken: "expired-access-token",
+      refreshToken: "initial-refresh-token",
+      tokenType: "Bearer",
+    });
+
+    expect(fakeProvider.tokenRequests).toHaveLength(1);
+    expect(fakeProvider.tokenRequests[0]?.get("grant_type")).toBe("refresh_token");
+    expect(fakeProvider.tokenRequests[0]?.get("refresh_token")).toBe(
+      "initial-refresh-token",
+    );
+    expect(refreshed).toMatchObject({
+      accessToken: "renewed-access-token",
+      refreshToken: "initial-refresh-token",
+      tokenType: "bearer",
+    });
   });
 
   it("atomically consumes state and rejects replay or another browser binding", async () => {
@@ -1266,6 +1314,238 @@ describe("OAuth authentication over HTTP", () => {
     ).resolves.toBeNull();
   });
 
+  it("atomically rotates one Login Session Credential through a single refresh flight", async () => {
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => {
+      releaseRefresh = resolve;
+    });
+    let refreshCount = 0;
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("refresh-owner", "expired-access-token"),
+      async exchangeAuthorizationCode() {
+        return {
+          identity: { userId: "refresh-owner" },
+          credential: {
+            accessToken: "expired-access-token",
+            refreshToken: "retained-refresh-token",
+          },
+        };
+      },
+      async refreshCredential() {
+        refreshCount += 1;
+        await refreshGate;
+        return { accessToken: "renewed-access-token" };
+      },
+    };
+    const { authentication, origin } = await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin);
+    const loginSessionId = loginCookie.slice("dano_login=".length);
+
+    const first = authentication.refreshProviderCredential(loginSessionId);
+    const second = authentication.refreshProviderCredential(loginSessionId);
+    await vi.waitFor(() => expect(refreshCount).toBe(1));
+    releaseRefresh();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      {
+        accessToken: "renewed-access-token",
+        refreshToken: "retained-refresh-token",
+      },
+      {
+        accessToken: "renewed-access-token",
+        refreshToken: "retained-refresh-token",
+      },
+    ]);
+    await expect(
+      authentication.readProviderCredential(loginSessionId),
+    ).resolves.toEqual({
+      accessToken: "renewed-access-token",
+      refreshToken: "retained-refresh-token",
+    });
+  });
+
+  it("projects reauthentication, disconnects only its old Bridge Clients, and survives refresh", async () => {
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("shared-reauth-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: {
+            userId: "shared-reauth-user",
+            displayName: "Shared User",
+          },
+          credential: {
+            accessToken: `access-${code}`,
+            refreshToken: `refresh-${code}`,
+          },
+        };
+      },
+    };
+    const { authentication, controller, origin } = await startOAuthServer(provider);
+    const firstCookie = await completeLogin(origin, "first-login");
+    const secondCookie = await completeLogin(origin, "second-login");
+    const firstLoginSessionId = firstCookie.slice("dano_login=".length);
+    const secondLoginSessionId = secondCookie.slice("dano_login=".length);
+    const firstClient = await createAuthenticatedClient(origin, firstCookie);
+    const secondClient = await createAuthenticatedClient(origin, secondCookie);
+    const projected = waitForAuthentication(
+      `${origin}${firstClient.eventsUrl}`,
+      firstCookie,
+    );
+    await projected.ready;
+
+    await authentication.requireReauthentication(firstLoginSessionId);
+    controller.requireReauthentication(firstLoginSessionId);
+
+    await expect(projected.result).resolves.toEqual({
+      type: "authentication",
+      payload: { status: "reauth_required" },
+    });
+    projected.close();
+    await expect(
+      fetch(`${origin}${firstClient.messagesUrl}`, {
+        method: "POST",
+        headers: { Cookie: firstCookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "command",
+          payload: { id: "stale-client", type: "get_state" },
+        }),
+      }),
+    ).resolves.toMatchObject({ status: 404 });
+    expect(controller.getClients()).toContainEqual(secondClient.client);
+    await expect(
+      (await fetch(`${origin}/api/auth/current`, {
+        headers: { Cookie: firstCookie },
+      })).json(),
+    ).resolves.toEqual({ status: "reauth_required" });
+    await expect(
+      (await fetch(`${origin}/api/auth/current`, {
+        headers: { Cookie: secondCookie },
+      })).json(),
+    ).resolves.toMatchObject({ status: "authenticated" });
+    await expect(
+      authentication.readProviderCredential(firstLoginSessionId),
+    ).resolves.toBeNull();
+    await expect(
+      authentication.readProviderCredential(secondLoginSessionId),
+    ).resolves.toMatchObject({ accessToken: "access-second-login" });
+
+    const staleReload = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { Cookie: firstCookie, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(staleReload.status).toBe(401);
+  });
+
+  it("replaces a reauthentication record without affecting another Login Session", async () => {
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("shared-relogin-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: "shared-relogin-user" },
+          credential: {
+            accessToken: `access-${code}`,
+            refreshToken: `refresh-${code}`,
+          },
+        };
+      },
+    };
+    const { authentication, controller, origin, runtimeRootPath } =
+      await startOAuthServer(provider);
+    const staleCookie = await completeLogin(origin, "stale");
+    const otherCookie = await completeLogin(origin, "other");
+    const staleSessionId = staleCookie.slice("dano_login=".length);
+    const otherSessionId = otherCookie.slice("dano_login=".length);
+    await authentication.requireReauthentication(staleSessionId);
+    controller.requireReauthentication(staleSessionId);
+
+    const started = await fetch(`${origin}/api/auth/login?returnTo=/chat`, {
+      headers: { Cookie: staleCookie },
+      redirect: "manual",
+    });
+    const flowCookie = cookieFrom(started, "dano_oauth_flow");
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=relogin&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: `${staleCookie}; ${flowCookie}` },
+        redirect: "manual",
+      },
+    );
+    const replacementCookie = cookieFrom(callback, "dano_login");
+    const replacementSessionId = replacementCookie.slice("dano_login=".length);
+
+    expect(replacementSessionId).not.toBe(staleSessionId);
+    await expect(
+      authentication.readProviderCredential(staleSessionId),
+    ).resolves.toBeNull();
+    await expect(
+      authentication.readProviderCredential(replacementSessionId),
+    ).resolves.toMatchObject({ accessToken: "access-relogin" });
+    await expect(
+      authentication.readProviderCredential(otherSessionId),
+    ).resolves.toMatchObject({ accessToken: "access-other" });
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(2);
+  });
+
+  it("cancels reauthentication into a fresh Anonymous User with a usable Bridge", async () => {
+    const provider = successfulProvider("cancel-reauth-user", "expired-token");
+    const { authentication, controller, origin } = await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin);
+    const loginSessionId = loginCookie.slice("dano_login=".length);
+    const authenticatedClient = await createAuthenticatedClient(
+      origin,
+      loginCookie,
+    );
+    fs.writeFileSync(
+      path.join(authenticatedClient.defaultWorkspacePath, "authenticated-only.txt"),
+      "must remain with the authenticated User",
+      "utf8",
+    );
+    await authentication.requireReauthentication(loginSessionId);
+    controller.requireReauthentication(loginSessionId);
+
+    const logout = await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: loginCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+    expect(logout.status).toBe(200);
+    expect(await logout.json()).toEqual({ status: "anonymous" });
+
+    const created = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(created.status).toBe(201);
+    const guestCookie = cookieFrom(created, "dano_guest");
+    const guestClient = (await created.json()) as TestBridgeClient;
+    expect(guestClient.defaultWorkspacePath).not.toBe(
+      authenticatedClient.defaultWorkspacePath,
+    );
+    expect(
+      fs.existsSync(
+        path.join(guestClient.defaultWorkspacePath, "authenticated-only.txt"),
+      ),
+    ).toBe(false);
+    expect(
+      await executeCommand(origin, guestClient, guestCookie, {
+        id: "anonymous-state",
+        type: "get_state",
+      }),
+    ).toMatchObject({
+      type: "response",
+      payload: { id: "anonymous-state", success: true },
+    });
+  });
+
   it("logs out only the current Login Session and disconnects only its Bridge Clients", async () => {
     const revoked: string[] = [];
     const provider: OAuthProviderAdapter = {
@@ -1562,6 +1842,53 @@ function waitForResponse(
               message.type === "response" &&
               message.payload.id === correlationId
             ) {
+              clearTimeout(timeout);
+              resolve(message);
+              return;
+            }
+          }
+          boundary = buffer.indexOf("\n\n");
+        }
+      });
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+  });
+  return { ready, result, close: () => request.destroy() };
+}
+
+function waitForAuthentication(
+  url: string,
+  cookie: string,
+): { close(): void; ready: Promise<void>; result: Promise<ServerMessage> } {
+  let request: http.ClientRequest;
+  let markReady!: () => void;
+  const ready = new Promise<void>(resolve => {
+    markReady = resolve;
+  });
+  const result = new Promise<ServerMessage>((resolve, reject) => {
+    let buffer = "";
+    const timeout = setTimeout(() => {
+      request.destroy();
+      reject(new Error("Timed out waiting for authentication state"));
+    }, 2_000);
+    request = http.get(url, { headers: { Cookie: cookie } }, response => {
+      markReady();
+      response.setEncoding("utf8");
+      response.on("data", chunk => {
+        buffer += chunk;
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary !== -1) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame
+            .split(/\r?\n/)
+            .filter(line => line.startsWith("data: "))
+            .map(line => line.slice(6))
+            .join("\n");
+          if (data) {
+            const message = JSON.parse(data) as ServerMessage;
+            if (message.type === "authentication") {
               clearTimeout(timeout);
               resolve(message);
               return;

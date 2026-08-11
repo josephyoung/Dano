@@ -1158,6 +1158,7 @@ export interface BridgeUserSummary {
 /** Browser-safe authentication state for the current Dano client. */
 export type BridgeAuthenticationState =
   | { readonly status: "anonymous" }
+  | { readonly status: "reauth_required" }
   | {
       readonly status: "authenticated";
       readonly user: BridgeUserSummary;
@@ -1220,6 +1221,7 @@ export type RpcBridgeEvent =
 
 export type ServerMessage =
   | { type: "event"; payload: RpcBridgeEvent }
+  | { type: "authentication"; payload: BridgeAuthenticationState }
   | { type: "extension_ui_request"; payload: RpcExtensionUIRequest }
   | { type: "response"; payload: RpcResponse };
 
