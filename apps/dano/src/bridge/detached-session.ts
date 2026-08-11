@@ -17,7 +17,6 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { askUserQuestionTool } from "./ask-user-question.js";
-import { createCurlTool } from "./curl-tool.js";
 import { danoVersionTool } from "./dano-version-tool.js";
 import { configureDanoLlmResilience } from "./llm-resilience.js";
 import type { CredentialBroker } from "./credential-broker.js";
@@ -81,7 +80,6 @@ export async function createDetachedAgentSessionRuntime(
         createReadToolDefinition(runtimeOptions.cwd, {
           autoResizeImages: services.settingsManager.getImageAutoResize(),
         }),
-        createCurlTool(runtimeOptions.cwd),
         createEditToolDefinition(runtimeOptions.cwd),
         createWriteToolDefinition(runtimeOptions.cwd),
         danoVersionTool,

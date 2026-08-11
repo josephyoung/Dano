@@ -175,6 +175,8 @@ http {
     expect(gate).toContain("deploy-compose.test.ts");
     expect(gate).toContain("test:auth-built-entrypoint");
     expect(gate).toContain("DANO_NGINX_RUNTIME_TEST=1");
+    expect(gate).toContain("detached-session.test.ts");
+    expect(gate).toContain("heimdall-extension.test.ts");
     expect(gate).toContain("bridge-rpc-adapter.test.ts");
     expect(gate).toContain(
       "projects provider_request results as JSON-safe transcript data",
