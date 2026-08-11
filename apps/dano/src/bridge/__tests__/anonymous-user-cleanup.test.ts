@@ -180,7 +180,7 @@ describe("Anonymous User cleanup store", () => {
     });
   });
 
-  it("waits for an accepted command after its Bridge Client disconnects", async () => {
+  it("waits for an accepted command after its SSE stream is lost", async () => {
     let now = 100_000;
     const runtimeRootPath = fs.mkdtempSync(
       path.join(os.tmpdir(), "dano-anonymous-active-command-"),
@@ -267,15 +267,8 @@ describe("Anonymous User cleanup store", () => {
         }),
       });
       expect(accepted.status).toBe(202);
-      const disconnected = await fetch(
-        `${origin}/api/clients/${created.client.id}/disconnect`,
-        {
-          method: "POST",
-          headers: { Cookie: cookie },
-          body: "{}",
-        },
-      );
-      expect(disconnected.status).toBe(202);
+      stream.destroy();
+      await new Promise(resolve => setTimeout(resolve, 10));
 
       now = 101_001;
       await new Promise(resolve => setTimeout(resolve, 30));
@@ -283,7 +276,6 @@ describe("Anonymous User cleanup store", () => {
 
       finishCommand();
       await waitUntil(() => !fs.existsSync(retainedPath));
-      stream.destroy();
     } finally {
       await server.stop();
       await registry.dispose();
