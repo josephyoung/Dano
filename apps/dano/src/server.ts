@@ -1,6 +1,10 @@
 import { BridgeEventBus } from "./bridge/bridge-event-bus.js";
 import { BridgeRpcAdapter } from "./bridge/bridge-rpc-adapter.js";
-import { BridgeServer, type RpcConnectionHandlerFactory } from "./bridge/server.js";
+import {
+  BridgeServer,
+  type AuthHttpHandler,
+  type RpcConnectionHandlerFactory,
+} from "./bridge/server.js";
 import { DetachedSessionRegistry } from "./bridge/session-registry.js";
 import type { UserContextResolver } from "./bridge/user-context.js";
 import { UserRuntimeRegistry } from "./bridge/user-runtime-registry.js";
@@ -27,6 +31,7 @@ export interface StartDanoServerOptions {
   sessionRegistry?: DetachedSessionRegistry;
   onShutdown?: () => void;
   userContextResolver?: UserContextResolver;
+  authHttpHandler?: AuthHttpHandler;
   danoConfig?: DanoConfig;
 }
 
@@ -131,6 +136,7 @@ export async function startDanoServer(
     eventBus,
     emitEvent,
     options.userContextResolver,
+    options.authHttpHandler,
   );
   let state: BridgeState = { status: "starting", port: config.port };
 

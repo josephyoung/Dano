@@ -23,6 +23,7 @@
     "atomically": "2.1.1",
     "bits-ui": "^2.18.1",
     "date-fns": "^4.4.0",
+    "openid-client": "^6.8.4",
     "typebox": "1.2.7",
     "unbash": "4.0.3"
   },

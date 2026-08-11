@@ -75,6 +75,14 @@ export type RpcConnectionHandlerFactory = (
   ctx: RpcConnectionContext,
 ) => RpcConnectionHandler | Promise<RpcConnectionHandler>;
 
+export interface AuthHttpHandler {
+  handle(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<boolean>;
+}
+
 let clientSeqCounter = 0;
 
 function generateClientId(): string {
@@ -108,6 +116,7 @@ export class BridgeServer {
     eventBus: BridgeEventBus,
     emitEvent: (event: BridgeEvent) => void,
     private readonly userContextResolver?: UserContextResolver,
+    private readonly authHttpHandler?: AuthHttpHandler,
   ) {
     this.config = config;
     this.handlerFactory = handlerFactory;
@@ -275,6 +284,10 @@ export class BridgeServer {
     try {
       const url = new URL(req.url || "/", `http://${req.headers.host}`);
       const pathname = url.pathname;
+
+      if (await this.authHttpHandler?.handle(req, res, url)) {
+        return;
+      }
 
       if (req.method === "GET" && pathname === "/api/health") {
         writeJson(res, 200, { status: "ok" });

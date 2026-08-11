@@ -65,6 +65,18 @@ _Avoid_: unauthenticated error, shared guest, client identity
 The server-owned request context produced after resolving an authenticated or Anonymous User. It carries the User and the safely resolved User Folder; browser-provided identity fields never create or change it.
 _Avoid_: client context, browser identity, session context
 
+**External Identity**:
+The provider-adapter output that establishes an authenticated User from one stable opaque `userId` plus optional display name and avatar URL. Dano does not interpret provider-private fields or use display data as identity.
+_Avoid_: provider payload, account category, display-name identity
+
+**Dano Login Session**:
+A persistent, revocable server-side session created for one successful OAuth login. Its opaque browser Cookie identifies only that Login Session; it does not contain a provider token or establish a separate User data namespace.
+_Avoid_: User, Browser Client, JWT Cookie, provider SSO session
+
+**Provider Credential**:
+The encrypted server-side access and optional refresh credential owned by exactly one Dano Login Session. It is never browser or model data and is not shared merely because two Login Sessions resolve to the same User.
+_Avoid_: User credential, browser token, shared account token
+
 **User Folder**:
 The persistent directory under the Dano runtime users root that is mapped from one verified User ID. It holds user-owned data such as preferences and must remain isolated from other User Folders and Runtime Workspaces.
 _Avoid_: Runtime Workspace, session directory, client directory
