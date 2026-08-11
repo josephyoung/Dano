@@ -159,6 +159,18 @@ function waitForResponse(
   return { ready, result, close: () => request.destroy() };
 }
 
+async function openEventStream(
+  url: string,
+  cookie: string,
+): Promise<http.ClientRequest> {
+  const request = http.get(url, { headers: { Cookie: cookie } });
+  await new Promise<void>((resolve, reject) => {
+    request.once("response", () => resolve());
+    request.once("error", reject);
+  });
+  return request;
+}
+
 async function executeCommand(
   origin: string,
   client: Awaited<ReturnType<typeof createClient>>["body"],
@@ -220,6 +232,100 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 describe("Anonymous User over HTTP/Bridge", () => {
+  it("reclaims a lost SSE Client after its replacement disconnects", async () => {
+    let now = 1_000;
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-lost-sse-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const anonymousSessionsPath = path.join(runtimeRoot, "anonymous-sessions");
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      undefined,
+      undefined,
+      { idleTtlMs: 1_000, intervalMs: 10, now: () => now },
+    );
+    const first = await createClient(origin);
+    const cookie = guestCookie(first.response);
+    const ownedFile = path.join(first.body.defaultWorkspacePath, "owned.txt");
+    fs.writeFileSync(ownedFile, "owned by lost SSE client", "utf8");
+    const lostStream = await openEventStream(
+      `${origin}${first.body.eventsUrl}`,
+      cookie,
+    );
+    lostStream.destroy();
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const replacement = await createClient(origin, cookie);
+    const replacementStream = await openEventStream(
+      `${origin}${replacement.body.eventsUrl}`,
+      cookie,
+    );
+    const disconnected = await fetch(
+      `${origin}/api/clients/${replacement.body.client.id}/disconnect`,
+      { method: "POST", headers: { Cookie: cookie }, body: "{}" },
+    );
+    expect(disconnected.status).toBe(202);
+    replacementStream.destroy();
+
+    now = 2_001;
+    await waitUntil(() => fs.readdirSync(anonymousSessionsPath).length === 0);
+    expect(fs.existsSync(first.body.defaultWorkspacePath)).toBe(false);
+    expect(fs.existsSync(ownedFile)).toBe(false);
+  });
+
+  it("keeps a transiently disconnected SSE Client usable after reconnect", async () => {
+    let now = 10_000;
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-sse-reconnect-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      undefined,
+      undefined,
+      { idleTtlMs: 1_000, intervalMs: 10, now: () => now },
+    );
+    const guest = await createClient(origin);
+    const cookie = guestCookie(guest.response);
+    const firstStream = await openEventStream(
+      `${origin}${guest.body.eventsUrl}`,
+      cookie,
+    );
+    firstStream.destroy();
+
+    now = 10_900;
+    const reconnectedStream = await openEventStream(
+      `${origin}${guest.body.eventsUrl}`,
+      cookie,
+    );
+    const accepted = await fetch(`${origin}${guest.body.messagesUrl}`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "command",
+        payload: { id: "reconnected-state", type: "get_state" },
+      } satisfies ClientMessage),
+    });
+    expect(accepted.status).toBe(202);
+
+    now = 11_901;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(fs.existsSync(guest.body.defaultWorkspacePath)).toBe(true);
+    const stillAccepted = await fetch(`${origin}${guest.body.messagesUrl}`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "command",
+        payload: { id: "post-sweep-state", type: "get_state" },
+      } satisfies ClientMessage),
+    });
+    expect(stillAccepted.status).toBe(202);
+    reconnectedStream.destroy();
+  });
+
   it("keeps an active guest and later removes all data for the disconnected owner", async () => {
     let now = 1_000;
     const runtimeRoot = fs.mkdtempSync(

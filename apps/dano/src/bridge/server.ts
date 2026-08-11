@@ -124,6 +124,7 @@ export class BridgeServer {
   private activeUserOperations = new Map<string, number>();
   private transferringUserIds = new Set<string>();
   private sseStreams = new Map<string, Set<() => void>>();
+  private detachedSseClients = new Set<string>();
   private uploadRegistry: UploadRegistry;
   private cleanupInterval: ReturnType<typeof setInterval> | undefined;
   private readonly anonymousUserCleanup?: AnonymousUserCleanup;
@@ -1041,6 +1042,7 @@ export class BridgeServer {
       res.write(formatSseMessage(message));
     };
     const unregister = this.eventBus.connectClient(clientId, send);
+    this.detachedSseClients.delete(clientId);
     let closed = false;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let removeStream = () => {};
@@ -1050,6 +1052,9 @@ export class BridgeServer {
       if (heartbeat) clearInterval(heartbeat);
       unregister();
       removeStream();
+      if (this.clients.has(clientId) && !this.sseStreams.has(clientId)) {
+        this.detachedSseClients.add(clientId);
+      }
       res.end();
     };
     removeStream = this.registerSseStream(clientId, closeStream);
@@ -1128,6 +1133,7 @@ export class BridgeServer {
     this.clientUsers.delete(clientId);
     this.clientAuthentication.delete(clientId);
     this.clientLoginSessions.delete(clientId);
+    this.detachedSseClients.delete(clientId);
     this.eventBus.unregisterClient(clientId);
     this.closeSseStreams(clientId);
   }
@@ -1289,15 +1295,18 @@ export class BridgeServer {
   private beginAnonymousUserCleanup(userId: string): (() => void) | null {
     const release = this.beginExclusiveUserMutation([userId]);
     if (!release) return null;
-    const hasClient = [...this.clientUsers.values()].some(
-      user => user.user.id === userId,
-    );
+    const clientIds = [...this.clientUsers]
+      .filter(([, user]) => user.user.id === userId)
+      .map(([clientId]) => clientId);
     const isActive =
-      hasClient || (this.activeUserOperations.get(userId) ?? 0) > 0;
+      (this.activeUserOperations.get(userId) ?? 0) > 0 ||
+      clientIds.some(clientId => !this.detachedSseClients.has(clientId)) ||
+      clientIds.some(clientId => this.handlers.get(clientId)?.isBusy?.());
     if (isActive) {
       release();
       return null;
     }
+    for (const clientId of clientIds) this.disconnectClient(clientId);
     return release;
   }
 
