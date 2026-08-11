@@ -232,6 +232,47 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 describe("Anonymous User over HTTP/Bridge", () => {
+  it("reclaims an idle Client that never establishes its SSE stream", async () => {
+    let now = 500;
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-no-sse-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const anonymousSessionsPath = path.join(runtimeRoot, "anonymous-sessions");
+    const sessionsRootPath = path.join(runtimeRoot, "sessions");
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      undefined,
+      sessionsRootPath,
+      { idleTtlMs: 1_000, intervalMs: 10, now: () => now },
+    );
+    const guest = await createClient(origin);
+    const cookie = guestCookie(guest.response);
+    const ownedFile = path.join(guest.body.defaultWorkspacePath, "abandoned.txt");
+    fs.writeFileSync(ownedFile, "client never opened SSE", "utf8");
+    const upload = await uploadProjectFile(
+      origin,
+      guest.body.client.id,
+      cookie,
+      "abandoned-upload.txt",
+      "temporary upload",
+    );
+
+    now = 1_501;
+
+    await waitUntil(() => fs.readdirSync(anonymousSessionsPath).length === 0);
+    expect(fs.existsSync(guest.body.defaultWorkspacePath)).toBe(false);
+    expect(fs.existsSync(ownedFile)).toBe(false);
+    expect(fs.existsSync(upload.path)).toBe(false);
+    expect(fs.readdirSync(path.join(runtimeRoot, "uploads", "records"))).toEqual(
+      [],
+    );
+    expect(fs.readdirSync(sessionsRootPath)).toEqual([]);
+    const replacement = await createClient(origin, cookie);
+    expect(guestCookie(replacement.response)).not.toBe(cookie);
+  });
+
   it("reclaims a lost SSE Client after its replacement disconnects", async () => {
     let now = 1_000;
     const runtimeRoot = fs.mkdtempSync(
@@ -326,7 +367,7 @@ describe("Anonymous User over HTTP/Bridge", () => {
     reconnectedStream.destroy();
   });
 
-  it("keeps an active guest and later removes all data for the disconnected owner", async () => {
+  it("keeps an active SSE guest and later removes all data after the stream closes", async () => {
     let now = 1_000;
     const runtimeRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "dano-anonymous-expiry-"),
@@ -346,6 +387,10 @@ describe("Anonymous User over HTTP/Bridge", () => {
     );
     const guest = await createClient(origin);
     const cookie = guestCookie(guest.response);
+    const stream = await openEventStream(
+      `${origin}${guest.body.eventsUrl}`,
+      cookie,
+    );
     const ownedFile = path.join(guest.body.defaultWorkspacePath, "owned.txt");
     fs.writeFileSync(ownedFile, "owned by expiring guest", "utf8");
     const upload = await uploadProjectFile(
@@ -370,11 +415,8 @@ describe("Anonymous User over HTTP/Bridge", () => {
     expect(fs.existsSync(ownedFile)).toBe(true);
     expect(fs.existsSync(upload.path)).toBe(true);
 
-    const disconnected = await fetch(
-      `${origin}/api/clients/${guest.body.client.id}/disconnect`,
-      { method: "POST", headers: { Cookie: cookie }, body: "{}" },
-    );
-    expect(disconnected.status).toBe(202);
+    stream.destroy();
+    await new Promise(resolve => setTimeout(resolve, 10));
     now = 3_002;
     await waitUntil(
       () => fs.readdirSync(anonymousSessionsPath).length === 0,
