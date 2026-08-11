@@ -319,6 +319,25 @@ export class UploadRegistry {
     return rollback;
   }
 
+  async deleteOwnedByUser(ownerUserId: string): Promise<number> {
+    let removed = 0;
+    for (const upload of [...this.uploads.values()]) {
+      if (upload.ownerUserId !== ownerUserId) continue;
+      const retained = {
+        ...upload,
+        previousClientIds: [...upload.previousClientIds],
+      };
+      try {
+        await this.remove(upload);
+        removed += 1;
+      } catch (error) {
+        this.uploads.set(retained.id, retained);
+        throw error;
+      }
+    }
+    return removed;
+  }
+
   getTotalBytes(): number {
     let total = 0;
     const seenPaths = new Set<string>();

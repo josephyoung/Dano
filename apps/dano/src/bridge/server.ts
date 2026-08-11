@@ -29,6 +29,8 @@ import {
 } from "./user-context.js";
 import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import type { UserRuntimeRegistry } from "./user-runtime-registry.js";
+import { AnonymousUserCleanup } from "./anonymous-user-cleanup.js";
+import type { AnonymousUserContextResolver } from "./anonymous-user-context.js";
 import {
   parseThemeColorPreference,
   readThemeColorPreference,
@@ -71,6 +73,7 @@ export interface RpcConnectionContext {
   config: BridgeConfig;
   eventBus: BridgeEventBus;
   uploadRegistry: UploadRegistry;
+  beginUserOperation: () => () => void;
   emitEvent: (event: BridgeEvent) => void;
   send: (message: ServerMessage) => void;
 }
@@ -123,6 +126,7 @@ export class BridgeServer {
   private sseStreams = new Map<string, Set<() => void>>();
   private uploadRegistry: UploadRegistry;
   private cleanupInterval: ReturnType<typeof setInterval> | undefined;
+  private readonly anonymousUserCleanup?: AnonymousUserCleanup;
   private readonly serverInstanceId = randomUUID();
   private readonly serverStartTime = new Date().toISOString();
 
@@ -138,6 +142,8 @@ export class BridgeServer {
     private readonly userContextResolver?: UserContextResolver,
     private readonly authHttpHandler?: AuthHttpHandler,
     private readonly userRuntimeRegistry?: UserRuntimeRegistry,
+    private readonly anonymousUsers?: AnonymousUserContextResolver,
+    anonymousUserCleanup?: { idleTtlMs: number; intervalMs: number },
   ) {
     this.config = config;
     this.handlerFactory = handlerFactory;
@@ -147,6 +153,16 @@ export class BridgeServer {
       ...config.upload,
       requireOwnership: Boolean(userContextResolver),
     });
+    if (anonymousUsers && anonymousUserCleanup) {
+      this.anonymousUserCleanup = new AnonymousUserCleanup(anonymousUsers, {
+        ...anonymousUserCleanup,
+        beginCleanup: userId => this.beginAnonymousUserCleanup(userId),
+        cleanupUser: userContext => this.cleanupAnonymousUser(userContext),
+        onError: error => {
+          console.warn("Dano Anonymous User cleanup failed:", error);
+        },
+      });
+    }
   }
 
   async start(): Promise<{ host: string; port: number }> {
@@ -189,6 +205,7 @@ export class BridgeServer {
     }
 
     this.startUploadCleanupInterval();
+    await this.anonymousUserCleanup?.start();
     this.host = this.config.host;
     this.port = boundPort;
     this.isRunning = true;
@@ -277,6 +294,7 @@ export class BridgeServer {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = undefined;
     }
+    this.anonymousUserCleanup?.dispose();
     await this.uploadRegistry.dispose();
 
     this.emitEvent({ type: "server_stop" });
@@ -771,68 +789,85 @@ export class BridgeServer {
     if (this.userContextResolver && !user) {
       throw new UserContextError(401, "Authenticated User is required");
     }
-    clientSeqCounter++;
-    const client: BridgeClient = {
-      id: generateClientId(),
-      seq: clientSeqCounter,
-      connectedAt: new Date().toISOString(),
-    };
-
-    this.clients.set(client.id, client);
-    if (user) this.clientUsers.set(client.id, user);
-    const authentication =
-      resolution?.authentication ??
-      (user ? browserAuthentication(user) : undefined);
-    if (authentication) {
-      this.clientAuthentication.set(client.id, authentication);
-    }
-    if (resolution?.loginSessionId) {
-      this.clientLoginSessions.set(client.id, resolution.loginSessionId);
-    }
-    const unregisterClient = this.eventBus.registerClient(client);
-    let handler: RpcConnectionHandler;
+    const finishActivity = user
+      ? this.beginUserOperationForUser(user.user.id)
+      : () => {};
     try {
-      handler = await this.handlerFactory({
+      if (user && !("username" in user.user)) {
+        const touched = await this.anonymousUsers?.touchAnonymousUser(
+          user.user.id,
+        );
+        if (this.anonymousUsers && !touched) {
+          throw new UserContextError(401, "Anonymous User is no longer valid");
+        }
+      }
+      clientSeqCounter++;
+      const client: BridgeClient = {
+        id: generateClientId(),
+        seq: clientSeqCounter,
+        connectedAt: new Date().toISOString(),
+      };
+
+      this.clients.set(client.id, client);
+      if (user) this.clientUsers.set(client.id, user);
+      const authentication =
+        resolution?.authentication ??
+        (user ? browserAuthentication(user) : undefined);
+      if (authentication) {
+        this.clientAuthentication.set(client.id, authentication);
+      }
+      if (resolution?.loginSessionId) {
+        this.clientLoginSessions.set(client.id, resolution.loginSessionId);
+      }
+      const unregisterClient = this.eventBus.registerClient(client);
+      let handler: RpcConnectionHandler;
+      try {
+        handler = await this.handlerFactory({
+          client,
+          user: user ?? undefined,
+          loginSessionId: resolution?.loginSessionId,
+          config: this.config,
+          eventBus: this.eventBus,
+          uploadRegistry: this.uploadRegistry,
+          beginUserOperation: () =>
+            user ? this.beginUserOperationForUser(user.user.id) : () => {},
+          emitEvent: this.emitEvent,
+          send: message => {
+            this.eventBus.sendToClient(client.id, message);
+          },
+        });
+      } catch (error) {
+        unregisterClient();
+        this.clientUsers.delete(client.id);
+        this.clientAuthentication.delete(client.id);
+        this.clientLoginSessions.delete(client.id);
+        this.clients.delete(client.id);
+        throw error;
+      }
+      this.handlers.set(client.id, handler);
+
+      this.emitEvent({
+        type: "client_connect",
         client,
-        user: user ?? undefined,
-        loginSessionId: resolution?.loginSessionId,
-        config: this.config,
-        eventBus: this.eventBus,
-        uploadRegistry: this.uploadRegistry,
-        emitEvent: this.emitEvent,
-        send: message => {
-          this.eventBus.sendToClient(client.id, message);
-        },
       });
-    } catch (error) {
-      unregisterClient();
-      this.clientUsers.delete(client.id);
-      this.clientAuthentication.delete(client.id);
-      this.clientLoginSessions.delete(client.id);
-      this.clients.delete(client.id);
-      throw error;
-    }
-    this.handlers.set(client.id, handler);
 
-    this.emitEvent({
-      type: "client_connect",
-      client,
-    });
-
-    if (resolution?.setCookie) {
-      res.setHeader("Set-Cookie", resolution.setCookie);
+      if (resolution?.setCookie) {
+        res.setHeader("Set-Cookie", resolution.setCookie);
+      }
+      writeJson(res, 201, {
+        client,
+        ...(authentication ? { authentication } : {}),
+        ...(authentication?.status === "authenticated"
+          ? { currentUser: authentication.user }
+          : {}),
+        eventsUrl: `/api/clients/${encodeURIComponent(client.id)}/events`,
+        messagesUrl: `/api/clients/${encodeURIComponent(client.id)}/messages`,
+        defaultWorkspacePath:
+          handler.defaultWorkspacePath ?? this.config.defaultWorkspacePath,
+      });
+    } finally {
+      finishActivity();
     }
-    writeJson(res, 201, {
-      client,
-      ...(authentication ? { authentication } : {}),
-      ...(authentication?.status === "authenticated"
-        ? { currentUser: authentication.user }
-        : {}),
-      eventsUrl: `/api/clients/${encodeURIComponent(client.id)}/events`,
-      messagesUrl: `/api/clients/${encodeURIComponent(client.id)}/messages`,
-      defaultWorkspacePath:
-        handler.defaultWorkspacePath ?? this.config.defaultWorkspacePath,
-    });
   }
 
   private async handleCurrentUser(
@@ -927,6 +962,14 @@ export class BridgeServer {
       resolution?.loginSessionId !== boundLoginSessionId
     ) {
       throw new UserContextError(401, "Dano Login Session is no longer valid");
+    }
+    if (!("username" in boundUser.user)) {
+      const touched = await this.anonymousUsers?.touchAnonymousUser(
+        boundUser.user.id,
+      );
+      if (this.anonymousUsers && !touched) {
+        throw new UserContextError(401, "Anonymous User is no longer valid");
+      }
     }
     return boundUser;
   }
@@ -1127,8 +1170,13 @@ export class BridgeServer {
     if (!source || source.user.id !== expectedUserId) {
       throw new UserContextError(401, "Anonymous User binding is no longer valid");
     }
-    this.transferringUserIds.add(source.user.id);
-    this.transferringUserIds.add(target.user.id);
+    const finishTransfer = this.beginExclusiveUserMutation([
+      source.user.id,
+      target.user.id,
+    ]);
+    if (!finishTransfer) {
+      throw new HttpError(409, "User runtime ownership is changing");
+    }
     try {
       await this.userRuntimeRegistry.transferOwnership(source, target, {
         assertIdle: () => {
@@ -1178,8 +1226,7 @@ export class BridgeServer {
         console.warn("Transferred Anonymous User cleanup failed:", error);
       });
     } finally {
-      this.transferringUserIds.delete(source.user.id);
-      this.transferringUserIds.delete(target.user.id);
+      finishTransfer();
     }
   }
 
@@ -1205,6 +1252,10 @@ export class BridgeServer {
   private beginUserOperation(clientId: string): () => void {
     const userId = this.clientUsers.get(clientId)?.user.id;
     if (!userId) return () => {};
+    return this.beginUserOperationForUser(userId);
+  }
+
+  private beginUserOperationForUser(userId: string): () => void {
     if (this.transferringUserIds.has(userId)) {
       throw new HttpError(409, "User runtime ownership is changing");
     }
@@ -1220,6 +1271,42 @@ export class BridgeServer {
       if (remaining > 0) this.activeUserOperations.set(userId, remaining);
       else this.activeUserOperations.delete(userId);
     };
+  }
+
+  private beginExclusiveUserMutation(
+    userIds: readonly string[],
+  ): (() => void) | null {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.some(userId => this.transferringUserIds.has(userId))) {
+      return null;
+    }
+    for (const userId of uniqueUserIds) this.transferringUserIds.add(userId);
+    return () => {
+      for (const userId of uniqueUserIds) this.transferringUserIds.delete(userId);
+    };
+  }
+
+  private beginAnonymousUserCleanup(userId: string): (() => void) | null {
+    const release = this.beginExclusiveUserMutation([userId]);
+    if (!release) return null;
+    const hasClient = [...this.clientUsers.values()].some(
+      user => user.user.id === userId,
+    );
+    const isActive =
+      hasClient || (this.activeUserOperations.get(userId) ?? 0) > 0;
+    if (isActive) {
+      release();
+      return null;
+    }
+    return release;
+  }
+
+  private async cleanupAnonymousUser(userContext: UserContext): Promise<void> {
+    if (!this.userRuntimeRegistry) {
+      throw new Error("Anonymous User runtime cleanup is unavailable");
+    }
+    await this.uploadRegistry.deleteOwnedByUser(userContext.user.id);
+    await this.userRuntimeRegistry.retireUser(userContext);
   }
 
   private handleStaticRequest(

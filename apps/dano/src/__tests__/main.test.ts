@@ -332,6 +332,30 @@ describe("Dano main", () => {
     });
   });
 
+  it("uses safe Anonymous User cleanup defaults and explicit deployment overrides", () => {
+    expect(parseDanoServerOptions([], {}).anonymousUserCleanup).toEqual({
+      idleTtlMs: 24 * 60 * 60 * 1000,
+      intervalMs: 60 * 60 * 1000,
+    });
+    expect(
+      parseDanoServerOptions([], {
+        DANO_ANONYMOUS_IDLE_TTL_MS: "7200000",
+        DANO_ANONYMOUS_CLEANUP_INTERVAL_MS: "300000",
+      }).anonymousUserCleanup,
+    ).toEqual({ idleTtlMs: 7_200_000, intervalMs: 300_000 });
+  });
+
+  it("rejects unsafe Anonymous User cleanup configuration", () => {
+    expect(() =>
+      parseDanoServerOptions([], { DANO_ANONYMOUS_IDLE_TTL_MS: "0" }),
+    ).toThrow("DANO_ANONYMOUS_IDLE_TTL_MS must be a positive integer");
+    expect(() =>
+      parseDanoServerOptions([], {
+        DANO_ANONYMOUS_CLEANUP_INTERVAL_MS: "not-a-number",
+      }),
+    ).toThrow("DANO_ANONYMOUS_CLEANUP_INTERVAL_MS must be a positive integer");
+  });
+
   it("resolves the global agent directory from environment or runtime root", () => {
     expect(
       parseDanoServerOptions([], {

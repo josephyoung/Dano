@@ -5284,8 +5284,9 @@ export class BridgeRpcAdapter {
     RpcTranscriptUpsertEvent
   >();
   private readonly retryingSessions = new Set<string>();
-  private readonly pendingDetachedPromptTimers = new Set<
-    ReturnType<typeof setTimeout>
+  private readonly pendingDetachedPromptTimers = new Map<
+    ReturnType<typeof setTimeout>,
+    () => void
   >();
   private readonly pendingDetachedPrompts = new Set<Promise<void>>();
 
@@ -5312,6 +5313,7 @@ export class BridgeRpcAdapter {
     private readonly runtimeScope?: BridgeRuntimeScope,
     private readonly credentialBroker?: CredentialBroker,
     private readonly loginSessionId?: string,
+    private readonly beginUserOperation: () => () => void = () => () => {},
   ) {
     this.defaultWorkspacePath = config.defaultWorkspacePath;
     this.client = client;
@@ -6361,80 +6363,95 @@ export class BridgeRpcAdapter {
           ),
         });
 
+        const finishUserOperation = this.beginUserOperation();
         const promptTimer = setTimeout(() => {
           this.pendingDetachedPromptTimers.delete(promptTimer);
-          if (this.disposed) return;
+          if (this.disposed) {
+            finishUserOperation();
+            return;
+          }
 
-          const isQueuedFollowUp =
-            session.isStreaming && command.streamingBehavior === "followUp";
-          const binding =
-            !session.isStreaming || isQueuedFollowUp
-              ? this.queueAssistantTurn(session.sessionId)
-              : undefined;
-          const promptOptions = this.credentialBroker
-            ? session.isStreaming
-              ? {
-                  source: "rpc" as const,
-                  images,
-                  streamingBehavior: command.streamingBehavior ?? "steer",
-                  ...promptExpansionOptions,
-                }
-              : {
-                  source: "rpc" as const,
-                  images,
-                  ...promptExpansionOptions,
-                  preflightResult: (success: boolean) => {
-                    if (!success) {
-                      this.cancelQueuedAssistantTurn(binding);
-                    }
-                  },
-                }
-            : defaultPromptOptions;
-          let promptOperation!: Promise<void>;
-          const executePrompt = () =>
-            Promise.resolve(session.prompt(injectedMessage, promptOptions));
-          const startedPrompt =
-            isQueuedFollowUp && this.credentialBroker
-              ? this.credentialBroker.enqueueAssociatedAssistantTurn(
-                  binding,
-                  () => queuedFollowUpEntries(session),
-                  executePrompt,
-                )
-              : executePrompt().then(() => {
-                  this.cancelQueuedAssistantTurn(binding);
-                });
-          promptOperation = startedPrompt
-            .catch(error => {
-              this.cancelQueuedAssistantTurn(binding);
-              const message =
-                error instanceof Error ? error.message : String(error);
-              const sessionPath = session.sessionFile ?? null;
-              console.error(
-                `BridgeRpcAdapter[${this.client.id}]: Detached prompt failed:`,
-                message,
+          try {
+            const isQueuedFollowUp =
+              session.isStreaming && command.streamingBehavior === "followUp";
+            const binding =
+              !session.isStreaming || isQueuedFollowUp
+                ? this.queueAssistantTurn(session.sessionId)
+                : undefined;
+            const promptOptions = this.credentialBroker
+              ? session.isStreaming
+                ? {
+                    source: "rpc" as const,
+                    images,
+                    streamingBehavior: command.streamingBehavior ?? "steer",
+                    ...promptExpansionOptions,
+                  }
+                : {
+                    source: "rpc" as const,
+                    images,
+                    ...promptExpansionOptions,
+                    preflightResult: (success: boolean) => {
+                      if (!success) {
+                        this.cancelQueuedAssistantTurn(binding);
+                      }
+                    },
+                  }
+              : defaultPromptOptions;
+            let promptOperation!: Promise<void>;
+            const executePrompt = () =>
+              Promise.resolve().then(() =>
+                session.prompt(injectedMessage, promptOptions),
               );
-              this.emitEvent({
-                type: "command_error",
-                client: this.client,
-                commandType: "prompt",
-                correlationId,
-                error: message,
+            const startedPrompt =
+              isQueuedFollowUp && this.credentialBroker
+                ? this.credentialBroker.enqueueAssociatedAssistantTurn(
+                    binding,
+                    () => queuedFollowUpEntries(session),
+                    executePrompt,
+                  )
+                : executePrompt().then(() => {
+                    this.cancelQueuedAssistantTurn(binding);
+                  });
+            promptOperation = startedPrompt
+              .catch(error => {
+                this.cancelQueuedAssistantTurn(binding);
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                const sessionPath = session.sessionFile ?? null;
+                console.error(
+                  `BridgeRpcAdapter[${this.client.id}]: Detached prompt failed:`,
+                  message,
+                );
+                this.emitEvent({
+                  type: "command_error",
+                  client: this.client,
+                  commandType: "prompt",
+                  correlationId,
+                  error: message,
+                });
+                this.sendEvent({
+                  type: "command_error",
+                  commandType: "prompt",
+                  correlationId,
+                  error: message,
+                });
+                this.sendEvent(toRpcAgentEndEvent({}, sessionPath));
+                if (sessionPath) this.sessionStatsPusher.queue(sessionPath);
+              })
+              .finally(() => {
+                this.pendingDetachedPrompts.delete(promptOperation);
+                finishUserOperation();
               });
-              this.sendEvent({
-                type: "command_error",
-                commandType: "prompt",
-                correlationId,
-                error: message,
-              });
-              this.sendEvent(toRpcAgentEndEvent({}, sessionPath));
-              if (sessionPath) this.sessionStatsPusher.queue(sessionPath);
-            })
-            .finally(() => {
-              this.pendingDetachedPrompts.delete(promptOperation);
-            });
-          this.pendingDetachedPrompts.add(promptOperation);
+            this.pendingDetachedPrompts.add(promptOperation);
+          } catch (error) {
+            finishUserOperation();
+            throw error;
+          }
         }, 0);
-        this.pendingDetachedPromptTimers.add(promptTimer);
+        this.pendingDetachedPromptTimers.set(
+          promptTimer,
+          finishUserOperation,
+        );
 
         if (autoCreated) {
           this.transcriptProjector.syncPage(autoCreated.transcript);
@@ -6548,24 +6565,38 @@ export class BridgeRpcAdapter {
         });
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
-          const binding = this.queueAssistantTurn(session.sessionId);
-          const enqueueFollowUp = () =>
-            Promise.resolve(session.followUp(injectedMessage, images));
-          const followUpOperation = this.credentialBroker
-            ? this.credentialBroker.enqueueAssociatedAssistantTurn(
-                binding,
-                () => queuedFollowUpEntries(session),
-                enqueueFollowUp,
-              )
-            : enqueueFollowUp();
-          void followUpOperation
-            .catch(error => {
-              this.cancelQueuedAssistantTurn(binding);
-              console.error(
-                `BridgeRpcAdapter[${this.client.id}]: Detached follow_up failed:`,
-                error,
+          const finishUserOperation = this.beginUserOperation();
+          try {
+            const binding = this.queueAssistantTurn(session.sessionId);
+            const enqueueFollowUp = () =>
+              Promise.resolve().then(() =>
+                session.followUp(injectedMessage, images),
               );
-            });
+            const startedFollowUp = this.credentialBroker
+              ? this.credentialBroker.enqueueAssociatedAssistantTurn(
+                  binding,
+                  () => queuedFollowUpEntries(session),
+                  enqueueFollowUp,
+                )
+              : enqueueFollowUp();
+            let followUpOperation!: Promise<void>;
+            followUpOperation = startedFollowUp
+              .catch(error => {
+                this.cancelQueuedAssistantTurn(binding);
+                console.error(
+                  `BridgeRpcAdapter[${this.client.id}]: Detached follow_up failed:`,
+                  error,
+                );
+              })
+              .finally(() => {
+                this.pendingDetachedPrompts.delete(followUpOperation);
+                finishUserOperation();
+              });
+            this.pendingDetachedPrompts.add(followUpOperation);
+          } catch (error) {
+            finishUserOperation();
+            throw error;
+          }
         } else {
           this.queueAssistantTurn(
             this.sessionRuntime.currentSessionManager().getSessionId(),
@@ -8326,8 +8357,12 @@ export class BridgeRpcAdapter {
     }
     this.pendingLlmErrors.clear();
     this.retryingSessions.clear();
-    for (const timer of this.pendingDetachedPromptTimers) {
+    for (const [
+      timer,
+      finishUserOperation,
+    ] of this.pendingDetachedPromptTimers) {
       clearTimeout(timer);
+      finishUserOperation();
     }
     this.pendingDetachedPromptTimers.clear();
 

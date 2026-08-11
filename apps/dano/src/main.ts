@@ -41,6 +41,8 @@ const DEFAULT_DANO_UPLOAD_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_REFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_ORPHANED_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_DANO_ANONYMOUS_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_DANO_ANONYMOUS_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_RUNTIME_SETTINGS_FILES = [
   "SYSTEM.md",
   "settings.json",
@@ -79,6 +81,10 @@ export interface DanoServerOptions {
   productName: string;
   emptyState: BridgeEmptyStateConfig;
   upload: UploadConfig;
+  anonymousUserCleanup: {
+    idleTtlMs: number;
+    intervalMs: number;
+  };
   guestCookieSecure: boolean;
   staticDir?: string;
   help: boolean;
@@ -135,6 +141,23 @@ function parsePositiveInteger(
 ): number {
   const parsed = parseInteger(value, fallback);
   return parsed > 0 ? parsed : fallback;
+}
+
+function parseConfiguredPositiveInteger(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: number,
+): number {
+  const configured = env[name]?.trim();
+  if (!configured) return fallback;
+  if (!/^\d+$/.test(configured)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function readHost(env: Record<string, string | undefined>): string {
@@ -419,6 +442,18 @@ export function parseDanoServerOptions(
   );
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
+  const anonymousUserCleanup = {
+    idleTtlMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_ANONYMOUS_IDLE_TTL_MS",
+      DEFAULT_DANO_ANONYMOUS_IDLE_TTL_MS,
+    ),
+    intervalMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_ANONYMOUS_CLEANUP_INTERVAL_MS",
+      DEFAULT_DANO_ANONYMOUS_CLEANUP_INTERVAL_MS,
+    ),
+  };
   const userAuthentication = readUserAuthentication(env);
   const oauthAuthentication = readOAuthAuthentication(env);
   const guestCookieSecure = readGuestCookieSecure(env);
@@ -516,6 +551,7 @@ export function parseDanoServerOptions(
       ...upload,
       uploadDir: resolve(cwd, upload.uploadDir),
     },
+    anonymousUserCleanup,
     guestCookieSecure,
     staticDir: staticDirOverride
       ? resolve(cwd, staticDirOverride)
@@ -651,6 +687,18 @@ async function runDanoServer(
         ...options.userAuthentication,
       })
     : undefined;
+  const anonymousUsers = createAnonymousUserContextResolver({
+    runtimeRootPath: options.runtimeRootPath,
+    secureCookie: options.guestCookieSecure,
+    authenticatedResolver: oauthAuthentication ?? jwtAuthentication,
+    activityWriteIntervalMs: Math.max(
+      1,
+      Math.min(
+        60 * 1000,
+        Math.floor(options.anonymousUserCleanup.idleTtlMs / 2),
+      ),
+    ),
+  });
   let bridgeController:
     | Awaited<ReturnType<DanoRuntime["startDanoServer"]>>
     | undefined;
@@ -679,11 +727,9 @@ async function runDanoServer(
       cwd: options.cwd,
       sessionsRootPath: options.sessionsRootPath,
       danoConfig,
-      userContextResolver: createAnonymousUserContextResolver({
-        runtimeRootPath: options.runtimeRootPath,
-        secureCookie: options.guestCookieSecure,
-        authenticatedResolver: oauthAuthentication ?? jwtAuthentication,
-      }),
+      userContextResolver: anonymousUsers,
+      anonymousUsers,
+      anonymousUserCleanup: options.anonymousUserCleanup,
       authHttpHandler: oauthAuthentication,
       credentialBroker,
       onShutdown: () => resolveStopped?.(),
