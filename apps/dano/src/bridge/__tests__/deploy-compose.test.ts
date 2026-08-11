@@ -100,7 +100,6 @@ appendFileSync(process.env.DANO_COMPOSE_LOG, JSON.stringify(process.argv.slice(2
 import { writeFileSync } from "node:fs";
 writeFileSync(process.env.DANO_COMPOSE_ENV_LOG, JSON.stringify({
   DANO_NGINX_CONF: process.env.DANO_NGINX_CONF,
-  DANO_NGINX_DEMO_AUTH_CONF: process.env.DANO_NGINX_DEMO_AUTH_CONF,
   DANO_NGINX_SHARED_DIR: process.env.DANO_NGINX_SHARED_DIR,
 }));
 `,
@@ -141,6 +140,7 @@ function runRelease(
     provideTlsInputs?: boolean;
     tlsInputsAreDirectories?: boolean;
     tlsPathStyle?: "absolute" | "relative";
+    deployDir?: string;
   } = {},
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "dano-release-test-"));
@@ -148,7 +148,7 @@ function runRelease(
   const fakeRepo = join(cwd, "repo");
   const fakeBin = join(cwd, "bin");
   const buildParent = join(cwd, "tmp");
-  const deployDir = join(cwd, "deploy");
+  const deployDir = options.deployDir ?? join(cwd, "deploy");
   const runtimeDir = join(cwd, "runtime");
   const secretsDir = join(deployDir, ".secrets");
   const nginxConf = join(deployDir, "nginx/default.conf");
@@ -205,31 +205,12 @@ function runRelease(
     "server { listen 80; }\nserver { listen 443 ssl; }\n",
   );
   writeFileSync(
-    join(fakeRepo, "deploy/nginx/demo-auth.conf.template"),
-    "map \"${DANO_DEMO_JWT}\" $dano_demo_cookie { default \"\"; }\n",
-  );
-  writeFileSync(
     join(fakeRepo, "deploy/nginx/shared/proxy-server.conf"),
     "location / {}\n",
   );
   writeFileSync(
     join(fakeRepo, "scripts/smoke-dano-deploy.mjs"),
-    `import { createHmac } from "node:crypto";
-import { appendFileSync } from "node:fs";
-if (!process.env.DANO_AUTH_JWT_SECRET || !process.env.DANO_DEMO_JWT) {
-  throw new Error("release did not load persisted Demo authentication");
-}
-const [header, payload, signature] = process.env.DANO_DEMO_JWT.split(".");
-const expected = createHmac("sha256", process.env.DANO_AUTH_JWT_SECRET)
-  .update(header + "." + payload)
-  .digest("base64url");
-const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-if (
-  signature !== expected ||
-  Date.parse(process.env.DANO_DEMO_COOKIE_EXPIRES) / 1000 !== claims.exp
-) {
-  throw new Error("release Demo authentication environment is inconsistent");
-}
+    `import { appendFileSync } from "node:fs";
 appendFileSync(process.env.DANO_COMMAND_LOG, "smoke\\n");
 `,
   );
@@ -246,7 +227,14 @@ if (args[0] === "clone") cpSync(process.env.DANO_FAKE_REPO, args.at(-1), { recur
     join(fakeBin, "compose"),
     `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
-appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+const args = process.argv.slice(2);
+appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(args) + "\\n");
+if (process.env.DANO_FAKE_SWITCH_MARKER && args.includes("up")) {
+  appendFileSync(process.env.DANO_FAKE_SWITCH_MARKER, "up\\n");
+}
+if (process.env.DANO_FAKE_CONFIG_INVALID && args.includes("--validate-config")) {
+  process.exit(1);
+}
 `,
   );
   writeFileSync(
@@ -511,9 +499,7 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
     expect(lastComposeEnv.DANO_NGINX_SHARED_DIR).toBe(
       join(deployRoot, "nginx/shared"),
     );
-    expect(lastComposeEnv.DANO_NGINX_DEMO_AUTH_CONF).toBe(
-      join(deployRoot, "nginx/demo-auth.conf.template"),
-    );
+    expect(lastComposeEnv).not.toHaveProperty("DANO_NGINX_DEMO_AUTH_CONF");
   });
 
   it("rejects an unknown exposure mode", () => {
@@ -571,9 +557,7 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
     expect(compose).toContain(
       "${DANO_NGINX_CONF:-/opt/dano/deploy/nginx/default.conf.template}",
     );
-    expect(compose).toContain(
-      "${DANO_NGINX_DEMO_AUTH_CONF:-/opt/dano/deploy/nginx/demo-auth.conf.template}",
-    );
+    expect(compose).not.toContain("DANO_NGINX_DEMO_AUTH_CONF");
     expect(compose).not.toContain("DANO_HTTPS_PORT");
     expect(compose).not.toContain("DANO_TLS_CERT_PATH");
     expect(compose).not.toContain("DANO_TLS_KEY_PATH");
@@ -1229,20 +1213,17 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       readFileSync(join(deployDir, "docker-compose.exposure.yml"), "utf8"),
     ).toContain("80:80");
     expect(readFileSync(nginxConf, "utf8")).toContain("listen 80");
-    expect(
-      readFileSync(join(deployDir, "nginx/demo-auth.conf.template"), "utf8"),
-    ).toContain("DANO_DEMO_JWT");
+    expect(existsSync(join(deployDir, "nginx/demo-auth.conf.template"))).toBe(
+      false,
+    );
     expect(
       readFileSync(join(deployDir, "nginx/shared/proxy-server.conf"), "utf8"),
     ).toContain("location /");
     expect(readFileSync(join(deployDir, ".env"), "utf8")).toContain(
       `DANO_RUNTIME_DIR=${runtimeDir}`,
     );
-    expect(readFileSync(join(deployDir, ".env"), "utf8")).toContain(
-      "DANO_AUTH_JWT_SECRET=",
-    );
-    expect(readFileSync(join(deployDir, ".env"), "utf8")).toContain(
-      "DANO_DEMO_JWT=",
+    expect(readFileSync(join(deployDir, ".env"), "utf8")).not.toMatch(
+      /DANO_(?:AUTH_JWT|DEMO)/,
     );
     expect(JSON.parse(logLines[0])).toEqual([
       "build",
@@ -1269,6 +1250,23 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "run",
       "--rm",
       "--no-deps",
+      "--entrypoint",
+      "node",
+      "app",
+      "./dist/server/main.js",
+      "--validate-config",
+    ]);
+    expect(JSON.parse(logLines[3])).toEqual([
+      "compose",
+      "-f",
+      "docker-compose.yml",
+      "-f",
+      "docker-compose.exposure.yml",
+      "--env-file",
+      ".env",
+      "run",
+      "--rm",
+      "--no-deps",
       "app",
       "node",
       "./deploy/render-system-prompt.mjs",
@@ -1276,7 +1274,7 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "/app/deploy/runtime-defaults/SYSTEM.md",
       "/opt/dano/runtime-data/.pi/agent/SYSTEM.md",
     ]);
-    expect(JSON.parse(logLines[3])).toEqual([
+    expect(JSON.parse(logLines[4])).toEqual([
       "compose",
       "-f",
       "docker-compose.yml",
@@ -1288,7 +1286,54 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "-d",
       "--no-build",
     ]);
-    expect(logLines[4]).toBe("smoke");
+    expect(logLines[5]).toBe("smoke");
+  });
+
+  it("stops a release before switching containers when configuration validation fails", () => {
+    const markerRoot = mkdtempSync(join(tmpdir(), "dano-release-gate-"));
+    tempDirs.push(markerRoot);
+    const switchMarker = join(markerRoot, "switched");
+    const deployDir = join(markerRoot, "deploy");
+    mkdirSync(deployDir);
+    writeFileSync(
+      join(deployDir, ".env"),
+      "DANO_DEMO_JWT=legacy-token\nDANO_OPERATOR_VALUE=preserve-me\n",
+    );
+    expect(() =>
+      runRelease({
+        deployDir,
+        env: {
+          DANO_FAKE_CONFIG_INVALID: "1",
+          DANO_FAKE_SWITCH_MARKER: switchMarker,
+        },
+      }),
+    ).toThrow();
+    expect(existsSync(switchMarker)).toBe(false);
+    expect(readFileSync(join(deployDir, ".env"), "utf8")).toContain(
+      "DANO_DEMO_JWT=legacy-token",
+    );
+  });
+
+  it("removes only fixed Demo values after a successful production gate", () => {
+    const markerRoot = mkdtempSync(join(tmpdir(), "dano-release-cleanup-"));
+    tempDirs.push(markerRoot);
+    const deployDir = join(markerRoot, "deploy");
+    mkdirSync(deployDir);
+    writeFileSync(
+      join(deployDir, ".env"),
+      [
+        "DANO_DEMO_JWT=legacy-token",
+        "DANO_AUTH_JWT_SECRET=legacy-secret",
+        "DANO_OPERATOR_VALUE=preserve-me",
+        "",
+      ].join("\n"),
+    );
+
+    runRelease({ deployDir });
+
+    const env = readFileSync(join(deployDir, ".env"), "utf8");
+    expect(env).not.toMatch(/DANO_(?:DEMO_JWT|AUTH_JWT_SECRET)=/);
+    expect(env).toContain("DANO_OPERATOR_VALUE=preserve-me");
   });
 
   it("does not expose a production node-binary override", () => {

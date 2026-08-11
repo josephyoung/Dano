@@ -9,6 +9,11 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve, sep } from "node:path";
+import { isIP } from "node:net";
+import {
+  checkServerIdentity,
+  connect as connectTls,
+} from "node:tls";
 import { fileURLToPath } from "node:url";
 import {
   resolveProductName,
@@ -43,6 +48,9 @@ const DEFAULT_DANO_UPLOAD_ORPHANED_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_DANO_ANONYMOUS_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DANO_ANONYMOUS_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_DANO_LOGIN_SESSION_IDLE_TTL_MS = 8 * 60 * 60 * 1000;
+const DEFAULT_DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_RUNTIME_SETTINGS_FILES = [
   "SYSTEM.md",
   "settings.json",
@@ -88,6 +96,7 @@ export interface DanoServerOptions {
   guestCookieSecure: boolean;
   staticDir?: string;
   help: boolean;
+  validateConfig: boolean;
   userAuthentication?: {
     secret: string;
     issuer?: string;
@@ -106,8 +115,18 @@ export interface DanoServerOptions {
       version: string;
       key: Uint8Array;
     };
+    session: {
+      idleTtlMs: number;
+      absoluteTtlMs: number;
+      cleanupIntervalMs: number;
+    };
   };
 }
+
+type OAuthAuthenticationConfig = NonNullable<
+  DanoServerOptions["oauthAuthentication"]
+>;
+export type OAuthProviderTlsProbe = (endpoint: URL) => Promise<void>;
 
 function printHelp(): void {
   console.log(`Dano server
@@ -122,6 +141,7 @@ Options:
   --sessions-root <path>     Base directory for per-User session roots (env: DANO_SESSIONS_ROOT, default: DANO_RUNTIME_DIR/${DEFAULT_DANO_SESSIONS_DIR})
   --empty-state-text <text>  Empty transcript text (env: DANO_EMPTY_STATE_TEXT, default: ${DEFAULT_EMPTY_STATE.content})
   --empty-state-html <html>  Empty transcript HTML (env: DANO_EMPTY_STATE_HTML)
+  --validate-config          Validate production configuration without listening
   --help                     Show this help
 `);
 }
@@ -234,6 +254,7 @@ function readUserAuthentication(
 function readOAuthAuthentication(
   env: Record<string, string | undefined>,
 ): DanoServerOptions["oauthAuthentication"] {
+  const production = env.NODE_ENV === "production";
   const names = [
     "DANO_OAUTH_ISSUER",
     "DANO_OAUTH_AUTHORIZATION_ENDPOINT",
@@ -250,13 +271,50 @@ function readOAuthAuthentication(
   const values = Object.fromEntries(
     names.map(name => [name, env[name]?.trim() || undefined]),
   ) as Record<(typeof names)[number], string | undefined>;
-  if (names.every(name => values[name] === undefined)) return undefined;
+  if (names.every(name => values[name] === undefined)) {
+    if (production) throw new Error("OAuth configuration is required in production");
+    return undefined;
+  }
   if (names.some(name => values[name] === undefined)) {
     throw new Error("OAuth configuration is incomplete");
   }
   const redirectUri = new URL(values.DANO_OAUTH_REDIRECT_URI!);
-  if (redirectUri.pathname !== "/api/auth/callback") {
+  if (
+    redirectUri.pathname !== "/api/auth/callback" ||
+    redirectUri.search ||
+    redirectUri.hash ||
+    redirectUri.username ||
+    redirectUri.password
+  ) {
     throw new Error("OAuth redirect URI must use /api/auth/callback");
+  }
+  const providerUrls = [
+    ["issuer", new URL(values.DANO_OAUTH_ISSUER!)],
+    ["authorization endpoint", new URL(values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!)],
+    ["token endpoint", new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!)],
+    ["identity endpoint", new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!)],
+    ["API origin", new URL(values.DANO_OAUTH_API_ORIGIN!)],
+  ] as const;
+  for (const [name, url] of providerUrls) {
+    if (url.username || url.password || url.hash) {
+      throw new Error(`OAuth ${name} is not trusted`);
+    }
+    if (url.protocol !== "https:") {
+      throw new Error(`OAuth ${name} must use HTTPS`);
+    }
+  }
+  const localHttpCallback =
+    !production &&
+    redirectUri.protocol === "http:" &&
+    (redirectUri.hostname === "localhost" ||
+      redirectUri.hostname === "127.0.0.1" ||
+      redirectUri.hostname === "[::1]");
+  if (redirectUri.protocol !== "https:" && !localHttpCallback) {
+    throw new Error("OAuth redirect URI must use trusted HTTPS");
+  }
+  const providerApiUrl = providerUrls[4][1];
+  if (providerApiUrl.pathname !== "/" || providerApiUrl.search) {
+    throw new Error("OAuth API origin must not include a path or query");
   }
   const encodedKey = values.DANO_OAUTH_CREDENTIAL_KEY!;
   if (!/^[A-Za-z0-9_-]+$/.test(encodedKey)) {
@@ -266,10 +324,32 @@ function readOAuthAuthentication(
   if (key.byteLength !== 32) {
     throw new Error("OAuth credential key must decode to 32 bytes");
   }
+  const session = {
+    idleTtlMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_LOGIN_SESSION_IDLE_TTL_MS",
+      DEFAULT_DANO_LOGIN_SESSION_IDLE_TTL_MS,
+    ),
+    absoluteTtlMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS",
+      DEFAULT_DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS,
+    ),
+    cleanupIntervalMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS",
+      DEFAULT_DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS,
+    ),
+  };
+  if (session.absoluteTtlMs <= session.idleTtlMs) {
+    throw new Error(
+      "OAuth Login Session absolute TTL must be greater than idle TTL",
+    );
+  }
   return {
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
-    providerApiOrigin: new URL(values.DANO_OAUTH_API_ORIGIN!).origin,
+    providerApiOrigin: providerApiUrl.origin,
     provider: {
       issuer: new URL(values.DANO_OAUTH_ISSUER!).href,
       authorizationEndpoint: new URL(
@@ -285,7 +365,82 @@ function readOAuthAuthentication(
       version: values.DANO_OAUTH_CREDENTIAL_KEY_VERSION!,
       key,
     },
+    session,
   };
+}
+
+function assertProductionAuthenticationEnvironment(
+  env: Record<string, string | undefined>,
+): void {
+  if (env.NODE_ENV !== "production") return;
+  const legacyNames = [
+    "DANO_AUTH_JWT_SECRET",
+    "DANO_AUTH_JWT_ISSUER",
+    "DANO_AUTH_JWT_AUDIENCE",
+    "DANO_AUTH_COOKIE_NAME",
+    "DANO_DEMO_JWT",
+    "DANO_DEMO_COOKIE_EXPIRES",
+  ];
+  if (legacyNames.some(name => env[name]?.trim())) {
+    throw new Error("Demo authentication is not allowed in production");
+  }
+  const tlsOverride = env.NODE_TLS_REJECT_UNAUTHORIZED?.trim();
+  if (tlsOverride && tlsOverride !== "1") {
+    throw new Error("TLS certificate verification cannot be disabled in production");
+  }
+}
+
+export async function validateOAuthProviderTls(
+  config: OAuthAuthenticationConfig,
+  probe: OAuthProviderTlsProbe = probeOAuthProviderTls,
+): Promise<void> {
+  const endpoints = [
+    config.provider.issuer,
+    config.provider.authorizationEndpoint,
+    config.provider.tokenEndpoint,
+    config.provider.identityEndpoint,
+    config.providerApiOrigin,
+  ];
+  const origins = [
+    ...new Map(endpoints.map(value => {
+      const url = new URL(value);
+      return [url.origin, new URL(url.origin)] as const;
+    })).values(),
+  ];
+  try {
+    await Promise.all(origins.map(origin => probe(origin)));
+  } catch {
+    throw new Error("OAuth provider TLS validation failed");
+  }
+}
+
+function probeOAuthProviderTls(endpoint: URL): Promise<void> {
+  return new Promise((resolveProbe, rejectProbe) => {
+    const hostname = endpoint.hostname.replace(/^\[|\]$/g, "");
+    let settled = false;
+    const socket = connectTls({
+      host: hostname,
+      port: endpoint.port ? Number(endpoint.port) : 443,
+      rejectUnauthorized: true,
+      ...(isIP(hostname) === 0 ? { servername: hostname } : {}),
+      checkServerIdentity: (_servername, certificate) =>
+        checkServerIdentity(hostname, certificate),
+    });
+    const fail = (): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      rejectProbe(new Error("TLS validation failed"));
+    };
+    socket.setTimeout(10_000, fail);
+    socket.once("error", fail);
+    socket.once("secureConnect", () => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveProbe();
+    });
+  });
 }
 
 function readGuestCookieSecure(
@@ -432,6 +587,7 @@ export function parseDanoServerOptions(
   env: Record<string, string | undefined> = process.env,
   danoConfig: DanoConfig = loadDanoConfig({ cwd: process.cwd(), env }),
 ): DanoServerOptions {
+  assertProductionAuthenticationEnvironment(env);
   let host = readHost(env);
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
@@ -459,6 +615,7 @@ export function parseDanoServerOptions(
   const guestCookieSecure = readGuestCookieSecure(env);
   const staticDirOverride = env.DANO_STATIC_DIR?.trim();
   let help = false;
+  let validateConfig = false;
 
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
@@ -470,6 +627,9 @@ export function parseDanoServerOptions(
       case "--help":
       case "-h":
         help = true;
+        continue;
+      case "--validate-config":
+        validateConfig = true;
         continue;
       case "--host": {
         const next = argv[index + 1];
@@ -557,6 +717,7 @@ export function parseDanoServerOptions(
       ? resolve(cwd, staticDirOverride)
       : resolveDefaultStaticDir(fileURLToPath(import.meta.url)),
     help,
+    validateConfig,
     userAuthentication,
     oauthAuthentication,
   };
@@ -679,6 +840,11 @@ async function runDanoServer(
         provider: oauthProvider,
         credentialEncryptionKey:
           options.oauthAuthentication.credentialEncryptionKey,
+        sessionIdleTtlMs: options.oauthAuthentication.session.idleTtlMs,
+        sessionAbsoluteTtlMs:
+          options.oauthAuthentication.session.absoluteTtlMs,
+        sessionGcIntervalMs:
+          options.oauthAuthentication.session.cleanupIntervalMs,
       })
     : undefined;
   const jwtAuthentication = options.userAuthentication
@@ -805,6 +971,13 @@ async function runDanoMain(): Promise<number> {
 
   if (options.help) {
     printHelp();
+    return 0;
+  }
+  if (process.env.NODE_ENV === "production" && options.oauthAuthentication) {
+    await validateOAuthProviderTls(options.oauthAuthentication);
+  }
+  if (options.validateConfig) {
+    console.log("[dano] Production configuration is valid.");
     return 0;
   }
 

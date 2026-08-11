@@ -6,6 +6,15 @@ export interface ExternalIdentity {
   readonly avatarUrl?: string;
 }
 
+export class OAuthProviderContractError extends Error {
+  readonly code = "provider_identity_invalid" as const;
+
+  constructor() {
+    super("Provider identity response does not match the configured contract");
+    this.name = "OAuthProviderContractError";
+  }
+}
+
 export interface ProviderCredential {
   readonly accessToken: string;
   readonly refreshToken?: string;
@@ -143,19 +152,19 @@ function tokenResponseCredential(
 
 function parseExternalIdentity(value: unknown): ExternalIdentity {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Provider identity response is invalid");
+    throw new OAuthProviderContractError();
   }
   const identity = value as Record<string, unknown>;
   if (typeof identity.userId !== "string" || !identity.userId.trim()) {
-    throw new Error("Provider identity is missing userId");
+    throw new OAuthProviderContractError();
   }
   return {
-    userId: identity.userId,
+    userId: identity.userId.trim(),
     ...(typeof identity.displayName === "string" && identity.displayName.trim()
-      ? { displayName: identity.displayName }
+      ? { displayName: identity.displayName.trim() }
       : {}),
     ...(typeof identity.avatarUrl === "string" && identity.avatarUrl.trim()
-      ? { avatarUrl: identity.avatarUrl }
+      ? { avatarUrl: identity.avatarUrl.trim() }
       : {}),
   };
 }

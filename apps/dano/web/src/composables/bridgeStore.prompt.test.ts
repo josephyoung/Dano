@@ -124,6 +124,59 @@ describe("Bridge prompt acceptance", () => {
     bridge.disconnect();
   });
 
+  it("shows a recoverable login failure from one-time auth current state", async () => {
+    let currentReads = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        currentReads += 1;
+        return new Response(
+          JSON.stringify({
+            status: "anonymous",
+            authError: { code: "provider_identity_invalid" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(input) === "/api/clients") {
+        return new Response(
+          JSON.stringify({
+            client: { id: "client-1" },
+            eventsUrl: "/events",
+            messagesUrl: "/messages",
+            authentication: { status: "anonymous" },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+    window.history.replaceState({}, "", "/chat");
+    const assign = vi
+      .spyOn(window.location, "assign")
+      .mockImplementation(() => undefined);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+    await vi.waitFor(() => expect(eventSources).toHaveLength(1));
+    eventSources[0]!.open();
+    await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
+
+    expect(currentReads).toBe(1);
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    expect(bridge.notifications.at(-1)).toMatchObject({
+      message: "登录失败，请重试",
+      notifyType: "error",
+    });
+    bridge.login();
+    expect(assign).toHaveBeenCalledWith(
+      "/api/auth/login?returnTo=%2Fchat",
+    );
+    bridge.disconnect();
+  });
+
   it("restores reauthentication from auth current without creating a Bridge Client", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async input => {
       if (String(input) === "/api/auth/current") {

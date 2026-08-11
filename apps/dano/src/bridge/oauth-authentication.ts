@@ -10,10 +10,11 @@ import type * as http from "node:http";
 import * as path from "node:path";
 import { writeFile as writeFileAtomically } from "atomically";
 import { ensureSafeDirectory } from "./safe-directory.js";
-import type {
-  ExternalIdentity,
-  OAuthProviderAdapter,
-  ProviderCredential,
+import {
+  OAuthProviderContractError,
+  type ExternalIdentity,
+  type OAuthProviderAdapter,
+  type ProviderCredential,
 } from "./oauth-provider.js";
 export type {
   ExternalIdentity,
@@ -32,7 +33,9 @@ import {
 
 const FLOW_COOKIE_NAME = "dano_oauth_flow";
 const LOGIN_COOKIE_NAME = "dano_login";
+const AUTH_ERROR_COOKIE_NAME = "dano_auth_error";
 const STATE_TTL_MS = 10 * 60 * 1000;
+const AUTH_ERROR_TTL_MS = 5 * 60 * 1000;
 const SESSION_IDLE_TTL_MS = 8 * 60 * 60 * 1000;
 const SESSION_ABSOLUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_GC_INTERVAL_MS = 60 * 60 * 1000;
@@ -50,6 +53,8 @@ export interface OAuthAuthenticationOptions {
   };
   readonly now?: () => number;
   readonly stateTtlMs?: number;
+  readonly sessionIdleTtlMs?: number;
+  readonly sessionAbsoluteTtlMs?: number;
   readonly sessionGcIntervalMs?: number;
   readonly maxPendingTransactions?: number;
 }
@@ -88,6 +93,11 @@ export async function createOAuthAuthentication(
     "auth",
     "login-sessions",
   );
+  const errorsPath = path.resolve(
+    options.runtimeRootPath,
+    "auth",
+    "login-errors",
+  );
   const usersRootPath = path.resolve(options.runtimeRootPath, "users");
   await ensureSafeDirectory(transactionsPath, {
     recursive: true,
@@ -99,26 +109,44 @@ export async function createOAuthAuthentication(
     unsafeDirectoryError: () =>
       new Error("OAuth Login Session directory is not safe"),
   });
+  await ensureSafeDirectory(errorsPath, {
+    recursive: true,
+    unsafeDirectoryError: () =>
+      new Error("OAuth login error directory is not safe"),
+  });
   await Promise.all([
     fs.promises.chmod(transactionsPath, 0o700),
     fs.promises.chmod(sessionsPath, 0o700),
+    fs.promises.chmod(errorsPath, 0o700),
   ]);
   const now = options.now ?? Date.now;
   const stateTtlMs = options.stateTtlMs ?? STATE_TTL_MS;
+  const sessionIdleTtlMs = options.sessionIdleTtlMs ?? SESSION_IDLE_TTL_MS;
+  const sessionAbsoluteTtlMs =
+    options.sessionAbsoluteTtlMs ?? SESSION_ABSOLUTE_TTL_MS;
+  if (sessionAbsoluteTtlMs <= sessionIdleTtlMs) {
+    throw new Error(
+      "OAuth Login Session absolute TTL must be greater than idle TTL",
+    );
+  }
   const maxPendingTransactions =
     options.maxPendingTransactions ?? MAX_PENDING_TRANSACTIONS;
   await cleanupExpiredRecords(
     transactionsPath,
     sessionsPath,
+    errorsPath,
     now(),
     stateTtlMs,
+    sessionIdleTtlMs,
   );
   const cleanupInterval = setInterval(() => {
     void cleanupExpiredRecords(
       transactionsPath,
       sessionsPath,
+      errorsPath,
       now(),
       stateTtlMs,
+      sessionIdleTtlMs,
     ).catch(() => {});
   }, options.sessionGcIntervalMs ?? SESSION_GC_INTERVAL_MS);
   cleanupInterval.unref?.();
@@ -151,7 +179,7 @@ export async function createOAuthAuthentication(
     }
     const currentTime = now();
     if (
-      currentTime - session.lastActiveAt >= SESSION_IDLE_TTL_MS ||
+      currentTime - session.lastActiveAt >= sessionIdleTtlMs ||
       currentTime >= session.absoluteExpiresAt
     ) {
       await fs.promises.rm(recordPath, { force: true }).catch(() => {});
@@ -334,7 +362,16 @@ export async function createOAuthAuthentication(
       lifecycle: AuthHttpLifecycle,
     ): Promise<boolean> {
       if (req.method === "GET" && url.pathname === "/api/auth/current") {
-        const current = await resolveLoginSession(req.headers);
+        const [current, authError] = await Promise.all([
+          resolveLoginSession(req.headers),
+          consumeAuthError(req.headers, errorsPath, now()),
+        ]);
+        if (readCookie(req.headers.cookie, AUTH_ERROR_COOKIE_NAME)) {
+          res.setHeader("Set-Cookie", serializeExpiredAuthErrorCookie());
+        }
+        const authErrorDto = authError
+          ? { authError: { code: authError.code } }
+          : {};
         writeJson(
           res,
           200,
@@ -342,10 +379,11 @@ export async function createOAuthAuthentication(
             ? {
                 status: "authenticated",
                 user: toBrowserUserSummary(current.userContext.user),
+                ...authErrorDto,
               }
             : current?.status === "reauth_required"
-              ? { status: "reauth_required" }
-            : { status: "anonymous" },
+              ? { status: "reauth_required", ...authErrorDto }
+            : { status: "anonymous", ...authErrorDto },
         );
         return true;
       }
@@ -353,12 +391,14 @@ export async function createOAuthAuthentication(
         await handleCallback(req, res, url, {
           transactionsPath,
           sessionsPath,
+          errorsPath,
           redirectUri: redirectUri.href,
           provider: options.provider,
           encryptionKey: options.credentialEncryptionKey,
           usersRootPath,
           now,
           stateTtlMs,
+          sessionAbsoluteTtlMs,
           lifecycle,
         });
         return true;
@@ -527,6 +567,12 @@ interface StoredLoginSession {
   readonly credential?: StoredEncryptedCredential;
 }
 
+interface StoredAuthError {
+  readonly version: 1;
+  readonly code: "provider_identity_invalid" | "provider_login_failed";
+  readonly expiresAt: number;
+}
+
 async function handleCallback(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -534,12 +580,14 @@ async function handleCallback(
   options: {
     transactionsPath: string;
     sessionsPath: string;
+    errorsPath: string;
     redirectUri: string;
     provider: OAuthProviderAdapter;
     encryptionKey: OAuthAuthenticationOptions["credentialEncryptionKey"];
     usersRootPath: string;
     now: () => number;
     stateTtlMs: number;
+    sessionAbsoluteTtlMs: number;
     lifecycle: AuthHttpLifecycle;
   },
 ): Promise<void> {
@@ -584,7 +632,7 @@ async function handleCallback(
       user,
       createdAt,
       lastActiveAt: createdAt,
-      absoluteExpiresAt: createdAt + SESSION_ABSOLUTE_TTL_MS,
+      absoluteExpiresAt: createdAt + options.sessionAbsoluteTtlMs,
       credential: encryptCredential(
         credential,
         options.encryptionKey,
@@ -618,9 +666,29 @@ async function handleCallback(
       await options.provider.revokeCredential?.(credential).catch(() => {});
       throw error;
     }
-    redirectAfterCallback(res, consumed.transaction.returnTo, sessionId);
-  } catch {
-    redirectAfterCallback(res, consumed.transaction.returnTo);
+    redirectAfterCallback(
+      res,
+      consumed.transaction.returnTo,
+      sessionId,
+      options.sessionAbsoluteTtlMs,
+    );
+  } catch (error) {
+    const code =
+      error instanceof OAuthProviderContractError
+        ? error.code
+        : "provider_login_failed";
+    const authErrorId = await writeAuthError(
+      options.errorsPath,
+      code,
+      options.now(),
+    );
+    redirectAfterCallback(
+      res,
+      consumed.transaction.returnTo,
+      undefined,
+      options.sessionAbsoluteTtlMs,
+      authErrorId,
+    );
   } finally {
     await fs.promises.rm(consumed.consumedPath, { force: true }).catch(() => {});
   }
@@ -824,11 +892,66 @@ async function withKeyLock<T>(
   }
 }
 
+async function writeAuthError(
+  errorsPath: string,
+  code: StoredAuthError["code"],
+  now: number,
+): Promise<string> {
+  const id = randomOpaqueId();
+  await fs.promises.writeFile(
+    authErrorPath(errorsPath, id),
+    `${JSON.stringify({
+      version: 1,
+      code,
+      expiresAt: now + AUTH_ERROR_TTL_MS,
+    } satisfies StoredAuthError)}\n`,
+    { encoding: "utf8", flag: "wx", mode: 0o600 },
+  );
+  return id;
+}
+
+async function consumeAuthError(
+  headers: http.IncomingHttpHeaders,
+  errorsPath: string,
+  now: number,
+): Promise<StoredAuthError | null> {
+  const id = readCookie(headers.cookie, AUTH_ERROR_COOKIE_NAME);
+  if (!id) return null;
+  const sourcePath = authErrorPath(errorsPath, id);
+  const consumedPath = `${sourcePath}.${randomUUID()}.consumed`;
+  try {
+    await fs.promises.rename(sourcePath, consumedPath);
+    const error = parseAuthError(
+      await fs.promises.readFile(consumedPath, "utf8"),
+    );
+    return now < error.expiresAt ? error : null;
+  } catch {
+    return null;
+  } finally {
+    await fs.promises.rm(consumedPath, { force: true }).catch(() => {});
+  }
+}
+
+function parseAuthError(serialized: string): StoredAuthError {
+  const value = JSON.parse(serialized) as Partial<StoredAuthError>;
+  if (
+    value.version !== 1 ||
+    (value.code !== "provider_identity_invalid" &&
+      value.code !== "provider_login_failed") ||
+    typeof value.expiresAt !== "number"
+  ) {
+    throw new Error("OAuth login error is invalid");
+  }
+  return value as StoredAuthError;
+}
+
 async function cleanupExpiredRecords(
   transactionsPath: string,
   sessionsPath: string,
+  errorsPath: string,
   now: number,
   stateTtlMs: number,
+  sessionIdleTtlMs: number,
 ): Promise<void> {
   await countPendingTransactions(transactionsPath, "", now, stateTtlMs);
   for (const name of await fs.promises.readdir(sessionsPath)) {
@@ -839,9 +962,23 @@ async function cleanupExpiredRecords(
         await fs.promises.readFile(recordPath, "utf8"),
       );
       if (
-        now - session.lastActiveAt >= SESSION_IDLE_TTL_MS ||
+        now - session.lastActiveAt >= sessionIdleTtlMs ||
         now >= session.absoluteExpiresAt
       ) {
+        await fs.promises.rm(recordPath, { force: true });
+      }
+    } catch {
+      await fs.promises.rm(recordPath, { force: true }).catch(() => {});
+    }
+  }
+  for (const name of await fs.promises.readdir(errorsPath)) {
+    if (!name.endsWith(".json")) continue;
+    const recordPath = path.join(errorsPath, name);
+    try {
+      const error = parseAuthError(
+        await fs.promises.readFile(recordPath, "utf8"),
+      );
+      if (now >= error.expiresAt) {
         await fs.promises.rm(recordPath, { force: true });
       }
     } catch {
@@ -866,6 +1003,10 @@ function loginSessionPath(rootPath: string, sessionId: string): string {
   return path.join(rootPath, `${digest(sessionId)}.json`);
 }
 
+function authErrorPath(rootPath: string, id: string): string {
+  return path.join(rootPath, `${digest(id)}.json`);
+}
+
 function readCookie(header: string | undefined, name: string): string | null {
   for (const pair of header?.split(";") ?? []) {
     const separator = pair.indexOf("=");
@@ -884,14 +1025,24 @@ function serializeCookie(name: string, value: string): string {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 
-function serializeLoginCookie(sessionId: string): string {
+function serializeLoginCookie(sessionId: string, absoluteTtlMs: number): string {
   return `${serializeCookie(LOGIN_COOKIE_NAME, sessionId)}; Max-Age=${Math.floor(
-    SESSION_ABSOLUTE_TTL_MS / 1000,
+    absoluteTtlMs / 1000,
   )}`;
 }
 
 function serializeExpiredLoginCookie(): string {
   return `${serializeCookie(LOGIN_COOKIE_NAME, "")}; Max-Age=0`;
+}
+
+function serializeAuthErrorCookie(id: string): string {
+  return `${serializeCookie(AUTH_ERROR_COOKIE_NAME, id)}; Max-Age=${Math.floor(
+    AUTH_ERROR_TTL_MS / 1000,
+  )}`;
+}
+
+function serializeExpiredAuthErrorCookie(): string {
+  return `${serializeCookie(AUTH_ERROR_COOKIE_NAME, "")}; Max-Age=0`;
 }
 
 function sameOrigin(value: string | undefined, appOrigin: string): boolean {
@@ -907,10 +1058,16 @@ function redirectAfterCallback(
   res: http.ServerResponse,
   returnTo: string,
   sessionId?: string,
+  sessionAbsoluteTtlMs = SESSION_ABSOLUTE_TTL_MS,
+  authErrorId?: string,
 ): void {
   res.writeHead(303, {
     Location: returnTo,
-    ...(sessionId ? { "Set-Cookie": serializeLoginCookie(sessionId) } : {}),
+    ...(sessionId
+      ? { "Set-Cookie": serializeLoginCookie(sessionId, sessionAbsoluteTtlMs) }
+      : authErrorId
+        ? { "Set-Cookie": serializeAuthErrorCookie(authErrorId) }
+      : {}),
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
   });

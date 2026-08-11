@@ -127,53 +127,59 @@ operators can set the `OPEN_WEBSEARCH_*` values documented in `.env.example` to
 restrict engines or configure an explicit runtime proxy. Package-install proxy
 or registry settings remain separate from these runtime network settings.
 
-## Authenticated User Context
+## Production Authentication
 
-Dano can verify an HS256 JWT supplied as an `Authorization: Bearer` token or
-an HttpOnly cookie. Configure `DANO_AUTH_JWT_SECRET` to enable verification;
-`DANO_AUTH_JWT_ISSUER`, `DANO_AUTH_JWT_AUDIENCE`, and
-`DANO_AUTH_COOKIE_NAME` optionally constrain the token source (the cookie name
-defaults to `dano_auth`). Valid tokens require an unexpired `exp` and a safe,
-stable `sub`; `name` or `preferred_username` supplies the display name and
-`picture` may supply an HTTP(S) avatar URL.
+Production runs one OAuth confidential client and does not inject a fixed User
+or authentication Cookie. The required deployment values are:
 
-The verified `sub` maps to
-`$DANO_RUNTIME_DIR/users/<sub>/`. Dano rejects traversal-shaped subjects,
-symlink folder boundaries, invalid signatures, and client-supplied identity
-fields. Without a configured verifier or a verified token, Dano does not
-invent an anonymous User and does not expose a User Folder.
-
-Production releases initialize one fixed Demo identity in the Deploy Control
-Directory before Compose starts. On the first release,
-`scripts/init-demo-auth.mjs` creates a random `DANO_AUTH_JWT_SECRET` and one
-HS256 `DANO_DEMO_JWT` for `demo-user` / `演示用户`, then stores both in
-`/opt/dano/deploy/.env` with mode `0600`. Later releases verify the signature,
-identity claims, and expiration and reuse the exact pair. A one-sided pair,
-expired token, invalid signature, or changed Demo identity stops the release;
-the release never repairs the state by overwriting or rotating credentials.
-When `DANO_AUTH_JWT_ISSUER` or `DANO_AUTH_JWT_AUDIENCE` is configured, first
-initialization includes the matching claim and later releases reject a token
-that is incompatible with the active verifier constraints.
-
-For a manual Compose deployment, initialize the same persisted pair before
-starting the stack:
-
-```bash
-pnpm run deploy:init-demo-auth -- --file /opt/dano/deploy/.env
+```text
+DANO_OAUTH_ISSUER
+DANO_OAUTH_AUTHORIZATION_ENDPOINT
+DANO_OAUTH_TOKEN_ENDPOINT
+DANO_OAUTH_IDENTITY_ENDPOINT
+DANO_OAUTH_API_ORIGIN
+DANO_OAUTH_CLIENT_ID
+DANO_OAUTH_CLIENT_SECRET
+DANO_OAUTH_SCOPE
+DANO_OAUTH_REDIRECT_URI
+DANO_OAUTH_CREDENTIAL_KEY
+DANO_OAUTH_CREDENTIAL_KEY_VERSION
 ```
 
-When `DANO_DEMO_JWT` is present, nginx sets `dano_auth` on proxied HTML
-responses so a new browser authenticates before its first API request. The
-cookie is `Path=/`, `HttpOnly`, and `SameSite=Lax`; HTTPS responses also add
-`Secure`. Its persistent `Expires` value is derived from the signed JWT `exp`
-and never exceeds the token lifetime. Without `DANO_DEMO_JWT`, nginx does not
-emit the authentication cookie and Dano keeps its existing no-fallback
-behavior. `DANO_DEMO_COOKIE_EXPIRES` is derived metadata and should not be
-edited independently.
+The redirect URI must be the fixed `/api/auth/callback` URL. Provider
+server-to-server endpoints, the API origin, and the production callback must
+use trusted HTTPS. URL credentials, fragments, callback query parameters, a
+non-origin API value, global TLS verification bypass, incomplete configuration,
+and any residual fixed Demo/JWT authentication setting stop production startup.
+The Credential key is exactly 32 random bytes encoded as base64url; rotate its
+version together with its deployment-managed key. Do not put client secrets,
+Credential keys, tokens, account identifiers, or provider payloads in source,
+image layers, command arguments, logs, or test snapshots.
 
-The JWT is provided only to nginx and the app receives only the signing Secret.
-Neither value belongs in the Dockerfile, browser code, image build arguments,
-or Git.
+Login Session defaults are idle eight hours, absolute seven days, and hourly
+cleanup. They can be set with positive integer milliseconds:
+
+```text
+DANO_LOGIN_SESSION_IDLE_TTL_MS
+DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS
+DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS
+DANO_ANONYMOUS_IDLE_TTL_MS
+DANO_ANONYMOUS_CLEANUP_INTERVAL_MS
+```
+
+The absolute Login Session TTL must be greater than its idle TTL. Anonymous
+User data defaults to 24 hours idle with hourly cleanup.
+
+Release Build runs `node ./dist/server/main.js --validate-config` inside the
+new image with the container entrypoint bypassed before replacing containers.
+This Production Authentication Gate uses the same parser and provider TLS
+validation as normal production startup, and exits before Agent Config, local
+search, Runtime, or listener initialization. Failure leaves the running
+deployment unchanged. After a successful gate, the release atomically removes
+only legacy fixed-Demo keys from the Deploy Control Directory and starts the
+OAuth-only Compose configuration. Nginx forwards `/api/auth/*` Cookies and
+Origin; the exact callback location disables both access and error logs so code
+and state query values are not logged even when the upstream fails.
 
 The app container runs as the non-root `node` user (`1000:1000`) with
 `HOME=/home/node`. The image installs `/usr/bin/bwrap` setuid (`4755`) because
@@ -210,13 +216,16 @@ checkout under the system temporary directory. Start the Podman machine first
 when it is not already running. Run `smoke:deploy` and the browser acceptance
 steps below after `container:up` when validating a change.
 
-For the fixed Demo authentication flow, open `http://localhost:18082` in the
-Codex in-app Browser. Verify that the app identifies the fixed `演示用户`, change
-and reload the theme, then restore the original theme preference before
-handoff.
+The HTTP-only local example below validates Anonymous User, chat, upload, SSE,
+and deployment behavior. OAuth browser acceptance additionally requires a
+trusted HTTPS callback and a TLS-capable exposure mode (or an environment-owned
+TLS terminator); do not treat the HTTP example as OAuth acceptance. In the
+HTTPS browser flow, verify the login entry in the left Menu, clean callback
+return, authenticated Menu, logout, and the new usable Anonymous User.
 
 ```bash
 cp .env.example .env
+# Fill the required DANO_OAUTH_* values in .env before startup.
 docker build -t dano-app:local .
 DANO_NGINX_PORT=18082 pnpm run deploy:up
 DANO_SMOKE_BASE_URL=http://127.0.0.1:18082 pnpm run smoke:deploy
@@ -531,8 +540,10 @@ Release Build accepts `DANO_EXPOSURE_MODE` with these values:
 | `both` | HTTP and HTTPS | Redirects HTTP to the matching HTTPS path and query |
 | `both-no-redirect-http` | HTTP and HTTPS | Serves Dano directly on both protocols |
 
-The default is `http`, so existing deployments do not gain a TLS port or
-certificate requirement after upgrading.
+The default exposure mode is `http`, which can remain behind an environment
+owned TLS terminator. The public OAuth callback and provider server-to-server
+endpoints must still be configured with trusted HTTPS. Direct TLS exposure uses
+the modes below.
 
 TLS-capable modes require two environment-owned files:
 
@@ -589,6 +600,7 @@ The smoke test checks:
 - `GET /`
 - `GET /api/health`
 - `POST /api/clients`
+- the opaque, host-only Anonymous User Cookie and anonymous authentication DTO
 - `GET /api/clients/<id>/events`
 - `POST /api/clients/<id>/messages`
 - a matching SSE `response` or `event`
