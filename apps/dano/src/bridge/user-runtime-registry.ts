@@ -10,6 +10,7 @@ import { workspaceSessionDirectoryPath } from "./runtime-layout.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 
 export interface UserRuntimeContext {
+  readonly userId: string;
   readonly backend: DanoBackend;
   readonly defaultWorkspacePath: string;
   readonly sessionsRootPath: string;
@@ -80,6 +81,7 @@ export class UserRuntimeRegistry {
       ),
     });
     return {
+      userId: userContext.user.id,
       backend,
       defaultWorkspacePath,
       sessionsRootPath,

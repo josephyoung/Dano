@@ -15,7 +15,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { BridgeEventBus } from "./bridge-event-bus.js";
 import { getLanIps, isTailscaleIp } from "./network.js";
-import { UploadRegistry } from "./upload-registry.js";
+import {
+  UploadRegistry,
+  type StoredUpload,
+  type UploadAccess,
+} from "./upload-registry.js";
 import {
   toBrowserUserSummary,
   UserContextError,
@@ -52,6 +56,7 @@ export interface RpcConnectionHandler {
   readonly defaultWorkspacePath?: string;
   handleClientMessage(message: ClientMessage): void;
   currentGitCwd?(): string;
+  currentSessionId?(): string;
   dispose(): void;
 }
 
@@ -106,7 +111,10 @@ export class BridgeServer {
     this.handlerFactory = handlerFactory;
     this.eventBus = eventBus;
     this.emitEvent = emitEvent;
-    this.uploadRegistry = new UploadRegistry(config.upload);
+    this.uploadRegistry = new UploadRegistry({
+      ...config.upload,
+      requireOwnership: Boolean(userContextResolver),
+    });
   }
 
   async start(): Promise<{ host: string; port: number }> {
@@ -300,6 +308,7 @@ export class BridgeServer {
         await this.handleUploadPreview(
           res,
           decodeURIComponent(uploadPreviewMatch[1]),
+          url,
         );
         return;
       }
@@ -501,9 +510,12 @@ export class BridgeServer {
       mimeType,
       path: storagePath.filePath,
       relativePath: storagePath.relativePath,
-      previewUrl: `/api/uploads/${encodeURIComponent(storagePath.id)}/preview`,
+      previewUrl: uploadPreviewUrl(
+        storagePath.id,
+        this.clientUsers.has(ownerClientId) ? ownerClientId : undefined,
+      ),
     };
-    this.uploadRegistry.register(ref, { ownerClientId });
+    this.uploadRegistry.register(ref, this.getClientUploadAccess(ownerClientId));
     writeJson(res, 201, ref);
   }
 
@@ -538,9 +550,12 @@ export class BridgeServer {
       mimeType,
       path: filePath,
       relativePath,
-      previewUrl: `/api/uploads/${encodeURIComponent(id)}/preview`,
+      previewUrl: uploadPreviewUrl(
+        id,
+        this.clientUsers.has(ownerClientId) ? ownerClientId : undefined,
+      ),
     };
-    this.uploadRegistry.register(ref, { ownerClientId });
+    this.uploadRegistry.register(ref, this.getClientUploadAccess(ownerClientId));
     writeJson(res, 200, ref);
   }
 
@@ -556,10 +571,24 @@ export class BridgeServer {
   private async handleUploadPreview(
     res: http.ServerResponse,
     id: string,
+    url: URL,
   ): Promise<void> {
-    const ref = this.uploadRegistry.touch(id);
+    const stored = this.uploadRegistry.peek(id);
+    const clientId = url.searchParams.get("clientId");
+    if (stored?.ownerUserId && !clientId) {
+      writeJson(res, 403, { error: "Upload requires its bound Client" });
+      return;
+    }
+    const ref = this.uploadRegistry.touch(
+      id,
+      clientId ? this.getClientUploadAccess(clientId) : undefined,
+    );
     if (!ref) {
-      writeJson(res, 404, { error: "Upload was not found" });
+      writeJson(res, stored ? 403 : 404, {
+        error: stored
+          ? "Upload does not belong to this Client"
+          : "Upload was not found",
+      });
       return;
     }
 
@@ -638,7 +667,16 @@ export class BridgeServer {
       writeJson(res, 403, { error: "Upload does not belong to this client" });
       return;
     }
-    const upload = this.uploadRegistry.touch(id);
+    const access = this.getClientUploadAccess(clientId);
+    const stored = this.uploadRegistry.peek(id);
+    if (
+      stored?.ownerClientId !== clientId &&
+      stored?.ownerClientId &&
+      !this.clients.has(stored.ownerClientId)
+    ) {
+      this.uploadRegistry.resolve(stored, access);
+    }
+    const upload = this.uploadRegistry.touch(id, access);
     if (!upload) {
       writeJson(res, 404, { error: "Upload was not found" });
       return;
@@ -651,7 +689,7 @@ export class BridgeServer {
       writeJson(res, 409, { error: "Upload is currently being read" });
       return;
     }
-    this.uploadRegistry.markOrphaned(id);
+    this.uploadRegistry.markOrphaned(id, access);
     writeJson(res, 202, { status: "orphaned" });
   }
 
@@ -732,7 +770,22 @@ export class BridgeServer {
 
     if (!clientId && previewMatch?.[1]) {
       const upload = this.uploadRegistry.peek(decodeURIComponent(previewMatch[1]));
-      clientId = upload?.ownerClientId;
+      const requestedClientId = url.searchParams.get("clientId") ?? undefined;
+      if (
+        upload?.ownerUserId &&
+        (!requestedClientId || !this.clients.has(requestedClientId))
+      ) {
+        clientId =
+          requestedClientId &&
+          upload.previousClientIds.includes(requestedClientId) &&
+          upload.ownerClientId &&
+          this.clients.has(upload.ownerClientId)
+            ? upload.ownerClientId
+            : await this.recoverUploadClient(req, upload);
+        if (clientId) url.searchParams.set("clientId", clientId);
+      } else {
+        clientId = requestedClientId ?? upload?.ownerClientId;
+      }
     }
 
     if (
@@ -767,6 +820,49 @@ export class BridgeServer {
       throw new UserContextError(403, "Client belongs to another User");
     }
     return boundUser;
+  }
+
+  private getClientUploadAccess(clientId: string): UploadAccess {
+    return {
+      ownerUserId: this.clientUsers.get(clientId)?.user.id,
+      ownerClientId: clientId,
+      workspacePath: this.getClientWorkspacePath(clientId),
+      sessionId: this.handlers.get(clientId)?.currentSessionId?.(),
+    };
+  }
+
+  private async recoverUploadClient(
+    req: http.IncomingMessage,
+    upload: StoredUpload,
+  ): Promise<string | undefined> {
+    if (
+      !upload ||
+      !upload.ownerUserId ||
+      !upload.sessionId ||
+      (upload.ownerClientId && this.clients.has(upload.ownerClientId)) ||
+      !this.userContextResolver
+    ) {
+      return undefined;
+    }
+    const requestUser = await this.userContextResolver.resolve(req.headers);
+    if (!requestUser) {
+      throw new UserContextError(401, "Authenticated User is required");
+    }
+    if (requestUser.user.id !== upload.ownerUserId) {
+      throw new UserContextError(403, "Upload belongs to another User");
+    }
+
+    for (const [clientId, clientUser] of this.clientUsers) {
+      if (clientUser.user.id !== upload.ownerUserId) continue;
+      let access: UploadAccess;
+      try {
+        access = this.getClientUploadAccess(clientId);
+      } catch {
+        continue;
+      }
+      if (this.uploadRegistry.resolve(upload, access)) return clientId;
+    }
+    return undefined;
   }
 
   private openEventStream(
@@ -1031,6 +1127,13 @@ function normalizeUploadName(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const base = path.basename(value.trim());
   return base && base !== "." && base !== ".." ? base : null;
+}
+
+function uploadPreviewUrl(id: string, clientId?: string): string {
+  const route = `/api/uploads/${encodeURIComponent(id)}/preview`;
+  return clientId
+    ? `${route}?clientId=${encodeURIComponent(clientId)}`
+    : route;
 }
 
 function workspacePreviewMimeType(filePath: string): string {

@@ -67,6 +67,7 @@ function createServer(
       : {
           handleClientMessage: vi.fn(),
           currentGitCwd: () => workspaceDir,
+          currentSessionId: () => "test-agent-session",
           dispose: vi.fn(),
         };
   const userContextResolver = auth?.secret

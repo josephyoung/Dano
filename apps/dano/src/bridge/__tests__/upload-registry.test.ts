@@ -197,4 +197,148 @@ describe("UploadRegistry", () => {
     expect(fs.existsSync(partPath)).toBe(false);
     expect(fs.existsSync(ignoredPath)).toBe(true);
   });
+
+  it("restores User-owned upload metadata without guessing ownership", async () => {
+    const config = {
+      uploadDir: tmpDir,
+      maxTotalBytes: 1024,
+      draftTtlMs: DAY,
+      referencedTtlMs: DAY * 2,
+      orphanedTtlMs: 5 * 60 * 1000,
+      cleanupIntervalMs: 60 * 60 * 1000,
+      now: () => now,
+      requireOwnership: true,
+    };
+    const workspacePath = path.join(tmpDir, "users", "alice", "workspace");
+    const first = new UploadRegistry(config);
+    await first.initialize();
+    const { id, filePath, relativePath } = await first.createFilePath(
+      workspacePath,
+      "4".repeat(64),
+      "restart.txt",
+    );
+    fs.writeFileSync(filePath, "persistent upload");
+    first.register(
+      {
+        id,
+        name: "restart.txt",
+        size: 17,
+        mimeType: "text/plain",
+        path: filePath,
+        relativePath,
+        previewUrl: `/api/uploads/${id}/preview`,
+      },
+      {
+        ownerUserId: "alice",
+        ownerClientId: "alice-client-before-restart",
+        workspacePath,
+        sessionId: "alice-session",
+      },
+    );
+    await first.dispose();
+
+    const restored = new UploadRegistry(config);
+    await restored.initialize();
+
+    expect(restored.peek(id)).toMatchObject({
+      ownerUserId: "alice",
+      ownerClientId: "alice-client-before-restart",
+      workspacePath: path.resolve(workspacePath),
+      sessionId: "alice-session",
+      path: filePath,
+    });
+    await expect(
+      restored.deleteUpload(id, {
+        ownerUserId: "bob",
+        ownerClientId: "bob-client",
+        workspacePath,
+        sessionId: "alice-session",
+      }),
+    ).resolves.toBe(false);
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    await restored.dispose();
+    const recordFile = fs.readdirSync(path.join(tmpDir, "records"))[0];
+    expect(recordFile).toBeTruthy();
+    fs.writeFileSync(path.join(tmpDir, "records", recordFile!), "not json");
+    const failClosed = new UploadRegistry(config);
+    await failClosed.initialize();
+    await failClosed.scanUploadDir(path.dirname(filePath));
+    expect(failClosed.peek(id)).toBeNull();
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("does not adopt an unindexed file as a User-owned orphan", async () => {
+    const workspacePath = path.join(tmpDir, "users", "alice", "workspace");
+    const workspaceUploadDir = path.join(workspacePath, "uploads");
+    fs.mkdirSync(workspaceUploadDir, { recursive: true });
+    const unknownPath = path.join(workspaceUploadDir, `${"5".repeat(64)}.txt`);
+    fs.writeFileSync(unknownPath, "unknown owner");
+    const uploads = new UploadRegistry({
+      uploadDir: tmpDir,
+      maxTotalBytes: 1024,
+      draftTtlMs: DAY,
+      referencedTtlMs: DAY * 2,
+      orphanedTtlMs: 5 * 60 * 1000,
+      cleanupIntervalMs: 60 * 60 * 1000,
+      now: () => now,
+      requireOwnership: true,
+    });
+    await uploads.initialize();
+
+    await uploads.scanUploadDir(workspaceUploadDir);
+
+    expect(uploads.getTotalBytes()).toBe(0);
+    expect(fs.existsSync(unknownPath)).toBe(true);
+    expect(fs.readdirSync(path.join(tmpDir, "records"))).toEqual([]);
+  });
+
+  it("does not delete another User's orphan while making upload capacity", async () => {
+    const uploads = new UploadRegistry({
+      uploadDir: tmpDir,
+      maxTotalBytes: 1024,
+      draftTtlMs: DAY,
+      referencedTtlMs: DAY * 2,
+      orphanedTtlMs: 5 * 60 * 1000,
+      cleanupIntervalMs: 60 * 60 * 1000,
+      now: () => now,
+      requireOwnership: true,
+    });
+    await uploads.initialize();
+    const registerOwned = async (userId: string, clientId: string) => {
+      const workspacePath = path.join(tmpDir, "users", userId, "workspace");
+      const { id, filePath, relativePath } = await uploads.createFilePath(
+        workspacePath,
+        (userId === "alice" ? "6" : "7").repeat(64),
+        `${userId}.txt`,
+      );
+      fs.writeFileSync(filePath, userId);
+      const access = {
+        ownerUserId: userId,
+        ownerClientId: clientId,
+        workspacePath,
+        sessionId: `${userId}-session`,
+      };
+      uploads.register(
+        {
+          id,
+          name: `${userId}.txt`,
+          size: userId.length,
+          mimeType: "text/plain",
+          path: filePath,
+          relativePath,
+        },
+        access,
+      );
+      uploads.markOrphaned(id, access);
+      return { filePath, workspacePath };
+    };
+    const alice = await registerOwned("alice", "alice-client");
+    const bob = await registerOwned("bob", "bob-client");
+
+    await uploads.cleanupBeforeUpload(1, bob.workspacePath);
+
+    expect(fs.existsSync(alice.filePath)).toBe(true);
+    expect(fs.existsSync(bob.filePath)).toBe(false);
+  });
 });

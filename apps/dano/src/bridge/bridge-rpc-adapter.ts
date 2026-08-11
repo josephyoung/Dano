@@ -94,7 +94,7 @@ import type {
   BridgeClient,
 } from "./types.js";
 import { detectWorkspaceEnvironments } from "./workspace-environment.js";
-import type { UploadRegistry } from "./upload-registry.js";
+import type { UploadAccess, UploadRegistry } from "./upload-registry.js";
 import type { FieldAssistService } from "./field-assist.js";
 import {
   canApplyFormInteractionTransition,
@@ -3113,12 +3113,16 @@ function uploadedFilesToProjectFileReferences(
   uploadRegistry: UploadRegistry,
   correlationId: string,
   workspacePath: string,
+  access?: UploadAccess,
 ): UploadedProjectFileRef[] | undefined {
   if (!files?.length) return undefined;
 
   const resolved: UploadedProjectFileRef[] = [];
   for (const file of files) {
-    const stored = uploadRegistry.resolve(file) as UploadedProjectFileRef | null;
+    const stored = uploadRegistry.resolve(file, {
+      ...access,
+      workspacePath,
+    }) as UploadedProjectFileRef | null;
     if (!stored) {
       throw new Error(`Uploaded file was not found: ${file.name}`);
     }
@@ -3148,7 +3152,12 @@ function uploadedFilesToProjectFileReferences(
   }
 
   for (const file of resolved) {
-    uploadRegistry.markReferenced(file.id, { correlationId });
+    uploadRegistry.markReferenced(
+      file.id,
+      access
+        ? { ...access, workspacePath, correlationId }
+        : { correlationId },
+    );
   }
   return resolved;
 }
@@ -5229,6 +5238,7 @@ class SessionStatsPusher {
 export type RpcAdapterSend = (message: ServerMessage) => void;
 
 export interface BridgeRuntimeScope {
+  readonly userId: string;
   readonly sessionsRootPath: string;
   ownsSessionPath(candidatePath: string): boolean;
   ownsWorkspacePath(candidatePath: string): boolean;
@@ -5330,6 +5340,24 @@ export class BridgeRpcAdapter {
 
   currentGitCwd(): string {
     return this.sessionRuntime.currentGitCwd();
+  }
+
+  currentSessionId(): string {
+    return this.sessionRuntime.currentSessionManager().getSessionId();
+  }
+
+  private currentUploadAccess(
+    sessionId: string,
+    sourceSessionId?: string,
+  ): UploadAccess | undefined {
+    if (!this.runtimeScope) return undefined;
+    return {
+      ownerUserId: this.runtimeScope.userId,
+      ownerClientId: this.client.id,
+      workspacePath: this.sessionRuntime.currentGitCwd(),
+      sessionId,
+      sourceSessionId,
+    };
   }
 
   /* ------------------------------------------------------------------------
@@ -6233,6 +6261,9 @@ export class BridgeRpcAdapter {
 
       case "prompt": {
         const transcriptImages = normalizeRpcImages(command.images);
+        const sourceSessionId = this.sessionRuntime
+          .currentSessionManager()
+          .getSessionId();
 
         // Auto-create a detached session when no session is selected.
         // Without this, the fallback calls this.context.actions.sendUserMessage() which
@@ -6249,6 +6280,7 @@ export class BridgeRpcAdapter {
           this.uploadRegistry,
           correlationId,
           this.sessionRuntime.currentGitCwd(),
+          this.currentUploadAccess(session.sessionId, sourceSessionId),
         );
         const images = mergeRpcImages(
           transcriptImages,
@@ -6347,6 +6379,9 @@ export class BridgeRpcAdapter {
           this.uploadRegistry,
           correlationId,
           this.sessionRuntime.currentGitCwd(),
+          this.currentUploadAccess(
+            this.sessionRuntime.currentSessionManager().getSessionId(),
+          ),
         );
         const images = mergeRpcImages(
           transcriptImages,
@@ -6398,6 +6433,9 @@ export class BridgeRpcAdapter {
           this.uploadRegistry,
           correlationId,
           this.sessionRuntime.currentGitCwd(),
+          this.currentUploadAccess(
+            this.sessionRuntime.currentSessionManager().getSessionId(),
+          ),
         );
         const images = mergeRpcImages(
           transcriptImages,
