@@ -1,4 +1,11 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 
 export function readEnvValues(content) {
   const values = new Map();
@@ -29,8 +36,31 @@ export function updateEnvText(content, values) {
 
 export function updateEnvFile(envFile, values) {
   const current = existsSync(envFile) ? readFileSync(envFile, "utf8") : "";
-  writeFileSync(envFile, updateEnvText(current, values), { mode: 0o600 });
-  chmodSync(envFile, 0o600);
+  writeEnvFileAtomically(envFile, updateEnvText(current, values));
+}
+
+export function removeEnvFileValues(envFile, names) {
+  if (!existsSync(envFile)) return;
+  const removals = new Set(names);
+  const next = readFileSync(envFile, "utf8")
+    .split(/\r?\n/)
+    .filter(line => {
+      const match = line.match(/^([A-Z][A-Z0-9_]*)=/);
+      return !match || !removals.has(match[1]);
+    })
+    .join("\n");
+  writeEnvFileAtomically(envFile, next.endsWith("\n") ? next : `${next}\n`);
+}
+
+function writeEnvFileAtomically(envFile, content) {
+  const temporary = `${envFile}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, content, { mode: 0o600, flush: true });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, envFile);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 function parseEnvValue(value) {

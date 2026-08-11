@@ -26,13 +26,14 @@
     "deploy:check-bash": "node scripts/check-bash-acceptance.mjs",
     "deploy:check-bash:container": "sh scripts/check-bash-acceptance-container.sh",
     "deploy:check-exposure": "node scripts/check-deploy-exposure.mjs",
-    "deploy:init-demo-auth": "node scripts/init-demo-auth.mjs",
     "dev:server": "pnpm -C apps/dano dev:server",
     "dev:web": "pnpm -C apps/dano dev:web",
     "secret:set": "node scripts/set-env-secret.mjs",
     "smoke:deploy": "node scripts/smoke-dano-deploy.mjs",
     "start": "pnpm -C apps/dano start",
     "test": "vitest run",
+    "test:auth-built-entrypoint": "pnpm run build:server && node scripts/check-production-auth-entrypoint.mjs",
+    "test:auth-release": "DANO_NGINX_RUNTIME_TEST=1 vitest run apps/dano/src/__tests__/main.test.ts apps/dano/src/__tests__/oauth-login-http.test.ts apps/dano/src/__tests__/anonymous-user-http.test.ts apps/dano/src/__tests__/user-runtime-isolation-http.test.ts apps/dano/src/bridge/__tests__/credential-broker.test.ts apps/dano/src/bridge/__tests__/anonymous-user-cleanup.test.ts apps/dano/web/src/layout/AppHeader.test.ts apps/dano/web/src/components/ReauthenticationDialog.test.ts apps/dano/web/src/composables/bridgeStore.prompt.test.ts apps/dano/src/bridge/__tests__/production-auth-deploy.test.ts && vitest run apps/dano/src/bridge/__tests__/deploy-compose.test.ts -t \"builds releases|stops a release|removes only fixed Demo\" && pnpm run test:auth-built-entrypoint && vitest run apps/dano/src/bridge/__tests__/bridge-rpc-adapter.test.ts -t \"projects provider_request results as JSON-safe transcript data\"",
     "test:watch": "vitest"
   },
   "devDependencies": {

@@ -3003,8 +3003,13 @@ function stopTransportForReauthentication() {
   rejectPendingRequests("Login is required again");
 }
 
+interface CurrentAuthenticationResult {
+  authentication: BridgeAuthenticationState;
+  authError?: "provider_identity_invalid" | "provider_login_failed";
+}
+
 async function readCurrentAuthentication(): Promise<
-  BridgeAuthenticationState | undefined
+  CurrentAuthenticationResult | undefined
 > {
   try {
     const response = await fetch("/api/auth/current", {
@@ -3016,8 +3021,21 @@ async function readCurrentAuthentication(): Promise<
       return undefined;
     }
     const status = (value as { status?: unknown }).status;
+    const authErrorValue = (value as { authError?: unknown }).authError;
+    const authErrorCode =
+      authErrorValue && typeof authErrorValue === "object"
+        ? (authErrorValue as { code?: unknown }).code
+        : undefined;
+    const authError =
+      authErrorCode === "provider_identity_invalid" ||
+      authErrorCode === "provider_login_failed"
+        ? authErrorCode
+        : undefined;
     if (status === "anonymous" || status === "reauth_required") {
-      return { status };
+      return {
+        authentication: { status },
+        ...(authError ? { authError } : {}),
+      };
     }
     if (status !== "authenticated") return undefined;
     const user = (value as { user?: unknown }).user;
@@ -3031,11 +3049,14 @@ async function readCurrentAuthentication(): Promise<
     const username = (user as { username: string }).username;
     const avatarUrl = (user as { avatarUrl?: unknown }).avatarUrl;
     return {
-      status: "authenticated",
-      user: {
-        username,
-        ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
+      authentication: {
+        status: "authenticated",
+        user: {
+          username,
+          ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
+        },
       },
+      ...(authError ? { authError } : {}),
     };
   } catch {
     return undefined;
@@ -3094,8 +3115,13 @@ async function connectOnce(): Promise<boolean> {
 
   try {
     const currentAuthentication = await readCurrentAuthentication();
-    if (currentAuthentication) applyAuthentication(currentAuthentication);
-    if (currentAuthentication?.status === "reauth_required") {
+    if (currentAuthentication) {
+      applyAuthentication(currentAuthentication.authentication);
+      if (currentAuthentication.authError) {
+        pushNotification(t("authentication.loginFailed"), "error");
+      }
+    }
+    if (currentAuthentication?.authentication.status === "reauth_required") {
       _connectionStatus = "disconnected";
       return false;
     }

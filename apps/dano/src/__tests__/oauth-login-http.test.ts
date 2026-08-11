@@ -10,7 +10,10 @@ import {
   type OAuthAuthenticationOptions,
   type OAuthProviderAdapter,
 } from "../bridge/oauth-authentication.js";
-import { createOAuth2ProviderAdapter } from "../bridge/oauth-provider.js";
+import {
+  createOAuth2ProviderAdapter,
+  OAuthProviderContractError,
+} from "../bridge/oauth-provider.js";
 import {
   DEFAULT_BRIDGE_CONFIG,
   type ClientMessage,
@@ -354,7 +357,13 @@ describe("OAuth authentication over HTTP", () => {
   });
 
   it("uses openid-client for the confidential Authorization Code exchange without PKCE", async () => {
-    const fakeProvider = await startFakeProvider();
+    const identityFixture = JSON.parse(
+      fs.readFileSync(
+        new URL("./fixtures/oauth-external-identity.json", import.meta.url),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    const fakeProvider = await startFakeProvider({ identity: identityFixture });
     const provider = createOAuth2ProviderAdapter({
       issuer: fakeProvider.origin,
       authorizationEndpoint: `${fakeProvider.origin}/authorize`,
@@ -403,6 +412,16 @@ describe("OAuth authentication over HTTP", () => {
     expect(fakeProvider.identityAuthorization).toEqual([
       "Bearer fake-access-token",
     ]);
+    const current = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: cookieFrom(callback, "dano_login") },
+    });
+    expect(await current.json()).toEqual({
+      status: "authenticated",
+      user: {
+        username: "Fixture User",
+        avatarUrl: "https://avatar.invalid/profile.png",
+      },
+    });
   });
 
   it("uses openid-client to refresh and retains a refresh token omitted during rotation", async () => {
@@ -756,7 +775,9 @@ describe("OAuth authentication over HTTP", () => {
       { headers: { Cookie: guestCookie }, redirect: "manual" },
     );
 
-    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect(callback.headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=[A-Za-z0-9_-]{43};/,
+    );
     expect(revoked).toEqual(["rollback-token"]);
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
@@ -1061,19 +1082,11 @@ describe("OAuth authentication over HTTP", () => {
     expect(exchanges).toBe(0);
   });
 
-  it.each([
-    {
-      name: "invalid code",
-      fakeProvider: {
-        tokenStatus: 400,
-        tokenResponse: { error: "invalid_grant" },
-      },
-    },
-    {
-      name: "missing identity",
-      fakeProvider: { identity: { displayName: "Missing Identifier" } },
-    },
-  ])("leaves no partial state after $name", async ({ fakeProvider: setup }) => {
+  it("leaves no partial state after an invalid code", async () => {
+    const setup = {
+      tokenStatus: 400,
+      tokenResponse: { error: "invalid_grant" },
+    };
     const fakeProvider = await startFakeProvider(setup);
     const provider = createOAuth2ProviderAdapter({
       issuer: fakeProvider.origin,
@@ -1101,10 +1114,94 @@ describe("OAuth authentication over HTTP", () => {
       },
     );
 
-    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect(callback.status).toBe(303);
+    expect(callback.headers.get("location")).toBe("/failure");
+    const authErrorCookie = cookieFrom(callback, "dano_auth_error");
+    const current = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: authErrorCookie },
+    });
+    expect(await current.json()).toEqual({
+      status: "anonymous",
+      authError: { code: "provider_login_failed" },
+    });
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
     ).toEqual([]);
+  });
+
+  it("rejects an invalid provider identity with a sanitized contract error", async () => {
+    const fakeProvider = await startFakeProvider({
+      identity: {
+        displayName: "Missing Identifier",
+      },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "contract-client",
+      clientSecret: "contract-secret",
+      scope: "profile",
+      allowInsecureRequests: true,
+    });
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const started = await fetch(`${origin}/api/auth/login?returnTo=/failure`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fixture&state=${state}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.status).toBe(303);
+    expect(callback.headers.get("location")).toBe("/failure");
+    expect(callback.headers.get("location")).not.toMatch(/code=|state=/);
+    expect(callback.headers.get("cache-control")).toBe("no-store");
+    expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
+    const authErrorCookie = cookieFrom(callback, "dano_auth_error");
+    expect(authErrorCookie).toMatch(/^dano_auth_error=[A-Za-z0-9_-]{43}$/);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toEqual([]);
+    const firstCurrent = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: authErrorCookie },
+    });
+    expect(await firstCurrent.json()).toEqual({
+      status: "anonymous",
+      authError: { code: "provider_identity_invalid" },
+    });
+    expect(firstCurrent.headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/,
+    );
+    const secondCurrent = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: authErrorCookie },
+    });
+    expect(await secondCurrent.json()).toEqual({ status: "anonymous" });
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-errors")),
+    ).toEqual([]);
+
+    const retry = await fetch(`${origin}/api/auth/login?returnTo=/failure`, {
+      headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+      redirect: "manual",
+    });
+    expect(retry.status).toBe(303);
+    expect(new URL(retry.headers.get("location")!).pathname).toBe("/authorize");
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: "another-code",
+        state: "another-state",
+        redirectUri: "https://dano.example.test/api/auth/callback",
+      }),
+    ).rejects.toBeInstanceOf(OAuthProviderContractError);
   });
 
   it("leaves no partial state when credential encryption fails", async () => {
@@ -1146,7 +1243,9 @@ describe("OAuth authentication over HTTP", () => {
       },
     );
 
-    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect(callback.headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=[A-Za-z0-9_-]{43};/,
+    );
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
     ).toEqual([]);
@@ -1181,7 +1280,9 @@ describe("OAuth authentication over HTTP", () => {
       },
     );
 
-    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect(callback.headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=[A-Za-z0-9_-]{43};/,
+    );
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
     ).toEqual([]);
@@ -1224,7 +1325,9 @@ describe("OAuth authentication over HTTP", () => {
       },
     );
 
-    expect(callback.headers.get("set-cookie")).toBeNull();
+    expect(callback.headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=[A-Za-z0-9_-]{43};/,
+    );
     expect(fs.statSync(sessionsPath).isFile()).toBe(true);
   });
 

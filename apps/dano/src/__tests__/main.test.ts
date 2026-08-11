@@ -19,7 +19,28 @@ import {
   parseDanoServerOptions,
   readDanoPackageInfo,
   resolveDefaultStaticDir,
+  validateOAuthProviderTls,
 } from "../main.js";
+
+function oauthEnvironment(
+  overrides: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  return {
+    DANO_OAUTH_ISSUER: "https://provider.example.test",
+    DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+      "https://provider.example.test/authorize",
+    DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
+    DANO_OAUTH_IDENTITY_ENDPOINT: "https://provider.example.test/identity",
+    DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
+    DANO_OAUTH_CLIENT_ID: "dano-client",
+    DANO_OAUTH_CLIENT_SECRET: "test-client-secret",
+    DANO_OAUTH_SCOPE: "profile offline_access",
+    DANO_OAUTH_REDIRECT_URI: "https://dano.example.test/api/auth/callback",
+    DANO_OAUTH_CREDENTIAL_KEY: Buffer.alloc(32, 5).toString("base64url"),
+    DANO_OAUTH_CREDENTIAL_KEY_VERSION: "key-v1",
+    ...overrides,
+  };
+}
 
 describe("Dano main", () => {
   it("ships bash with pinned Heimdall guards", () => {
@@ -406,7 +427,7 @@ describe("Dano main", () => {
       DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
       DANO_OAUTH_IDENTITY_ENDPOINT:
         "https://provider.example.test/identity",
-      DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test/base-path",
+      DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
       DANO_OAUTH_CLIENT_ID: "dano-client",
       DANO_OAUTH_CLIENT_SECRET: "client-secret",
       DANO_OAUTH_SCOPE: "profile offline_access",
@@ -433,6 +454,11 @@ describe("Dano main", () => {
         version: "key-v1",
         key: Buffer.alloc(32, 5),
       },
+      session: {
+        idleTtlMs: 8 * 60 * 60 * 1000,
+        absoluteTtlMs: 7 * 24 * 60 * 60 * 1000,
+        cleanupIntervalMs: 60 * 60 * 1000,
+      },
     });
   });
 
@@ -444,9 +470,118 @@ describe("Dano main", () => {
     ).toThrow("OAuth configuration is incomplete");
   });
 
+  it("requires the complete OAuth configuration in production", () => {
+    expect(() =>
+      parseDanoServerOptions([], { NODE_ENV: "production" }),
+    ).toThrow("OAuth configuration is required in production");
+
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+      }).oauthAuthentication,
+    ).toBeDefined();
+  });
+
+  it("supports a configuration-only production startup gate", () => {
+    const options = parseDanoServerOptions(["--validate-config"], {
+      NODE_ENV: "production",
+      ...oauthEnvironment(),
+    });
+
+    expect(options.validateConfig).toBe(true);
+    expect(options.help).toBe(false);
+  });
+
+  it("actively validates each unique provider TLS origin with sanitized failures", async () => {
+    const configuration = parseDanoServerOptions(["--validate-config"], {
+      NODE_ENV: "production",
+      ...oauthEnvironment(),
+    }).oauthAuthentication!;
+    const probes: string[] = [];
+
+    await validateOAuthProviderTls(configuration, async endpoint => {
+      probes.push(endpoint.href);
+    });
+
+    expect(probes).toEqual([
+      "https://provider.example.test/",
+      "https://provider-api.example.test/",
+    ]);
+    await expect(
+      validateOAuthProviderTls(configuration, async endpoint => {
+        throw new Error(`private TLS detail for ${endpoint.href}`);
+      }),
+    ).rejects.toThrow("OAuth provider TLS validation failed");
+  });
+
+  it("rejects residual Demo authentication in production", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+        DANO_DEMO_JWT: "must-not-be-used",
+      }),
+    ).toThrow("Demo authentication is not allowed in production");
+
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+        DANO_AUTH_JWT_SECRET: "must-not-be-used",
+      }),
+    ).toThrow("Demo authentication is not allowed in production");
+  });
+
+  it("rejects untrusted production OAuth transport and callback configuration", () => {
+    for (const override of [
+      { DANO_OAUTH_TOKEN_ENDPOINT: "http://provider.example.test/token" },
+      { DANO_OAUTH_API_ORIGIN: "http://provider.example.test" },
+      { DANO_OAUTH_REDIRECT_URI: "http://dano.example.test/api/auth/callback" },
+      {
+        DANO_OAUTH_REDIRECT_URI:
+          "https://dano.example.test/api/auth/callback?next=/",
+      },
+      { NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+    ]) {
+      expect(() =>
+        parseDanoServerOptions([], {
+          NODE_ENV: "production",
+          ...oauthEnvironment(override),
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("configures Login Session lifetime and cleanup from deployment values", () => {
+    expect(
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_LOGIN_SESSION_IDLE_TTL_MS: "60000",
+        DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS: "120000",
+        DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS: "30000",
+      }).oauthAuthentication?.session,
+    ).toEqual({
+      idleTtlMs: 60_000,
+      absoluteTtlMs: 120_000,
+      cleanupIntervalMs: 30_000,
+    });
+
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_LOGIN_SESSION_IDLE_TTL_MS: "120000",
+        DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS: "60000",
+      }),
+    ).toThrow("absolute TTL must be greater than idle TTL");
+  });
+
   it("requires Secure guest Cookies in production and allows a local override", () => {
     expect(
-      parseDanoServerOptions([], { NODE_ENV: "production" }).guestCookieSecure,
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+      }).guestCookieSecure,
     ).toBe(true);
     expect(
       parseDanoServerOptions([], { NODE_ENV: "development" }).guestCookieSecure,
@@ -454,6 +589,7 @@ describe("Dano main", () => {
     expect(
       parseDanoServerOptions([], {
         NODE_ENV: "production",
+        ...oauthEnvironment(),
         DANO_GUEST_COOKIE_SECURE: "false",
       }).guestCookieSecure,
     ).toBe(true);
