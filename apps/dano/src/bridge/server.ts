@@ -124,7 +124,6 @@ export class BridgeServer {
   private activeUserOperations = new Map<string, number>();
   private transferringUserIds = new Set<string>();
   private sseStreams = new Map<string, Set<() => void>>();
-  private detachedSseClients = new Set<string>();
   private uploadRegistry: UploadRegistry;
   private cleanupInterval: ReturnType<typeof setInterval> | undefined;
   private readonly anonymousUserCleanup?: AnonymousUserCleanup;
@@ -810,7 +809,6 @@ export class BridgeServer {
       };
 
       this.clients.set(client.id, client);
-      this.detachedSseClients.add(client.id);
       if (user) this.clientUsers.set(client.id, user);
       const authentication =
         resolution?.authentication ??
@@ -843,7 +841,6 @@ export class BridgeServer {
         this.clientUsers.delete(client.id);
         this.clientAuthentication.delete(client.id);
         this.clientLoginSessions.delete(client.id);
-        this.detachedSseClients.delete(client.id);
         this.clients.delete(client.id);
         throw error;
       }
@@ -1044,7 +1041,6 @@ export class BridgeServer {
       res.write(formatSseMessage(message));
     };
     const unregister = this.eventBus.connectClient(clientId, send);
-    this.detachedSseClients.delete(clientId);
     let closed = false;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let removeStream = () => {};
@@ -1054,9 +1050,6 @@ export class BridgeServer {
       if (heartbeat) clearInterval(heartbeat);
       unregister();
       removeStream();
-      if (this.clients.has(clientId) && !this.sseStreams.has(clientId)) {
-        this.detachedSseClients.add(clientId);
-      }
       res.end();
     };
     removeStream = this.registerSseStream(clientId, closeStream);
@@ -1135,7 +1128,6 @@ export class BridgeServer {
     this.clientUsers.delete(clientId);
     this.clientAuthentication.delete(clientId);
     this.clientLoginSessions.delete(clientId);
-    this.detachedSseClients.delete(clientId);
     this.eventBus.unregisterClient(clientId);
     this.closeSseStreams(clientId);
   }
@@ -1302,7 +1294,7 @@ export class BridgeServer {
       .map(([clientId]) => clientId);
     const isActive =
       (this.activeUserOperations.get(userId) ?? 0) > 0 ||
-      clientIds.some(clientId => !this.detachedSseClients.has(clientId)) ||
+      clientIds.some(clientId => this.sseStreams.has(clientId)) ||
       clientIds.some(clientId => this.handlers.get(clientId)?.isBusy?.());
     if (isActive) {
       release();
