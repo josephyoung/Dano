@@ -21,6 +21,7 @@ import {
 } from "./backend.js";
 import type { DanoConfig } from "./bridge/dano-config.js";
 import type { CredentialBroker } from "./bridge/credential-broker.js";
+import type { AnonymousUserContextResolver } from "./bridge/anonymous-user-context.js";
 
 export interface StartDanoServerOptions {
   cwd?: string;
@@ -35,6 +36,8 @@ export interface StartDanoServerOptions {
   authHttpHandler?: AuthHttpHandler;
   danoConfig?: DanoConfig;
   credentialBroker?: CredentialBroker;
+  anonymousUsers?: AnonymousUserContextResolver;
+  anonymousUserCleanup?: { idleTtlMs: number; intervalMs: number };
 }
 
 export interface DanoServerController {
@@ -135,6 +138,7 @@ export async function startDanoServer(
       userRuntime,
       options.credentialBroker,
       connCtx.loginSessionId,
+      connCtx.beginUserOperation,
     );
   };
 
@@ -146,6 +150,8 @@ export async function startDanoServer(
     options.userContextResolver,
     options.authHttpHandler,
     userRuntimeRegistry,
+    options.anonymousUsers,
+    options.anonymousUserCleanup,
   );
   let state: BridgeState = { status: "starting", port: config.port };
 

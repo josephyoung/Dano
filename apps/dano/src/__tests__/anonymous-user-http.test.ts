@@ -31,7 +31,17 @@ async function startAnonymousServer(
   secureCookie = false,
   authenticatedResolver?: AuthenticatedUserContextResolver,
   sessionsRootPath?: string,
+  cleanup?: { idleTtlMs: number; intervalMs: number; now: () => number },
 ) {
+  const anonymousUsers = createAnonymousUserContextResolver({
+    runtimeRootPath,
+    secureCookie,
+    authenticatedResolver,
+    now: cleanup?.now,
+    activityWriteIntervalMs: cleanup
+      ? Math.max(1, Math.floor(cleanup.idleTtlMs / 2))
+      : undefined,
+  });
   const controller = await startDanoServer(
     {
       ...DEFAULT_BRIDGE_CONFIG,
@@ -45,11 +55,10 @@ async function startAnonymousServer(
     {
       captureSigint: false,
       sessionsRootPath,
-      userContextResolver: createAnonymousUserContextResolver({
-        runtimeRootPath,
-        secureCookie,
-        authenticatedResolver,
-      }),
+      userContextResolver: anonymousUsers,
+      ...(cleanup
+        ? { anonymousUsers, anonymousUserCleanup: cleanup }
+        : {}),
     },
   );
   controllers.push(controller);
@@ -202,7 +211,128 @@ async function uploadProjectFile(
   };
 }
 
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for cleanup");
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
 describe("Anonymous User over HTTP/Bridge", () => {
+  it("keeps an active guest and later removes all data for the disconnected owner", async () => {
+    let now = 1_000;
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-expiry-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const sessionsRootPath = path.join(runtimeRoot, "sessions");
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      undefined,
+      sessionsRootPath,
+      { idleTtlMs: 1_000, intervalMs: 10, now: () => now },
+    );
+    const guest = await createClient(origin);
+    const cookie = guestCookie(guest.response);
+    const ownedFile = path.join(guest.body.defaultWorkspacePath, "owned.txt");
+    fs.writeFileSync(ownedFile, "owned by expiring guest", "utf8");
+    const upload = await uploadProjectFile(
+      origin,
+      guest.body.client.id,
+      cookie,
+      "expiring-upload.txt",
+      "temporary upload",
+    );
+    const preference = await fetch(
+      `${origin}/api/clients/${guest.body.client.id}/preferences/theme`,
+      {
+        method: "PUT",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({ accentColorPreset: "blue" }),
+      },
+    );
+    expect(preference.status).toBe(200);
+
+    now = 2_001;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(fs.existsSync(ownedFile)).toBe(true);
+    expect(fs.existsSync(upload.path)).toBe(true);
+
+    const disconnected = await fetch(
+      `${origin}/api/clients/${guest.body.client.id}/disconnect`,
+      { method: "POST", headers: { Cookie: cookie }, body: "{}" },
+    );
+    expect(disconnected.status).toBe(202);
+    now = 3_002;
+    await waitUntil(() => !fs.existsSync(guest.body.defaultWorkspacePath));
+
+    expect(fs.existsSync(upload.path)).toBe(false);
+    expect(
+      fs.readdirSync(path.join(runtimeRoot, "anonymous-sessions")),
+    ).toEqual([]);
+    expect(fs.readdirSync(path.join(runtimeRoot, "uploads", "records"))).toEqual(
+      [],
+    );
+    expect(fs.readdirSync(sessionsRootPath)).toEqual([]);
+    const stale = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(stale.status).toBe(201);
+    expect(guestCookie(stale)).not.toBe(cookie);
+  });
+
+  it("never includes authenticated User data in an Anonymous User sweep", async () => {
+    let now = 4_000;
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-auth-cleanup-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const authenticatedResolver = createJwtUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secret: "test-auth-secret",
+      now: () => Date.now(),
+    });
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      authenticatedResolver,
+      undefined,
+      { idleTtlMs: 1_000, intervalMs: 10, now: () => now },
+    );
+    const authenticated = await createClient(
+      origin,
+      `dano_auth=${signUser("retained-authenticated-user")}`,
+    );
+    const authenticatedFile = path.join(
+      authenticated.body.defaultWorkspacePath,
+      "authenticated.txt",
+    );
+    fs.writeFileSync(authenticatedFile, "must remain", "utf8");
+    await fetch(
+      `${origin}/api/clients/${authenticated.body.client.id}/disconnect`,
+      {
+        method: "POST",
+        headers: { Cookie: `dano_auth=${signUser("retained-authenticated-user")}` },
+        body: "{}",
+      },
+    );
+    const guest = await createClient(origin);
+    const guestCookieValue = guestCookie(guest.response);
+    await fetch(`${origin}/api/clients/${guest.body.client.id}/disconnect`, {
+      method: "POST",
+      headers: { Cookie: guestCookieValue },
+      body: "{}",
+    });
+
+    now = 5_001;
+    await waitUntil(() => !fs.existsSync(guest.body.defaultWorkspacePath));
+    expect(fs.readFileSync(authenticatedFile, "utf8")).toBe("must remain");
+  });
+
   it("creates a usable Anonymous User and issues an opaque guest Cookie", async () => {
     const runtimeRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "dano-anonymous-http-"),

@@ -265,6 +265,8 @@ describe("BridgeRpcAdapter", () => {
   let ws: MockTransport;
   let context: BridgeRpcAdapterContext;
   let eventBus: BridgeEventBus;
+  let beginUserOperation: ReturnType<typeof vi.fn<() => () => void>>;
+  let finishUserOperation: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     createAgentSessionMock.mockReset();
@@ -275,6 +277,8 @@ describe("BridgeRpcAdapter", () => {
     ws = createMockTransport();
     context = createMockContext();
     eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
+    finishUserOperation = vi.fn<() => void>();
+    beginUserOperation = vi.fn<() => () => void>(() => finishUserOperation);
     emitEvent = vi.fn<(event: unknown) => void>();
     uploadRegistry = {
       resolve: vi.fn(),
@@ -298,6 +302,11 @@ describe("BridgeRpcAdapter", () => {
       eventBus,
       emitEvent as any,
       uploadRegistry as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      beginUserOperation,
     );
   });
 
@@ -356,11 +365,16 @@ describe("BridgeRpcAdapter", () => {
       };
       await adapter.handleClientMessage({ type: "command", payload: command });
 
+      expect(beginUserOperation).toHaveBeenCalledOnce();
+      expect(finishUserOperation).not.toHaveBeenCalled();
       expect(adapter.isBusy()).toBe(true);
       await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledOnce());
       expect(adapter.isBusy()).toBe(true);
+      adapter.dispose();
+      expect(finishUserOperation).not.toHaveBeenCalled();
       finishPrompt();
       await vi.waitFor(() => expect(adapter.isBusy()).toBe(false));
+      expect(finishUserOperation).toHaveBeenCalledOnce();
 
       // Should NOT call pi.sendUserMessage (that would trigger TUI switch)
       expect(context.actions.sendUserMessage).not.toHaveBeenCalled();
@@ -370,6 +384,78 @@ describe("BridgeRpcAdapter", () => {
         commandType: "prompt",
         correlationId: "cmd-1",
       });
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("holds the user operation lease until a detached follow-up settles after disconnect", async () => {
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "pi-web-follow-up-lease-"),
+      );
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      fs.writeFileSync(
+        sessionFile,
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "live-session",
+          timestamp: new Date().toISOString(),
+          cwd: tmpDir,
+        }),
+      );
+      (
+        context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
+      ).mockReturnValue(sessionFile);
+
+      let finishFollowUp!: () => void;
+      const followUpGate = new Promise<void>(resolve => {
+        finishFollowUp = resolve;
+      });
+      const session = {
+        sessionFile: undefined,
+        sessionId: "auto-session",
+        isStreaming: false,
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => {}),
+        prompt: vi.fn().mockResolvedValue(undefined),
+        followUp: vi.fn().mockReturnValue(followUpGate),
+        agent: { followUpQueue: { messages: [] as object[] } },
+        sessionManager: {
+          getSessionFile: vi.fn().mockReturnValue(undefined),
+          getSessionId: vi.fn().mockReturnValue("auto-session"),
+          getEntries: vi.fn().mockReturnValue([]),
+          getBranch: vi.fn().mockReturnValue([]),
+          getCwd: vi.fn().mockReturnValue(tmpDir),
+          getLeafId: vi.fn().mockReturnValue(null),
+          getTree: vi.fn().mockReturnValue([]),
+        },
+      };
+      createAgentSessionMock.mockResolvedValue({ session });
+
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: { id: "prompt", type: "prompt", message: "Hello" },
+      });
+      await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(finishUserOperation).toHaveBeenCalledOnce());
+      beginUserOperation.mockClear();
+      finishUserOperation.mockClear();
+      session.isStreaming = true;
+
+      await adapter.handleClientMessage({
+        type: "command",
+        payload: { id: "follow", type: "follow_up", message: "Continue" },
+      });
+
+      expect(beginUserOperation).toHaveBeenCalledOnce();
+      expect(finishUserOperation).not.toHaveBeenCalled();
+      expect(adapter.isBusy()).toBe(true);
+      await vi.waitFor(() => expect(session.followUp).toHaveBeenCalledOnce());
+      adapter.dispose();
+      expect(finishUserOperation).not.toHaveBeenCalled();
+
+      finishFollowUp();
+      await vi.waitFor(() => expect(finishUserOperation).toHaveBeenCalledOnce());
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });

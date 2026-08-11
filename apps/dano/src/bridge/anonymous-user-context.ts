@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import * as path from "node:path";
+import { writeFile as writeFileAtomically } from "atomically";
 import { ensureSafeDirectory } from "./safe-directory.js";
 import {
   ensureUserFolder,
@@ -14,10 +15,12 @@ import {
 } from "./user-context.js";
 
 const DEFAULT_GUEST_COOKIE_NAME = "dano_guest";
+const DEFAULT_ACTIVITY_WRITE_INTERVAL_MS = 60 * 1000;
 const OPAQUE_GUEST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 interface StoredGuestSession {
   readonly userId: string;
+  readonly lastActiveAt: number;
 }
 
 export interface AnonymousUserContextResolverOptions {
@@ -25,12 +28,50 @@ export interface AnonymousUserContextResolverOptions {
   readonly authenticatedResolver?: AuthenticatedUserContextResolver;
   readonly cookieName?: string;
   readonly secureCookie: boolean;
+  readonly now?: () => number;
+  readonly activityWriteIntervalMs?: number;
+}
+
+export interface AnonymousUserSweepOptions {
+  readonly idleTtlMs: number;
+  readonly beginCleanup: (userId: string) => (() => void) | null;
+  readonly cleanupUser: (userContext: UserContext) => Promise<void>;
+}
+
+export interface AnonymousUserSweepResult {
+  readonly removed: number;
+  readonly skipped: number;
+  readonly failed: number;
+}
+
+export interface AnonymousUserContextResolver extends UserContextResolver {
+  touchAnonymousUser(userId: string): Promise<boolean>;
+  sweepExpired(
+    options: AnonymousUserSweepOptions,
+  ): Promise<AnonymousUserSweepResult>;
 }
 
 export function createAnonymousUserContextResolver(
   options: AnonymousUserContextResolverOptions,
-): UserContextResolver {
+): AnonymousUserContextResolver {
   const cookieName = options.cookieName?.trim() || DEFAULT_GUEST_COOKIE_NAME;
+  const now = options.now ?? Date.now;
+  const activityWriteIntervalMs =
+    options.activityWriteIntervalMs ?? DEFAULT_ACTIVITY_WRITE_INTERVAL_MS;
+  if (
+    !Number.isSafeInteger(activityWriteIntervalMs) ||
+    activityWriteIntervalMs < 0
+  ) {
+    throw new Error(
+      "Anonymous User activity write interval must be a non-negative integer",
+    );
+  }
+  const activity = new Map<
+    string,
+    { lastActiveAt: number; lastPersistedAt: number }
+  >();
+  const activityWrites = new Map<string, Promise<boolean>>();
+  const recordPaths = new Map<string, string>();
   const usersRootPath = path.resolve(options.runtimeRootPath, "users");
   const sessionsRootPath = path.resolve(
     options.runtimeRootPath,
@@ -44,6 +85,11 @@ export function createAnonymousUserContextResolver(
     if (!guestId || !OPAQUE_GUEST_ID_PATTERN.test(guestId)) return null;
     const stored = await readStoredSession(sessionsRootPath, guestId);
     if (!stored) return null;
+    rememberActivity(activity, stored);
+    recordPaths.set(
+      stored.userId,
+      guestSessionPath(sessionsRootPath, guestId),
+    );
     return {
       user: { id: stored.userId },
       folderPath: await ensureUserFolder(usersRootPath, stored.userId),
@@ -73,7 +119,17 @@ export function createAnonymousUserContextResolver(
         return { userContext: guest, authentication: { status: "anonymous" } };
       }
 
-      const created = await createGuestSession(sessionsRootPath, usersRootPath);
+      const createdAt = now();
+      const created = await createGuestSession(
+        sessionsRootPath,
+        usersRootPath,
+        createdAt,
+      );
+      activity.set(created.userContext.user.id, {
+        lastActiveAt: createdAt,
+        lastPersistedAt: createdAt,
+      });
+      recordPaths.set(created.userContext.user.id, created.recordPath);
       return {
         userContext: created.userContext,
         authentication: { status: "anonymous" },
@@ -107,9 +163,154 @@ export function createAnonymousUserContextResolver(
       const stored = await readStoredSession(sessionsRootPath, guestId);
       if (!stored || stored.userId !== expectedUserId) return false;
       await fs.promises.rm(guestSessionPath(sessionsRootPath, guestId));
+      activity.delete(expectedUserId);
+      activityWrites.delete(expectedUserId);
+      recordPaths.delete(expectedUserId);
       return true;
     },
+
+    async touchAnonymousUser(userId) {
+      const knownState = activity.get(userId);
+      if (knownState && recordPaths.has(userId)) {
+        knownState.lastActiveAt = Math.max(knownState.lastActiveAt, now());
+        if (
+          knownState.lastActiveAt - knownState.lastPersistedAt <
+          activityWriteIntervalMs
+        ) {
+          return true;
+        }
+      }
+      const record = await findStoredSessionByUserId(
+        sessionsRootPath,
+        userId,
+        recordPaths.get(userId),
+      );
+      if (!record) {
+        recordPaths.delete(userId);
+        return false;
+      }
+      recordPaths.set(userId, record.path);
+      const state = rememberActivity(activity, record.session);
+      state.lastActiveAt = Math.max(state.lastActiveAt, now());
+      if (
+        state.lastActiveAt - state.lastPersistedAt <
+        activityWriteIntervalMs
+      ) {
+        return true;
+      }
+      const previous = activityWrites.get(userId) ?? Promise.resolve(true);
+      const writing = previous.then(async () => {
+        const current = await findStoredSessionByUserId(
+          sessionsRootPath,
+          userId,
+          recordPaths.get(userId),
+        );
+        if (!current) return false;
+        const latest = rememberActivity(activity, current.session);
+        if (
+          latest.lastActiveAt - latest.lastPersistedAt <
+          activityWriteIntervalMs
+        ) {
+          return true;
+        }
+        const persistedAt = latest.lastActiveAt;
+        await writeStoredSession(current.path, {
+          ...current.session,
+          lastActiveAt: persistedAt,
+        });
+        latest.lastPersistedAt = Math.max(latest.lastPersistedAt, persistedAt);
+        return true;
+      });
+      activityWrites.set(userId, writing);
+      try {
+        return await writing;
+      } finally {
+        if (activityWrites.get(userId) === writing) {
+          activityWrites.delete(userId);
+        }
+      }
+    },
+
+    async sweepExpired(sweepOptions) {
+      const result = { removed: 0, skipped: 0, failed: 0 };
+      const records = await listStoredSessions(sessionsRootPath);
+      for (const record of records) {
+        recordPaths.set(record.session.userId, record.path);
+        if (
+          now() - effectiveLastActiveAt(activity, record.session) <
+          sweepOptions.idleTtlMs
+        ) {
+          continue;
+        }
+        const release = sweepOptions.beginCleanup(record.session.userId);
+        if (!release) {
+          result.skipped += 1;
+          continue;
+        }
+        try {
+          const current = await readStoredSessionPath(record.path);
+          if (
+            !current ||
+            current.userId !== record.session.userId ||
+            now() - effectiveLastActiveAt(activity, current) <
+              sweepOptions.idleTtlMs
+          ) {
+            result.skipped += 1;
+            continue;
+          }
+          const userContext: UserContext = {
+            user: { id: current.userId },
+            folderPath: await ensureUserFolder(usersRootPath, current.userId),
+          };
+          await sweepOptions.cleanupUser(userContext);
+          await fs.promises.rm(record.path);
+          activity.delete(current.userId);
+          activityWrites.delete(current.userId);
+          recordPaths.delete(current.userId);
+          result.removed += 1;
+        } catch {
+          result.failed += 1;
+        } finally {
+          release();
+        }
+      }
+      return result;
+    },
   };
+}
+
+function rememberActivity(
+  activity: Map<string, { lastActiveAt: number; lastPersistedAt: number }>,
+  session: StoredGuestSession,
+): { lastActiveAt: number; lastPersistedAt: number } {
+  const existing = activity.get(session.userId);
+  if (existing) {
+    existing.lastActiveAt = Math.max(
+      existing.lastActiveAt,
+      session.lastActiveAt,
+    );
+    existing.lastPersistedAt = Math.max(
+      existing.lastPersistedAt,
+      session.lastActiveAt,
+    );
+    return existing;
+  }
+  const created = {
+    lastActiveAt: session.lastActiveAt,
+    lastPersistedAt: session.lastActiveAt,
+  };
+  activity.set(session.userId, created);
+  return created;
+}
+
+function effectiveLastActiveAt(
+  activity: Map<string, { lastActiveAt: number }>,
+  session: StoredGuestSession,
+): number {
+  return Math.max(
+    session.lastActiveAt,
+    activity.get(session.userId)?.lastActiveAt ?? session.lastActiveAt,
+  );
 }
 
 function authenticatedResolution(
@@ -128,7 +329,8 @@ function authenticatedResolution(
 async function createGuestSession(
   sessionsRootPath: string,
   usersRootPath: string,
-): Promise<{ guestId: string; userContext: UserContext }> {
+  createdAt: number,
+): Promise<{ guestId: string; recordPath: string; userContext: UserContext }> {
   await ensureSafeDirectory(sessionsRootPath, {
     recursive: true,
     unsafeDirectoryError: () =>
@@ -139,11 +341,12 @@ async function createGuestSession(
   const recordPath = guestSessionPath(sessionsRootPath, guestId);
   await fs.promises.writeFile(
     recordPath,
-    `${JSON.stringify({ userId } satisfies StoredGuestSession)}\n`,
+    `${JSON.stringify({ userId, lastActiveAt: createdAt } satisfies StoredGuestSession)}\n`,
     { encoding: "utf8", flag: "wx", mode: 0o600 },
   );
   return {
     guestId,
+    recordPath,
     userContext: {
       user: { id: userId },
       folderPath: await ensureUserFolder(usersRootPath, userId),
@@ -171,13 +374,81 @@ async function readStoredSession(
   }
 }
 
+async function readStoredSessionPath(
+  recordPath: string,
+): Promise<StoredGuestSession | null> {
+  try {
+    const value = JSON.parse(
+      await fs.promises.readFile(recordPath, "utf8"),
+    ) as unknown;
+    return isStoredGuestSession(value) ? value : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+async function listStoredSessions(
+  sessionsRootPath: string,
+): Promise<Array<{ path: string; session: StoredGuestSession }>> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(sessionsRootPath, {
+      withFileTypes: true,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const records: Array<{ path: string; session: StoredGuestSession }> = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
+    const recordPath = path.join(sessionsRootPath, entry.name);
+    const session = await readStoredSessionPath(recordPath);
+    if (session) records.push({ path: recordPath, session });
+  }
+  return records;
+}
+
+async function findStoredSessionByUserId(
+  sessionsRootPath: string,
+  userId: string,
+  knownRecordPath?: string,
+): Promise<{ path: string; session: StoredGuestSession } | null> {
+  if (knownRecordPath) {
+    const session = await readStoredSessionPath(knownRecordPath);
+    if (session?.userId === userId) {
+      return { path: knownRecordPath, session };
+    }
+  }
+  const records = await listStoredSessions(sessionsRootPath);
+  return records.find(record => record.session.userId === userId) ?? null;
+}
+
+async function writeStoredSession(
+  recordPath: string,
+  session: StoredGuestSession,
+): Promise<void> {
+  await writeFileAtomically(recordPath, `${JSON.stringify(session)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    fsync: true,
+  });
+  await fs.promises.chmod(recordPath, 0o600);
+}
+
 function isStoredGuestSession(value: unknown): value is StoredGuestSession {
   return (
     typeof value === "object" &&
     value !== null &&
     "userId" in value &&
     typeof value.userId === "string" &&
-    /^anonymous_[a-f0-9]{48}$/.test(value.userId)
+    /^anonymous_[a-f0-9]{48}$/.test(value.userId) &&
+    "lastActiveAt" in value &&
+    typeof value.lastActiveAt === "number" &&
+    Number.isFinite(value.lastActiveAt) &&
+    value.lastActiveAt >= 0
   );
 }
 

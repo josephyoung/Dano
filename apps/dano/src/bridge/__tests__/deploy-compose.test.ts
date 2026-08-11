@@ -324,6 +324,20 @@ afterEach(() => {
 });
 
 describe("deploy compose wrapper", () => {
+  it("passes configurable Anonymous User cleanup timing into the app", () => {
+    const compose = readFileSync(composeFile, "utf8");
+    const example = readFileSync(envExampleFile, "utf8");
+
+    expect(compose).toContain(
+      "DANO_ANONYMOUS_IDLE_TTL_MS: ${DANO_ANONYMOUS_IDLE_TTL_MS:-86400000}",
+    );
+    expect(compose).toContain(
+      "DANO_ANONYMOUS_CLEANUP_INTERVAL_MS: ${DANO_ANONYMOUS_CLEANUP_INTERVAL_MS:-3600000}",
+    );
+    expect(example).toContain("DANO_ANONYMOUS_IDLE_TTL_MS=86400000");
+    expect(example).toContain("DANO_ANONYMOUS_CLEANUP_INTERVAL_MS=3600000");
+  });
+
   it("uses stable local Podman paths and port", () => {
     const cwd = mkdtempSync(join(tmpdir(), "dano-local-container-test-"));
     tempDirs.push(cwd);

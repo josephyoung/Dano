@@ -52,6 +52,11 @@ async function startOAuthServer(
       | "stateTtlMs"
     >
   > = {},
+  anonymousCleanup?: {
+    idleTtlMs: number;
+    intervalMs: number;
+    now: () => number;
+  },
 ) {
   const runtimeRootPath =
     existingRuntimeRootPath ??
@@ -69,6 +74,15 @@ async function startOAuthServer(
     ...overrides,
   });
   authentications.push(authentication);
+  const anonymousUsers = createAnonymousUserContextResolver({
+    runtimeRootPath,
+    secureCookie: false,
+    authenticatedResolver: authentication,
+    now: anonymousCleanup?.now,
+    activityWriteIntervalMs: anonymousCleanup
+      ? Math.max(1, Math.floor(anonymousCleanup.idleTtlMs / 2))
+      : undefined,
+  });
   const controller = await startDanoServer(
     {
       ...DEFAULT_BRIDGE_CONFIG,
@@ -81,11 +95,13 @@ async function startOAuthServer(
     },
     {
       captureSigint: false,
-      userContextResolver: createAnonymousUserContextResolver({
-        runtimeRootPath,
-        secureCookie: false,
-        authenticatedResolver: authentication,
-      }),
+      userContextResolver: anonymousUsers,
+      ...(anonymousCleanup
+        ? {
+            anonymousUsers,
+            anonymousUserCleanup: anonymousCleanup,
+          }
+        : {}),
       authHttpHandler: authentication,
     },
   );
@@ -582,8 +598,13 @@ describe("OAuth authentication over HTTP", () => {
   });
 
   it("atomically transfers only the callback-bound Anonymous User data before login", async () => {
+    let now = 1_000;
     const provider = successfulProvider("transfer-owner", "transfer-token");
-    const { origin } = await startOAuthServer(provider);
+    const { origin } = await startOAuthServer(provider, undefined, {}, {
+      idleTtlMs: 1_000,
+      intervalMs: 10,
+      now: () => now,
+    });
     const anonymous = await fetch(`${origin}/api/clients`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -665,6 +686,28 @@ describe("OAuth authentication over HTTP", () => {
     expect(
       fs.existsSync(path.join(staleGuestBody.defaultWorkspacePath, "guest-note.txt")),
     ).toBe(false);
+    await fetch(
+      `${origin}/api/clients/${authenticatedBody.client.id}/disconnect`,
+      { method: "POST", headers: { Cookie: loginCookie }, body: "{}" },
+    );
+    const replacementGuestCookie = cookieFrom(staleGuest, "dano_guest");
+    await fetch(`${origin}/api/clients/${staleGuestBody.client.id}/disconnect`, {
+      method: "POST",
+      headers: { Cookie: replacementGuestCookie },
+      body: "{}",
+    });
+    now = 2_001;
+    await vi.waitFor(
+      () =>
+        expect(fs.existsSync(staleGuestBody.defaultWorkspacePath)).toBe(false),
+      { timeout: 2_000, interval: 10 },
+    );
+    expect(
+      fs.readFileSync(
+        path.join(authenticatedBody.defaultWorkspacePath, "guest-note.txt"),
+        "utf8",
+      ),
+    ).toBe("owned by the callback guest");
   });
 
   it("rolls back a failed Anonymous User transfer and keeps the guest usable", async () => {
