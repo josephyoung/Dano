@@ -51,7 +51,9 @@ async function startOAuthServer(
       | "credentialEncryptionKey"
       | "maxPendingTransactions"
       | "now"
+      | "sessionAbsoluteTtlMs"
       | "sessionGcIntervalMs"
+      | "sessionIdleTtlMs"
       | "stateTtlMs"
     >
   > = {},
@@ -1418,6 +1420,141 @@ describe("OAuth authentication over HTTP", () => {
     ).toEqual({ status: "anonymous" });
   });
 
+  it("disconnects only the Bridge Client and SSE bound to an idle-expired Login Session", async () => {
+    let currentTime = 1_000;
+    const provider = successfulProvider("shared-gc-user", "unused");
+    const { controller, origin } = await startOAuthServer(provider, undefined, {
+      now: () => currentTime,
+      sessionIdleTtlMs: 100,
+      sessionAbsoluteTtlMs: 1_000,
+      sessionGcIntervalMs: 10,
+    });
+    const expiredCookie = await completeLogin(origin, "expired");
+    const retainedCookie = await completeLogin(origin, "retained");
+    const expiredClient = await createAuthenticatedClient(origin, expiredCookie);
+    const retainedClient = await createAuthenticatedClient(origin, retainedCookie);
+    const expiredSse = waitForSseClose(
+      `${origin}${expiredClient.eventsUrl}`,
+      expiredCookie,
+    );
+    await expiredSse.ready;
+    currentTime += 50;
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: retainedCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+
+    currentTime += 50;
+
+    await expect(expiredSse.closed).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(controller.getClients()).not.toContainEqual(expiredClient.client);
+    });
+    expect(controller.getClients()).toContainEqual(retainedClient.client);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: expiredCookie },
+        })
+      ).json(),
+    ).toEqual({ status: "anonymous" });
+    expect(
+      (
+        await fetch(`${origin}${expiredClient.messagesUrl}`, {
+          method: "POST",
+          headers: {
+            Cookie: expiredCookie,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "command",
+            payload: { id: "expired-command", type: "get_state" },
+          }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      await executeCommand(origin, retainedClient, retainedCookie, {
+        id: "retained-command",
+        type: "get_state",
+      }),
+    ).toMatchObject({
+      type: "response",
+      payload: { id: "retained-command", success: true },
+    });
+  });
+
+  it("disconnects only the Bridge Client and SSE bound to an absolute-expired Login Session", async () => {
+    let currentTime = 1_000;
+    const provider = successfulProvider("shared-absolute-user", "unused");
+    const { controller, origin } = await startOAuthServer(provider, undefined, {
+      now: () => currentTime,
+      sessionIdleTtlMs: 100,
+      sessionAbsoluteTtlMs: 200,
+      sessionGcIntervalMs: 10,
+    });
+    const expiredCookie = await completeLogin(origin, "absolute-expired");
+    const expiredClient = await createAuthenticatedClient(origin, expiredCookie);
+    const expiredSse = waitForSseClose(
+      `${origin}${expiredClient.eventsUrl}`,
+      expiredCookie,
+    );
+    await expiredSse.ready;
+    for (currentTime = 1_090; currentTime < 1_200; currentTime += 90) {
+      expect(
+        await (
+          await fetch(`${origin}/api/auth/current`, {
+            headers: { Cookie: expiredCookie },
+          })
+        ).json(),
+      ).toMatchObject({ status: "authenticated" });
+    }
+    const retainedCookie = await completeLogin(origin, "absolute-retained");
+    const retainedClient = await createAuthenticatedClient(origin, retainedCookie);
+
+    currentTime = 1_200;
+
+    await expect(expiredSse.closed).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(controller.getClients()).not.toContainEqual(expiredClient.client);
+    });
+    expect(controller.getClients()).toContainEqual(retainedClient.client);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: expiredCookie },
+        })
+      ).json(),
+    ).toEqual({ status: "anonymous" });
+    expect(
+      (
+        await fetch(`${origin}${expiredClient.messagesUrl}`, {
+          method: "POST",
+          headers: {
+            Cookie: expiredCookie,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "command",
+            payload: { id: "absolute-expired-command", type: "get_state" },
+          }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      await executeCommand(origin, retainedClient, retainedCookie, {
+        id: "absolute-retained-command",
+        type: "get_state",
+      }),
+    ).toMatchObject({
+      type: "response",
+      payload: { id: "absolute-retained-command", success: true },
+    });
+  });
+
   it("accepts missing display profile and creates an independent Session for every login", async () => {
     const provider = successfulProvider("profile-optional-user", "profile-token");
     const { origin, runtimeRootPath } = await startOAuthServer(provider);
@@ -1636,6 +1773,189 @@ describe("OAuth authentication over HTTP", () => {
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
     ).toHaveLength(2);
+  });
+
+  it("rotates an active browser Login Session and disconnects only its old Client and SSE", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("shared-active-login-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: "shared-active-login-user" },
+          credential: {
+            accessToken: `access-${code}`,
+            refreshToken: `refresh-${code}`,
+          },
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { authentication, controller, origin, runtimeRootPath } =
+      await startOAuthServer(provider);
+    const rotatedCookie = await completeLogin(origin, "rotated");
+    const retainedCookie = await completeLogin(origin, "retained");
+    const rotatedSessionId = rotatedCookie.slice("dano_login=".length);
+    const retainedSessionId = retainedCookie.slice("dano_login=".length);
+    const rotatedClient = await createAuthenticatedClient(origin, rotatedCookie);
+    const retainedClient = await createAuthenticatedClient(origin, retainedCookie);
+    const rotatedSse = waitForSseClose(
+      `${origin}${rotatedClient.eventsUrl}`,
+      rotatedCookie,
+    );
+    await rotatedSse.ready;
+    const started = await fetch(`${origin}/api/auth/login?returnTo=/chat`, {
+      headers: { Cookie: rotatedCookie },
+      redirect: "manual",
+    });
+    const flowCookie = cookieFrom(started, "dano_oauth_flow");
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=replacement&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: `${rotatedCookie}; ${flowCookie}` },
+        redirect: "manual",
+      },
+    );
+    const replacementCookie = cookieFrom(callback, "dano_login");
+    const replacementSessionId = replacementCookie.slice("dano_login=".length);
+
+    expect(replacementSessionId).not.toBe(rotatedSessionId);
+    await expect(rotatedSse.closed).resolves.toBeUndefined();
+    expect(controller.getClients()).not.toContainEqual(rotatedClient.client);
+    expect(controller.getClients()).toContainEqual(retainedClient.client);
+    expect(revoked).toEqual(["access-rotated"]);
+    await expect(
+      authentication.readProviderCredential(rotatedSessionId),
+    ).resolves.toBeNull();
+    await expect(
+      authentication.readProviderCredential(replacementSessionId),
+    ).resolves.toMatchObject({ accessToken: "access-replacement" });
+    await expect(
+      authentication.readProviderCredential(retainedSessionId),
+    ).resolves.toMatchObject({ accessToken: "access-retained" });
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: rotatedCookie },
+        })
+      ).json(),
+    ).toEqual({ status: "anonymous" });
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: replacementCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+    expect(
+      (
+        await fetch(`${origin}${rotatedClient.messagesUrl}`, {
+          method: "POST",
+          headers: {
+            Cookie: rotatedCookie,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "command",
+            payload: { id: "rotated-command", type: "get_state" },
+          }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      await executeCommand(origin, retainedClient, retainedCookie, {
+        id: "retained-after-rotation",
+        type: "get_state",
+      }),
+    ).toMatchObject({
+      type: "response",
+      payload: { id: "retained-after-rotation", success: true },
+    });
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(2);
+  });
+
+  it("keeps an active Login Session, Client, and SSE when its new callback fails", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("failed-active-login-user", "original-token"),
+      async exchangeAuthorizationCode({ code }) {
+        if (code === "rejected") throw new Error("fixture provider failure");
+        return {
+          identity: { userId: "failed-active-login-user" },
+          credential: { accessToken: "original-token" },
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { authentication, controller, origin, runtimeRootPath } =
+      await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin, "original");
+    const loginSessionId = loginCookie.slice("dano_login=".length);
+    const client = await createAuthenticatedClient(origin, loginCookie);
+    const pending = waitForResponse(
+      `${origin}${client.eventsUrl}`,
+      loginCookie,
+      "still-active",
+    );
+    await pending.ready;
+    const started = await fetch(`${origin}/api/auth/login?returnTo=/chat`, {
+      headers: { Cookie: loginCookie },
+      redirect: "manual",
+    });
+    const flowCookie = cookieFrom(started, "dano_oauth_flow");
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=rejected&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: `${loginCookie}; ${flowCookie}` },
+        redirect: "manual",
+      },
+    );
+    const posted = await fetch(`${origin}${client.messagesUrl}`, {
+      method: "POST",
+      headers: { Cookie: loginCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "command",
+        payload: { id: "still-active", type: "get_state" },
+      }),
+    });
+
+    expect(callback.headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=[A-Za-z0-9_-]{43};/,
+    );
+    expect(posted.status).toBe(202);
+    await expect(pending.result).resolves.toMatchObject({
+      type: "response",
+      payload: { id: "still-active", success: true },
+    });
+    pending.close();
+    expect(controller.getClients()).toContainEqual(client.client);
+    expect(revoked).toEqual([]);
+    await expect(
+      authentication.readProviderCredential(loginSessionId),
+    ).resolves.toEqual({ accessToken: "original-token" });
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: loginCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(1);
   });
 
   it("cancels reauthentication into a fresh Anonymous User with a usable Bridge", async () => {
@@ -2048,6 +2368,27 @@ function waitForAuthentication(
     request.on("error", reject);
   });
   return { ready, result, close: () => request.destroy() };
+}
+
+function waitForSseClose(
+  url: string,
+  cookie: string,
+): { ready: Promise<void>; closed: Promise<void> } {
+  let markReady!: () => void;
+  const ready = new Promise<void>(resolve => {
+    markReady = resolve;
+  });
+  const closed = new Promise<void>((resolve, reject) => {
+    const request = http.get(url, { headers: { Cookie: cookie } }, response => {
+      markReady();
+      response.resume();
+      response.once("end", resolve);
+      response.once("error", reject);
+      response.once("aborted", resolve);
+    });
+    request.once("error", reject);
+  });
+  return { ready, closed };
 }
 
 async function executeCommand(

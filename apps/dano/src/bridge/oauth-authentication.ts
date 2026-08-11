@@ -131,6 +131,14 @@ export async function createOAuthAuthentication(
   }
   const maxPendingTransactions =
     options.maxPendingTransactions ?? MAX_PENDING_TRANSACTIONS;
+  const browserLocks = new Map<string, Promise<void>>();
+  const loginSessionLocks = new Map<string, Promise<void>>();
+  const knownLoginSessionIds = new Map<string, string>();
+  const credentialRefreshes = new Map<
+    string,
+    Promise<ProviderCredential | null>
+  >();
+  let currentLifecycle: AuthHttpLifecycle | undefined;
   await cleanupExpiredRecords(
     transactionsPath,
     sessionsPath,
@@ -147,15 +155,15 @@ export async function createOAuthAuthentication(
       now(),
       stateTtlMs,
       sessionIdleTtlMs,
+      recordName => {
+        const sessionId = knownLoginSessionIds.get(recordName);
+        if (!sessionId) return;
+        knownLoginSessionIds.delete(recordName);
+        currentLifecycle?.disconnectLoginSession(sessionId);
+      },
     ).catch(() => {});
   }, options.sessionGcIntervalMs ?? SESSION_GC_INTERVAL_MS);
   cleanupInterval.unref?.();
-  const browserLocks = new Map<string, Promise<void>>();
-  const loginSessionLocks = new Map<string, Promise<void>>();
-  const credentialRefreshes = new Map<
-    string,
-    Promise<ProviderCredential | null>
-  >();
 
   const loadSessionUnlocked = async (
     sessionId: string,
@@ -173,8 +181,11 @@ export async function createOAuthAuthentication(
           digest(sessionId),
         );
       }
+      knownLoginSessionIds.set(path.basename(recordPath), sessionId);
     } catch {
       await fs.promises.rm(recordPath, { force: true }).catch(() => {});
+      knownLoginSessionIds.delete(path.basename(recordPath));
+      currentLifecycle?.disconnectLoginSession(sessionId);
       return null;
     }
     const currentTime = now();
@@ -183,6 +194,8 @@ export async function createOAuthAuthentication(
       currentTime >= session.absoluteExpiresAt
     ) {
       await fs.promises.rm(recordPath, { force: true }).catch(() => {});
+      knownLoginSessionIds.delete(path.basename(recordPath));
+      currentLifecycle?.disconnectLoginSession(sessionId);
       return null;
     }
     if (touch && session.status === "active") {
@@ -361,6 +374,7 @@ export async function createOAuthAuthentication(
       url: URL,
       lifecycle: AuthHttpLifecycle,
     ): Promise<boolean> {
+      currentLifecycle = lifecycle;
       if (req.method === "GET" && url.pathname === "/api/auth/current") {
         const [current, authError] = await Promise.all([
           resolveLoginSession(req.headers),
@@ -400,6 +414,24 @@ export async function createOAuthAuthentication(
           stateTtlMs,
           sessionAbsoluteTtlMs,
           lifecycle,
+          rotateLoginSession: loginSessionId =>
+            withKeyLock(loginSessionLocks, loginSessionId, async () => {
+              const session = await loadSessionUnlocked(loginSessionId, false);
+              if (!session) return null;
+              const credential =
+                session.status === "active" && session.credential
+                  ? decryptCredential(
+                      session.credential,
+                      options.credentialEncryptionKey,
+                      digest(loginSessionId),
+                    )
+                  : null;
+              const recordPath = loginSessionPath(sessionsPath, loginSessionId);
+              await fs.promises.rm(recordPath, { force: true });
+              knownLoginSessionIds.delete(path.basename(recordPath));
+              lifecycle.disconnectLoginSession(loginSessionId);
+              return credential;
+            }),
         });
         return true;
       }
@@ -431,6 +463,9 @@ export async function createOAuthAuthentication(
               await fs.promises.rm(loginSessionPath(sessionsPath, sessionId), {
                 force: true,
               });
+              knownLoginSessionIds.delete(
+                path.basename(loginSessionPath(sessionsPath, sessionId)),
+              );
               return current;
             },
           );
@@ -472,9 +507,7 @@ export async function createOAuthAuthentication(
         ? await loadSession(currentLoginSessionId, false)
         : null;
       const replacedLoginSessionId =
-        currentLoginSession?.status === "reauth_required"
-          ? currentLoginSessionId
-          : null;
+        currentLoginSession ? currentLoginSessionId : null;
       const pendingLogin = await withKeyLock(
         browserLocks,
         browserBindingHash,
@@ -589,6 +622,9 @@ async function handleCallback(
     stateTtlMs: number;
     sessionAbsoluteTtlMs: number;
     lifecycle: AuthHttpLifecycle;
+    rotateLoginSession(
+      loginSessionId: string,
+    ): Promise<ProviderCredential | null>;
   },
 ): Promise<void> {
   const state = url.searchParams.get("state") ?? "";
@@ -652,14 +688,15 @@ async function handleCallback(
           },
         );
       }
-      if (consumed.transaction.replacedLoginSessionId) {
-        await fs.promises.rm(
-          loginSessionPath(
-            options.sessionsPath,
+      const replacedCredential = consumed.transaction.replacedLoginSessionId
+        ? await options.rotateLoginSession(
             consumed.transaction.replacedLoginSessionId,
-          ),
-          { force: true },
-        );
+          )
+        : null;
+      if (replacedCredential) {
+        await options.provider
+          .revokeCredential?.(replacedCredential)
+          .catch(() => {});
       }
     } catch (error) {
       await fs.promises.rm(sessionPath, { force: true }).catch(() => {});
@@ -952,6 +989,7 @@ async function cleanupExpiredRecords(
   now: number,
   stateTtlMs: number,
   sessionIdleTtlMs: number,
+  onLoginSessionRemoved: (recordName: string) => void = () => {},
 ): Promise<void> {
   await countPendingTransactions(transactionsPath, "", now, stateTtlMs);
   for (const name of await fs.promises.readdir(sessionsPath)) {
@@ -966,9 +1004,11 @@ async function cleanupExpiredRecords(
         now >= session.absoluteExpiresAt
       ) {
         await fs.promises.rm(recordPath, { force: true });
+        onLoginSessionRemoved(name);
       }
     } catch {
       await fs.promises.rm(recordPath, { force: true }).catch(() => {});
+      onLoginSessionRemoved(name);
     }
   }
   for (const name of await fs.promises.readdir(errorsPath)) {
