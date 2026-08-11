@@ -810,6 +810,7 @@ export class BridgeServer {
       };
 
       this.clients.set(client.id, client);
+      this.detachedSseClients.add(client.id);
       if (user) this.clientUsers.set(client.id, user);
       const authentication =
         resolution?.authentication ??
@@ -842,6 +843,7 @@ export class BridgeServer {
         this.clientUsers.delete(client.id);
         this.clientAuthentication.delete(client.id);
         this.clientLoginSessions.delete(client.id);
+        this.detachedSseClients.delete(client.id);
         this.clients.delete(client.id);
         throw error;
       }
