@@ -5,7 +5,7 @@
   import Menu from "@lucide/svelte/icons/menu";
   import Palette from "@lucide/svelte/icons/palette";
   import SquarePen from "@lucide/svelte/icons/square-pen";
-  import type { BridgeUserSummary } from "@dano/types/protocol";
+  import type { BridgeAuthenticationState } from "@dano/types/protocol";
   import { Button } from "../components/ui/button";
   import * as Popover from "../components/ui/popover";
   import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
@@ -18,7 +18,7 @@
     onNewSession,
     newSessionPending = false,
     showNewSession = true,
-    currentUser,
+    authentication,
     onOpenTheme,
     onLogin,
     onLogout,
@@ -29,7 +29,7 @@
     onNewSession?: () => void;
     newSessionPending?: boolean;
     showNewSession?: boolean;
-    currentUser?: BridgeUserSummary;
+    authentication: BridgeAuthenticationState;
     onOpenTheme?: () => void;
     onLogin?: () => void;
     onLogout?: () => void | Promise<void>;
@@ -38,6 +38,9 @@
   let menuOpen = $state(false);
   let failedAvatarUrl = $state<string | null>(null);
   let logoutPending = $state(false);
+  const currentUser = $derived(
+    authentication.status === "authenticated" ? authentication.user : undefined,
+  );
 
   const statusMeta = $derived.by(() => {
     switch (connectionStatus) {
@@ -132,7 +135,7 @@
             <LogOut data-icon="inline-start" aria-hidden="true" />
             <span>{t("appHeader.logout")}</span>
           </Button>
-        {:else}
+        {:else if authentication.status === "anonymous"}
           <Button
             class="header-menu-item login-menu-item"
             variant="ghost"

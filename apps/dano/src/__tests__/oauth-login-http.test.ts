@@ -1124,7 +1124,7 @@ describe("OAuth authentication over HTTP", () => {
     });
     expect(await current.json()).toEqual({
       status: "anonymous",
-      authError: { code: "provider_login_failed" },
+      loginError: { code: "provider_login_failed" },
     });
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
@@ -1178,7 +1178,7 @@ describe("OAuth authentication over HTTP", () => {
     });
     expect(await firstCurrent.json()).toEqual({
       status: "anonymous",
-      authError: { code: "provider_identity_invalid" },
+      loginError: { code: "provider_identity_invalid" },
     });
     expect(firstCurrent.headers.get("set-cookie")).toMatch(
       /^dano_auth_error=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/,

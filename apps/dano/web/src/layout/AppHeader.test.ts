@@ -11,7 +11,14 @@ type AppHeaderProps = {
   onNewSession?: () => void;
   newSessionPending?: boolean;
   showNewSession?: boolean;
-  currentUser?: { username: string; avatarUrl?: string };
+  authentication?:
+    | { status: "checking" }
+    | { status: "anonymous" }
+    | { status: "reauth_required" }
+    | {
+        status: "authenticated";
+        user: { username: string; avatarUrl?: string };
+      };
   onOpenTheme?: () => void;
   onLogin?: () => void;
   onLogout?: () => void | Promise<void>;
@@ -29,6 +36,7 @@ async function renderHeader(
     target,
     props: {
       connectionStatus: "connected",
+      authentication: { status: "checking" },
       ...props,
     },
   });
@@ -74,9 +82,12 @@ describe("AppHeader", () => {
   it("shows the authenticated User and logout in the existing Menu", async () => {
     const onLogout = vi.fn();
     const { component, target } = await renderHeader({
-      currentUser: {
-        username: "Alice",
-        avatarUrl: "https://example.test/alice.png",
+      authentication: {
+        status: "authenticated",
+        user: {
+          username: "Alice",
+          avatarUrl: "https://example.test/alice.png",
+        },
       },
       onLogout,
     });
@@ -104,9 +115,12 @@ describe("AppHeader", () => {
 
   it("falls back to the neutral User icon when an avatar cannot load", async () => {
     const { component, target } = await renderHeader({
-      currentUser: {
-        username: "Alice",
-        avatarUrl: "https://example.test/missing.png",
+      authentication: {
+        status: "authenticated",
+        user: {
+          username: "Alice",
+          avatarUrl: "https://example.test/missing.png",
+        },
       },
     });
 
@@ -128,7 +142,10 @@ describe("AppHeader", () => {
 
   it("shows login in the existing Menu for an Anonymous User", async () => {
     const onLogin = vi.fn();
-    const { component, target } = await renderHeader({ onLogin });
+    const { component, target } = await renderHeader({
+      authentication: { status: "anonymous" },
+      onLogin,
+    });
 
     try {
       target.querySelector<HTMLButtonElement>(".menu-button")!.click();
@@ -141,6 +158,23 @@ describe("AppHeader", () => {
       login.click();
       await tick();
       expect(onLogin).toHaveBeenCalledOnce();
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it("does not offer login while authentication is still being checked", async () => {
+    const { component, target } = await renderHeader({
+      authentication: { status: "checking" },
+    });
+
+    try {
+      target.querySelector<HTMLButtonElement>(".menu-button")!.click();
+      await tick();
+
+      expect(document.querySelector(".login-menu-item")).toBeNull();
+      expect(document.querySelector(".logout-menu-item")).toBeNull();
+      expect(document.querySelector(".header-user-summary")).toBeNull();
     } finally {
       await unmount(component);
     }

@@ -94,6 +94,31 @@ describe("Bridge prompt acceptance", () => {
     eventSources.length = 0;
   });
 
+  it("projects checking before the server resolves authentication", async () => {
+    const current = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async input => {
+        if (String(input) === "/api/auth/current") return current.promise;
+        return new Response(null, { status: 503 });
+      }),
+    );
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+
+    expect(bridge.authentication).toEqual({ status: "checking" });
+    current.resolve(
+      new Response(JSON.stringify({ status: "anonymous" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    bridge.disconnect();
+  });
+
   it("exposes the server-projected User summary to the application", async () => {
     const bridge = await connectBridge(
       Promise.resolve(new Response(null, { status: 202 })),
@@ -126,27 +151,20 @@ describe("Bridge prompt acceptance", () => {
 
   it("shows a recoverable login failure from one-time auth current state", async () => {
     let currentReads = 0;
+    const clientResponse = deferred<Response>();
     const fetchImpl = vi.fn<typeof fetch>(async input => {
       if (String(input) === "/api/auth/current") {
         currentReads += 1;
         return new Response(
           JSON.stringify({
             status: "anonymous",
-            authError: { code: "provider_identity_invalid" },
+            loginError: { code: "provider_identity_invalid" },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
       if (String(input) === "/api/clients") {
-        return new Response(
-          JSON.stringify({
-            client: { id: "client-1" },
-            eventsUrl: "/events",
-            messagesUrl: "/messages",
-            authentication: { status: "anonymous" },
-          }),
-          { status: 201, headers: { "content-type": "application/json" } },
-        );
+        return clientResponse.promise;
       }
       return new Response(null, { status: 202 });
     });
@@ -160,6 +178,27 @@ describe("Bridge prompt acceptance", () => {
 
     const { initBridge } = await import("./bridgeStore.svelte");
     const bridge = initBridge();
+    await vi.waitFor(() =>
+      expect(bridge.authentication).toEqual({
+        status: "anonymous",
+        loginError: { code: "provider_identity_invalid" },
+      }),
+    );
+    expect(bridge.notifications.at(-1)).toMatchObject({
+      message: "登录失败，请重试",
+      notifyType: "error",
+    });
+    clientResponse.resolve(
+      new Response(
+        JSON.stringify({
+          client: { id: "client-1" },
+          eventsUrl: "/events",
+          messagesUrl: "/messages",
+          authentication: { status: "anonymous" },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
     await vi.waitFor(() => expect(eventSources).toHaveLength(1));
     eventSources[0]!.open();
     await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
