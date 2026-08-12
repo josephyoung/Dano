@@ -98,3 +98,16 @@ test("keeps hash navigation interruptible through a single router handler", asyn
   assert.doesNotMatch(css, /scroll-behavior\s*:\s*smooth/i);
   assert.doesNotMatch(css, /(?:html|body)\s*\{[^}]*overflow(?:-y)?\s*:\s*hidden/is);
 });
+
+test("lays out workflow arrows as dedicated grid connectors", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /className="workflow-connector"/);
+  assert.match(page, /className="config-connector"/);
+  assert.match(css, /\.workflow-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\) 32px\) minmax\(0, 1fr\)/s);
+  assert.match(css, /\.config-flow\s*\{[^}]*grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\) 28px\) minmax\(0, 1fr\)/s);
+  assert.doesNotMatch(css, /\.(?:workflow-connector|config-connector)\s*\{[^}]*position:\s*absolute/s);
+});
