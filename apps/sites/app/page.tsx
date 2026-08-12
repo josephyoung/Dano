@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Fragment } from "react";
 import { siteAssetPath } from "../build/site-base-path";
 
 const valueSteps = [
@@ -151,12 +152,14 @@ export default function Home() {
           </div>
           <div className="workflow-grid">
             {workflow.map(([title, copy], index) => (
-              <article key={title}>
-                <b>0{index + 1}</b>
-                <h3>{title}</h3>
-                <p>{copy}</p>
-                {index < workflow.length - 1 && <span aria-hidden="true">→</span>}
-              </article>
+              <Fragment key={title}>
+                <article>
+                  <b>0{index + 1}</b>
+                  <h3>{title}</h3>
+                  <p>{copy}</p>
+                </article>
+                {index < workflow.length - 1 && <span className="workflow-connector" aria-hidden="true">→</span>}
+              </Fragment>
             ))}
           </div>
           <div className="trace-row">
@@ -175,12 +178,12 @@ export default function Home() {
           <p>我要申请酒店住宿：北京朝阳区，1 人 1 晚，豪华房，预算 1200 元。请生成申请表，提交前让我确认。</p>
         </article>
         <div className="case-grid">
-          <figure className="case-step wide">
+          <figure className="case-step">
             <div className="image-frame"><img src={siteAssetPath("start-input.jpg")} alt="小络助手生产环境对话输入框与酒店申请快捷入口" /></div>
             <figcaption><b>01</b><span><strong>员工发起</strong><small>直接输入目标，或点击“申请酒店”快捷入口</small></span></figcaption>
           </figure>
           <figure className="case-step">
-            <div className="image-frame tall"><img src={siteAssetPath("application-form.jpg")} alt="小络助手根据员工需求生成酒店申请表" /></div>
+            <div className="image-frame"><img src={siteAssetPath("application-form.jpg")} alt="小络助手根据员工需求生成酒店申请表" /></div>
             <figcaption><b>02</b><span><strong>申请信息自动生成</strong><small>自然语言需求转成完整业务字段</small></span></figcaption>
           </figure>
           <figure className="case-step">
@@ -234,9 +237,12 @@ export default function Home() {
               ["发布能力", "提供给员工持续使用"],
               ["对话办理", "员工直接说明需求"],
             ].map(([title, copy], index) => (
-              <article key={title} className={index === 3 ? "green-card" : index === 2 ? "purple-card" : ""}>
-                <b>{title}</b><span>{copy}</span>{index < 4 && <i>→</i>}
-              </article>
+              <Fragment key={title}>
+                <article className={index === 3 ? "green-card" : index === 2 ? "purple-card" : ""}>
+                  <b>{title}</b><span>{copy}</span>
+                </article>
+                {index < 4 && <i className="config-connector" aria-hidden="true">→</i>}
+              </Fragment>
             ))}
           </div>
           <div className="config-benefits">
