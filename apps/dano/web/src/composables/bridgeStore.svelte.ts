@@ -90,6 +90,10 @@ const readTranscriptConfigState = transcriptConfigState as (
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
+export type BrowserAuthenticationState =
+  | { readonly status: "checking" }
+  | BridgeAuthenticationState;
+
 export type TranscriptEntry = RpcTranscriptMessage;
 export type TranscriptDelta = RpcTranscriptDeltaEvent;
 export type TranscriptStream = RpcTranscriptStartEvent;
@@ -330,7 +334,7 @@ function setActiveTreeSessionPath(sessionPath: string | null) {
 }
 
 let _connectionStatus = $state<ConnectionStatus>("disconnected");
-let _authentication = $state<BridgeAuthenticationState>({ status: "checking" });
+let _authentication = $state<BrowserAuthenticationState>({ status: "checking" });
 let _currentUser = $state<BridgeUserSummary | undefined>(undefined);
 let _accentColorPreset = $state<AccentColorPreset>(DEFAULT_ACCENT_COLOR_PRESET);
 let themeColorSelectionRevision = 0;
@@ -2435,22 +2439,31 @@ export async function fieldAssist(
 // ---------------------------------------------------------------------------
 
 function handleServerMessage(raw: MessageEvent) {
-  let envelope: ServerMessage;
+  let parsed: unknown;
   try {
-    envelope = JSON.parse(raw.data as string) as ServerMessage;
+    parsed = JSON.parse(raw.data as string) as unknown;
   } catch {
     return;
   }
+
+  if (!parsed || typeof parsed !== "object") return;
+  const candidate = parsed as { type?: unknown; payload?: unknown };
+  if (candidate.type === "authentication") {
+    const authentication = parseBridgeAuthenticationState(candidate.payload);
+    if (!authentication) return;
+    applyAuthentication(authentication);
+    if (authentication.status === "reauth_required") {
+      stopTransportForReauthentication();
+    }
+    return;
+  }
+
+  const envelope = parsed as ServerMessage;
 
   if (envelope.type === "response") {
     handleResponse(envelope.payload);
   } else if (envelope.type === "event") {
     handleEvent(envelope.payload);
-  } else if (envelope.type === "authentication") {
-    applyAuthentication(envelope.payload);
-    if (envelope.payload.status === "reauth_required") {
-      stopTransportForReauthentication();
-    }
   } else if (envelope.type === "extension_ui_request") {
     handleExtensionUIRequest(envelope.payload as RpcExtensionUIRequest);
   }
@@ -2991,6 +3004,52 @@ function applyAuthentication(state: BridgeAuthenticationState) {
   _currentUser = state.status === "authenticated" ? state.user : undefined;
 }
 
+export function parseBridgeAuthenticationState(
+  value: unknown,
+): BridgeAuthenticationState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as {
+    status?: unknown;
+    user?: unknown;
+    loginError?: unknown;
+  };
+  const loginErrorCode =
+    candidate.loginError && typeof candidate.loginError === "object"
+      ? (candidate.loginError as { code?: unknown }).code
+      : undefined;
+  const loginError: BridgeLoginError | undefined =
+    loginErrorCode === "provider_identity_invalid" ||
+    loginErrorCode === "provider_login_failed"
+      ? { code: loginErrorCode }
+      : undefined;
+  const withLoginError = loginError ? { loginError } : {};
+
+  if (candidate.status === "anonymous") {
+    return { status: "anonymous", ...withLoginError };
+  }
+  if (candidate.status === "reauth_required") {
+    return { status: "reauth_required", ...withLoginError };
+  }
+  if (candidate.status !== "authenticated") return undefined;
+  if (
+    !candidate.user ||
+    typeof candidate.user !== "object" ||
+    typeof (candidate.user as { username?: unknown }).username !== "string"
+  ) {
+    return undefined;
+  }
+  const username = (candidate.user as { username: string }).username;
+  const avatarUrl = (candidate.user as { avatarUrl?: unknown }).avatarUrl;
+  return {
+    status: "authenticated",
+    user: {
+      username,
+      ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
+    },
+    ...withLoginError,
+  };
+}
+
 function stopTransportForReauthentication() {
   clientId = null;
   clientMessagesUrl = null;
@@ -3012,49 +3071,7 @@ async function readCurrentAuthentication(): Promise<
       credentials: "same-origin",
     });
     if (!response.ok) return undefined;
-    const value = (await response.json()) as unknown;
-    if (!value || typeof value !== "object" || !("status" in value)) {
-      return undefined;
-    }
-    const status = (value as { status?: unknown }).status;
-    const loginErrorValue = (value as { loginError?: unknown }).loginError;
-    const loginErrorCode =
-      loginErrorValue && typeof loginErrorValue === "object"
-        ? (loginErrorValue as { code?: unknown }).code
-        : undefined;
-    const loginError: BridgeLoginError | undefined =
-      loginErrorCode === "provider_identity_invalid" ||
-      loginErrorCode === "provider_login_failed"
-        ? { code: loginErrorCode }
-        : undefined;
-    if (status === "anonymous") {
-      return { status: "anonymous", ...(loginError ? { loginError } : {}) };
-    }
-    if (status === "reauth_required") {
-      return {
-        status: "reauth_required",
-        ...(loginError ? { loginError } : {}),
-      };
-    }
-    if (status !== "authenticated") return undefined;
-    const user = (value as { user?: unknown }).user;
-    if (
-      !user ||
-      typeof user !== "object" ||
-      typeof (user as { username?: unknown }).username !== "string"
-    ) {
-      return undefined;
-    }
-    const username = (user as { username: string }).username;
-    const avatarUrl = (user as { avatarUrl?: unknown }).avatarUrl;
-    return {
-      status: "authenticated",
-      user: {
-        username,
-        ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
-      },
-      ...(loginError ? { loginError } : {}),
-    };
+    return parseBridgeAuthenticationState(await response.json());
   } catch {
     return undefined;
   }
@@ -3114,10 +3131,7 @@ async function connectOnce(): Promise<boolean> {
     const currentAuthentication = await readCurrentAuthentication();
     if (currentAuthentication) {
       applyAuthentication(currentAuthentication);
-      if (
-        currentAuthentication.status !== "checking" &&
-        currentAuthentication.loginError
-      ) {
+      if (currentAuthentication.loginError) {
         pushNotification(t("authentication.loginFailed"), "error");
       }
     }
@@ -3144,7 +3158,7 @@ async function connectOnce(): Promise<boolean> {
       eventsUrl?: string;
       messagesUrl?: string;
       defaultWorkspacePath?: string | null;
-      authentication?: BridgeAuthenticationState;
+      authentication?: unknown;
       currentUser?: BridgeUserSummary;
     };
     const nextClientId = created.client?.id;
@@ -3155,8 +3169,11 @@ async function connectOnce(): Promise<boolean> {
     clientId = nextClientId;
     clientMessagesUrl = created.messagesUrl;
     defaultWorkspacePath = normalizeBridgePath(created.defaultWorkspacePath);
-    if (created.authentication) {
-      applyAuthentication(created.authentication);
+    const createdAuthentication = parseBridgeAuthenticationState(
+      created.authentication,
+    );
+    if (createdAuthentication) {
+      applyAuthentication(createdAuthentication);
     } else {
       _currentUser = created.currentUser;
     }

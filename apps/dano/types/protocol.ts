@@ -1166,7 +1166,6 @@ export interface BridgeLoginError {
 
 /** Browser-safe authentication state for the current Dano client. */
 export type BridgeAuthenticationState =
-  | { readonly status: "checking" }
   | {
       readonly status: "anonymous";
       readonly loginError?: BridgeLoginError;
