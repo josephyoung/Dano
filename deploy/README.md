@@ -236,6 +236,88 @@ TLS terminator); do not treat the HTTP example as OAuth acceptance. In the
 HTTPS browser flow, verify the login entry in the left Menu, clean callback
 return, authenticated Menu, logout, and the new usable Anonymous User.
 
+### Real provider Skill/Broker release gate
+
+Use the test-only `provider-broker-release-gate` Skill to prove that a real Pi
+Turn reaches the configured provider through `provider_request`. Choose a
+read-only provider path whose response is safe for an acceptance transcript;
+the path stays in runtime configuration and is not part of Dano core.
+
+Install the Skill into the disposable Agent Config Directory used by the test
+runtime:
+
+```bash
+PI_CODING_AGENT_DIR=/path/to/test-agent-config \
+DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
+node scripts/check-provider-skill-release-gate.mjs install
+```
+
+Prepare a fresh evidence contract for this browser run. The file contains only
+random markers, hashes, statuses, and timestamps; it must not contain a provider
+address, Credential, Cookie, Login Session ID, raw Client ID, raw User/runtime
+path, response body, or response headers:
+
+```bash
+node scripts/check-provider-skill-release-gate.mjs prepare \
+  /path/to/provider-skill-evidence.json
+```
+
+In the Codex in-app Browser, create two Dano Login Sessions for the same test
+account and open the same Agent Session from both. Session B remains a viewer
+so the real Pi runtime stays alive when session A disconnects. Invoke the Skill
+from A with a unique `gate-a-before` marker. Release its server-side wait and
+confirm its `provider_request` succeeds:
+
+```bash
+PI_CODING_AGENT_DIR=/path/to/test-agent-config \
+node scripts/check-provider-skill-release-gate.mjs release gate-a-before
+```
+
+Invoke it from A again with `gate-a-after`, but leave the server-side wait
+pending. Log out A, confirm its old client is disconnected, then release the
+wait. This continues the already-started Assistant Turn, whose Credential
+remains bound to A; its subsequent `provider_request` must return
+`authentication_required`. Finally invoke the Skill in a new Turn from B with
+`gate-b-after`, release its wait, and confirm it still succeeds. The controlled
+test accounts are recorded in
+`apps/dano/src/__tests__/fixtures/real-oauth-acceptance.json`.
+
+Fill the prepared evidence only from this run's public HTTP/SSE observations:
+
+- `aStatus` and `bStatus` come from each authenticated auth DTO.
+- Client fingerprints are SHA-256 hashes of the two `/api/clients` response
+  Client IDs. A's two prompts must use the same Client; B must be different.
+- User fingerprints are SHA-256 hashes of each Client response's
+  `defaultWorkspacePath`. They must match. Set the User's preference to the
+  prepared `yellow` marker through A and read it through B, then restore the
+  initial preference after capture.
+- Session fingerprints are SHA-256 hashes of the `sessionPath` returned through
+  the Bridge. B must successfully `switch_session` to A's path; record only the
+  hash, never the path.
+- Sequence timestamps surround the public prompt POST/SSE result, logout POST,
+  old-A Client request, B auth DTO read, and release calls. Logout must return
+  200, the old A Client request must return 404, and B must remain
+  `authenticated` before its post-logout Skill Turn succeeds.
+
+Verify the three phases in the shared real Pi transcript without printing response bodies, headers,
+credentials, Cookies, Login Session IDs, or provider addresses:
+
+```bash
+DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
+DANO_PROVIDER_GATE_SESSION=/path/to/shared-session.jsonl \
+pnpm run test:auth-real-provider-skill -- /path/to/provider-skill-evidence.json
+```
+
+The verifier requires the Skill's successful wait tool result before each
+`provider_request`, so the held A Turn is reproducible without a hidden
+acceptance endpoint, a copied credential, or a direct Broker call. Remove the
+test Skill after acceptance:
+
+```bash
+PI_CODING_AGENT_DIR=/path/to/test-agent-config \
+node scripts/check-provider-skill-release-gate.mjs remove
+```
+
 ```bash
 cp .env.example .env
 # Fill the required DANO_OAUTH_* values in .env before startup.
