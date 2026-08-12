@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { createHash, createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BridgeEventBus } from "../bridge-event-bus.js";
+import { createAnonymousUserContextResolver } from "../anonymous-user-context.js";
 import {
   BridgeServer,
   type AuthHttpHandler,
@@ -1157,6 +1158,172 @@ describe("BridgeServer HTTP/SSE transport", () => {
         "utf8",
       ),
     ).toBe("guest data");
+  });
+
+  it("retries transferred Anonymous User cleanup after retirement fails", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-transfer-cleanup-retry-"),
+    );
+    userRoots.push(runtimeRoot);
+    const anonymousUsers = createAnonymousUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secureCookie: false,
+      now: () => 1_000,
+    });
+    const created = await anonymousUsers.resolveForClient!({});
+    if (!created?.setCookie) throw new Error("Expected Anonymous User Cookie");
+    const source = created.userContext;
+    const sourceWorkspacePath = path.join(
+      source.folderPath,
+      "workspaces",
+      "default",
+    );
+    fs.mkdirSync(sourceWorkspacePath, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceWorkspacePath, "transferred.txt"),
+      "retained by target",
+      "utf8",
+    );
+    const target = {
+      user: {
+        id: "authenticated-cleanup-target",
+        username: "Cleanup Target",
+      },
+      folderPath: path.join(
+        runtimeRoot,
+        "users",
+        "authenticated-cleanup-target",
+      ),
+    };
+    fs.mkdirSync(target.folderPath, { recursive: true });
+
+    class FailingOnceRegistry extends UserRuntimeRegistry {
+      retireAttempts = 0;
+
+      override async retireUser(userContext: typeof source): Promise<void> {
+        this.retireAttempts += 1;
+        if (this.retireAttempts === 1) {
+          throw new Error("injected retirement failure");
+        }
+        await super.retireUser(userContext);
+      }
+    }
+    const registry = new FailingOnceRegistry(async () => {
+      throw new Error("test backend should not be created");
+    });
+    const authHandler: AuthHttpHandler = {
+      async handle(req, res, url, lifecycle) {
+        if (req.method !== "POST" || url.pathname !== "/api/test-transfer") {
+          return false;
+        }
+        await lifecycle.transferAnonymousUser(
+          req.headers,
+          source.user.id,
+          target,
+        );
+        res.writeHead(204);
+        res.end();
+        return true;
+      },
+    };
+    const uploadDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-transfer-cleanup-upload-"),
+    );
+    uploadRoots.push(uploadDir);
+    const server = new BridgeServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir },
+      },
+      () => {
+        throw new Error("test handler should not be created");
+      },
+      new BridgeEventBus(DEFAULT_BRIDGE_CONFIG),
+      vi.fn(),
+      anonymousUsers,
+      authHandler,
+      registry,
+      anonymousUsers,
+      { idleTtlMs: 60_000, intervalMs: 60_000 },
+    );
+    servers.push(server);
+    const address = await server.start();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const cookie = created.setCookie.split(";", 1)[0]!;
+
+    const response = await fetch(`${origin}/api/test-transfer`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    });
+
+    expect(response.status).toBe(204);
+    expect(
+      fs.readFileSync(
+        path.join(
+          target.folderPath,
+          "workspaces",
+          "default",
+          "transferred.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("retained by target");
+    expect(await anonymousUsers.resolveAnonymous!({ cookie })).toBeNull();
+    expect(registry.retireAttempts).toBe(1);
+    expect(fs.existsSync(source.folderPath)).toBe(true);
+    expect(
+      fs.readdirSync(path.join(runtimeRoot, "anonymous-sessions")),
+    ).toHaveLength(1);
+
+    await server.stop();
+    servers.splice(servers.indexOf(server), 1);
+    const restartedAnonymousUsers = createAnonymousUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secureCookie: false,
+      now: () => 1_000,
+    });
+    const restartedRegistry = new UserRuntimeRegistry(async () => {
+      throw new Error("test backend should not be created");
+    });
+    const restartedServer = new BridgeServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir },
+      },
+      () => {
+        throw new Error("test handler should not be created");
+      },
+      new BridgeEventBus(DEFAULT_BRIDGE_CONFIG),
+      vi.fn(),
+      restartedAnonymousUsers,
+      undefined,
+      restartedRegistry,
+      restartedAnonymousUsers,
+      { idleTtlMs: 60_000, intervalMs: 60_000 },
+    );
+    servers.push(restartedServer);
+
+    await restartedServer.start();
+
+    expect(fs.existsSync(source.folderPath)).toBe(false);
+    expect(
+      fs.readdirSync(path.join(runtimeRoot, "anonymous-sessions")),
+    ).toEqual([]);
+    expect(
+      fs.readFileSync(
+        path.join(
+          target.folderPath,
+          "workspaces",
+          "default",
+          "transferred.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("retained by target");
   });
 
   it("returns 202 before an asynchronous provider-stage prompt error is presented", async () => {
