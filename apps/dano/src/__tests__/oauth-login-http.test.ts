@@ -133,13 +133,34 @@ async function startFakeProvider(options: {
   identity?: unknown;
 } = {}) {
   const tokenRequests: URLSearchParams[] = [];
+  const tokenRequestHeaders: http.IncomingHttpHeaders[] = [];
   const identityAuthorization: string[] = [];
+  const identityRequestHeaders: http.IncomingHttpHeaders[] = [];
+  const revocationRequests: Array<{
+    method: string;
+    token: string | null;
+    authorization: string;
+    providerContext: string;
+  }> = [];
   const server = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url ?? "/", "http://provider.invalid");
+    if (req.method === "DELETE" && requestUrl.pathname === "/revoke") {
+      revocationRequests.push({
+        method: req.method,
+        token: requestUrl.searchParams.get("token"),
+        authorization: req.headers.authorization ?? "",
+        providerContext: String(req.headers["x-provider-context"] ?? ""),
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ code: 0, data: true }));
+      return;
+    }
     if (req.method === "POST" && req.url === "/token") {
       let body = "";
       req.setEncoding("utf8");
       req.on("data", chunk => (body += chunk));
       req.on("end", () => {
+        tokenRequestHeaders.push(req.headers);
         tokenRequests.push(new URLSearchParams(body));
         setTimeout(() => {
           res.writeHead(options.tokenStatus ?? 200, {
@@ -162,6 +183,7 @@ async function startFakeProvider(options: {
       return;
     }
     if (req.method === "GET" && req.url === "/identity") {
+      identityRequestHeaders.push(req.headers);
       identityAuthorization.push(req.headers.authorization ?? "");
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
@@ -188,7 +210,10 @@ async function startFakeProvider(options: {
   return {
     origin: `http://127.0.0.1:${address.port}`,
     tokenRequests,
+    tokenRequestHeaders,
     identityAuthorization,
+    identityRequestHeaders,
+    revocationRequests,
   };
 }
 
@@ -377,6 +402,7 @@ describe("OAuth authentication over HTTP", () => {
       allowInsecureRequests: true,
     });
     const { origin } = await startOAuthServer(provider);
+    expect(provider.revokeCredential).toBeUndefined();
     const started = await fetch(`${origin}/api/auth/login`, {
       redirect: "manual",
     });
@@ -426,6 +452,75 @@ describe("OAuth authentication over HTTP", () => {
     });
   });
 
+  it("normalizes a provider data envelope inside the adapter boundary", async () => {
+    const fakeProvider = await startFakeProvider({
+      tokenResponse: {
+        code: 0,
+        data: {
+          access_token: "wrapped-access-token",
+          refresh_token: "wrapped-refresh-token",
+          token_type: "Bearer",
+          expires_in: 3600,
+        },
+      },
+      identity: {
+        code: 0,
+        data: {
+          id: 4242,
+          nickname: "Wrapped Identity",
+          avatar: "https://avatar.invalid/wrapped.png",
+          privateProfile: "must-not-cross-the-adapter",
+        },
+      },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "user.read",
+      requestHeaders: { "x-provider-context": "fixed-context" },
+      sendStateToTokenEndpoint: true,
+      allowInsecureRequests: true,
+    });
+    const { origin } = await startOAuthServer(provider);
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=wrapped-code&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(cookieFrom(callback, "dano_login")).toMatch(/^dano_login=/);
+    expect(fakeProvider.tokenRequestHeaders[0]?.["x-provider-context"]).toBe(
+      "fixed-context",
+    );
+    expect(fakeProvider.tokenRequests[0]?.get("state")).toBe(state);
+    expect(fakeProvider.identityRequestHeaders[0]?.["x-provider-context"]).toBe(
+      "fixed-context",
+    );
+    const current = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: cookieFrom(callback, "dano_login") },
+    });
+    expect(await current.json()).toEqual({
+      status: "authenticated",
+      user: {
+        username: "Wrapped Identity",
+        avatarUrl: "https://avatar.invalid/wrapped.png",
+      },
+    });
+  });
+
   it("uses openid-client to refresh and retains a refresh token omitted during rotation", async () => {
     const fakeProvider = await startFakeProvider({
       tokenResponse(request: URLSearchParams) {
@@ -470,6 +565,41 @@ describe("OAuth authentication over HTTP", () => {
       refreshToken: "initial-refresh-token",
       tokenType: "bearer",
     });
+  });
+
+  it("supports a provider DELETE revocation contract without exposing the credential", async () => {
+    const fakeProvider = await startFakeProvider();
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      revocation: {
+        transport: "delete-query-basic",
+        endpoint: `${fakeProvider.origin}/revoke`,
+      },
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "user.read",
+      requestHeaders: { "x-provider-context": "fixed-context" },
+      allowInsecureRequests: true,
+    });
+
+    await provider.revokeCredential?.({
+      accessToken: "access-token-to-revoke",
+      refreshToken: "refresh-token-must-not-be-sent",
+    });
+
+    expect(fakeProvider.revocationRequests).toEqual([
+      {
+        method: "DELETE",
+        token: "access-token-to-revoke",
+        authorization: `Basic ${Buffer.from(
+          "fake-client:fake-client-secret",
+        ).toString("base64")}`,
+        providerContext: "fixed-context",
+      },
+    ]);
   });
 
   it("atomically consumes state and rejects replay or another browser binding", async () => {

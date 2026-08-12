@@ -431,6 +431,12 @@ describe("Dano main", () => {
       DANO_OAUTH_CLIENT_ID: "dano-client",
       DANO_OAUTH_CLIENT_SECRET: "client-secret",
       DANO_OAUTH_SCOPE: "profile offline_access",
+      DANO_OAUTH_PROVIDER_HEADERS_JSON:
+        '{"X-Provider-Context":"fixed-context"}',
+      DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT: "true",
+      DANO_OAUTH_REVOCATION_TRANSPORT: "delete-query-basic",
+      DANO_OAUTH_REVOCATION_ENDPOINT:
+        "https://provider.example.test/revoke",
       DANO_OAUTH_REDIRECT_URI:
         "https://dano.example.test/api/auth/callback",
       DANO_OAUTH_CREDENTIAL_KEY: key,
@@ -446,9 +452,15 @@ describe("Dano main", () => {
         authorizationEndpoint: "https://provider.example.test/authorize",
         tokenEndpoint: "https://provider.example.test/token",
         identityEndpoint: "https://provider.example.test/identity",
+        revocation: {
+          transport: "delete-query-basic",
+          endpoint: "https://provider.example.test/revoke",
+        },
         clientId: "dano-client",
         clientSecret: "client-secret",
         scope: "profile offline_access",
+        requestHeaders: { "x-provider-context": "fixed-context" },
+        sendStateToTokenEndpoint: true,
       },
       credentialEncryptionKey: {
         version: "key-v1",
@@ -468,6 +480,64 @@ describe("Dano main", () => {
         DANO_OAUTH_CLIENT_ID: "only-one-value",
       }),
     ).toThrow("OAuth configuration is incomplete");
+  });
+
+  it("rejects malformed provider request headers", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_PROVIDER_HEADERS_JSON: '["not", "an", "object"]',
+      }),
+    ).toThrow("OAuth provider headers must be a JSON object");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_PROVIDER_HEADERS_JSON: '{"x-provider-context":42}',
+      }),
+    ).toThrow("OAuth provider headers must contain string values");
+  });
+
+  it("validates optional OAuth revocation transport configuration", () => {
+    const configured = parseDanoServerOptions([], {
+      ...oauthEnvironment(),
+      DANO_OAUTH_REVOCATION_TRANSPORT: "delete-query-basic",
+    });
+    expect(configured.oauthAuthentication?.provider.revocation).toEqual({
+      transport: "delete-query-basic",
+      endpoint: "https://provider.example.test/token",
+    });
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_REVOCATION_TRANSPORT: "invented",
+      }),
+    ).toThrow("OAuth revocation transport is unsupported");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
+      }),
+    ).toThrow("OAuth RFC 7009 revocation endpoint is required");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_REVOCATION_ENDPOINT:
+          "https://provider.example.test/revoke",
+      }),
+    ).toThrow(
+      "OAuth revocation transport is required when its endpoint is configured",
+    );
+  });
+
+  it("rejects an invalid token state compatibility flag", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT: "sometimes",
+      }),
+    ).toThrow(
+      "DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT must be true or false",
+    );
   });
 
   it("requires the complete OAuth configuration in production", () => {
@@ -496,7 +566,11 @@ describe("Dano main", () => {
   it("actively validates each unique provider TLS origin with sanitized failures", async () => {
     const configuration = parseDanoServerOptions(["--validate-config"], {
       NODE_ENV: "production",
-      ...oauthEnvironment(),
+      ...oauthEnvironment({
+        DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
+        DANO_OAUTH_REVOCATION_ENDPOINT:
+          "https://provider-revoke.example.test/revoke",
+      }),
     }).oauthAuthentication!;
     const probes: string[] = [];
 
@@ -507,6 +581,7 @@ describe("Dano main", () => {
     expect(probes).toEqual([
       "https://provider.example.test/",
       "https://provider-api.example.test/",
+      "https://provider-revoke.example.test/",
     ]);
     await expect(
       validateOAuthProviderTls(configuration, async endpoint => {

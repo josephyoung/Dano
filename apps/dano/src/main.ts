@@ -279,6 +279,7 @@ function readOAuthAuthentication(
     throw new Error("OAuth configuration is incomplete");
   }
   const redirectUri = new URL(values.DANO_OAUTH_REDIRECT_URI!);
+  const revocation = readOAuthRevocation(env, values.DANO_OAUTH_TOKEN_ENDPOINT!);
   if (
     redirectUri.pathname !== "/api/auth/callback" ||
     redirectUri.search ||
@@ -294,6 +295,9 @@ function readOAuthAuthentication(
     ["token endpoint", new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!)],
     ["identity endpoint", new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!)],
     ["API origin", new URL(values.DANO_OAUTH_API_ORIGIN!)],
+    ...(revocation?.endpoint
+      ? [["revocation endpoint", new URL(revocation.endpoint)] as const]
+      : []),
   ] as const;
   for (const [name, url] of providerUrls) {
     if (url.username || url.password || url.hash) {
@@ -346,6 +350,13 @@ function readOAuthAuthentication(
       "OAuth Login Session absolute TTL must be greater than idle TTL",
     );
   }
+  const requestHeaders = readOAuthProviderHeaders(
+    env.DANO_OAUTH_PROVIDER_HEADERS_JSON,
+  );
+  const sendStateToTokenEndpoint = readOptionalBoolean(
+    env.DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT,
+    "DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT",
+  );
   return {
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
@@ -357,9 +368,14 @@ function readOAuthAuthentication(
       ).href,
       tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
       identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
+      ...(revocation ? { revocation } : {}),
       clientId: values.DANO_OAUTH_CLIENT_ID!,
       clientSecret: values.DANO_OAUTH_CLIENT_SECRET!,
       scope: values.DANO_OAUTH_SCOPE!,
+      ...(requestHeaders ? { requestHeaders } : {}),
+      ...(sendStateToTokenEndpoint !== undefined
+        ? { sendStateToTokenEndpoint }
+        : {}),
     },
     credentialEncryptionKey: {
       version: values.DANO_OAUTH_CREDENTIAL_KEY_VERSION!,
@@ -367,6 +383,74 @@ function readOAuthAuthentication(
     },
     session,
   };
+}
+
+function readOAuthRevocation(
+  env: Record<string, string | undefined>,
+  tokenEndpoint: string,
+): OAuth2ProviderAdapterOptions["revocation"] {
+  const transport = env.DANO_OAUTH_REVOCATION_TRANSPORT?.trim();
+  const endpoint = env.DANO_OAUTH_REVOCATION_ENDPOINT?.trim();
+  if (!transport) {
+    if (endpoint) {
+      throw new Error(
+        "OAuth revocation transport is required when its endpoint is configured",
+      );
+    }
+    return undefined;
+  }
+  if (transport === "rfc7009") {
+    if (!endpoint) {
+      throw new Error("OAuth RFC 7009 revocation endpoint is required");
+    }
+    return { transport, endpoint: new URL(endpoint).href };
+  }
+  if (transport === "delete-query-basic") {
+    return {
+      transport,
+      endpoint: new URL(endpoint || tokenEndpoint).href,
+    };
+  }
+  throw new Error("OAuth revocation transport is unsupported");
+}
+
+function readOAuthProviderHeaders(
+  value: string | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (!value?.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("OAuth provider headers must be a JSON object");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("OAuth provider headers must be a JSON object");
+  }
+  const entries = Object.entries(parsed);
+  if (
+    entries.some(
+      ([name, headerValue]) =>
+        !name.trim() || typeof headerValue !== "string" || !headerValue.trim(),
+    )
+  ) {
+    throw new Error("OAuth provider headers must contain string values");
+  }
+  const headers = new Headers(
+    entries.map(([name, headerValue]) => [name, (headerValue as string).trim()]),
+  );
+  return Object.fromEntries(headers.entries());
+}
+
+function readOptionalBoolean(
+  value: string | undefined,
+  name: string,
+): boolean | undefined {
+  if (!value?.trim()) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true") return true;
+  if (normalized === "0" || normalized === "false") return false;
+  throw new Error(`${name} must be true or false`);
 }
 
 function assertProductionAuthenticationEnvironment(
@@ -400,6 +484,9 @@ export async function validateOAuthProviderTls(
     config.provider.tokenEndpoint,
     config.provider.identityEndpoint,
     config.providerApiOrigin,
+    ...(config.provider.revocation?.endpoint
+      ? [config.provider.revocation.endpoint]
+      : []),
   ];
   const origins = [
     ...new Map(endpoints.map(value => {
