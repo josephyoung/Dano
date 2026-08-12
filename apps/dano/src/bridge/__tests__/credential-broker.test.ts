@@ -17,6 +17,7 @@ import {
   CredentialBroker,
   type CredentialSession,
 } from "../credential-broker.js";
+import { createOAuth2ProviderAdapter } from "../oauth-provider.js";
 
 const TEST_SCOPE = "user-a";
 
@@ -476,6 +477,144 @@ describe("Credential Broker", () => {
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(providerFetch).toHaveBeenCalledTimes(2);
     expect(requireReauthentication).toHaveBeenCalledOnce();
+  });
+
+  it("awaits an async access-token predicate without consuming the retried response", async () => {
+    const refreshCredential = vi.fn(async () => ({
+      accessToken: "renewed-access",
+      refreshToken: "rotated-refresh",
+    }));
+    const seenAuthorization: string[] = [];
+    const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const authorization =
+        new Headers(init?.headers).get("authorization") ?? "";
+      seenAuthorization.push(authorization);
+      return authorization === "Bearer expired-access"
+        ? new Response('{"code":401,"data":null}')
+        : new Response('{"code":0,"data":{"value":"available"}}');
+    });
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "expired-access",
+        refreshToken: "initial-refresh",
+      }),
+      refreshCredential,
+      isAccessTokenInvalid: async response => {
+        const value = (await response.clone().json()) as { code?: unknown };
+        return value.code === 401;
+      },
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    await expect(
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/wrapped-auth",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 200,
+      headers: { "content-type": "text/plain;charset=UTF-8" },
+      body: '{"code":0,"data":{"value":"available"}}',
+    });
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(seenAuthorization).toEqual([
+      "Bearer expired-access",
+      "Bearer renewed-access",
+    ]);
+  });
+
+  it("requires reauthentication when the adapter rejects the refreshed wrapper response", async () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.test",
+      authorizationEndpoint: "https://provider.test/authorize",
+      tokenEndpoint: "https://provider.test/token",
+      identityEndpoint: "https://provider.test/identity",
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "user.read",
+    });
+    const refreshCredential = vi.fn(async () => ({
+      accessToken: "renewed-access-secret",
+      refreshToken: "rotated-refresh-secret",
+    }));
+    const requireReauthentication = vi.fn(async () => {});
+    const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const authorization =
+        new Headers(init?.headers).get("authorization") ?? "";
+      return new Response(
+        JSON.stringify({
+          code: 401,
+          data: null,
+          privateFailure: authorization,
+        }),
+      );
+    });
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "expired-access-secret",
+        refreshToken: "initial-refresh-secret",
+      }),
+      refreshCredential,
+      requireReauthentication,
+      isAccessTokenInvalid: response =>
+        provider.isAccessTokenInvalid?.(response) ?? false,
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    const result = await credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/wrapped-auth",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "reauth_required",
+        message: "Login is required again for this provider request.",
+      },
+    });
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    expect(requireReauthentication).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toMatch(
+      /expired-access-secret|initial-refresh-secret|renewed-access-secret|rotated-refresh-secret|privateFailure/,
+    );
+  });
+
+  it("keeps synchronous custom access-token predicates compatible", async () => {
+    const predicate = vi.fn((response: Response) => response.status === 418);
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({ accessToken: "access-a" }),
+      isAccessTokenInvalid: predicate,
+      fetch: vi.fn(async () => new Response("available")) as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    await expect(
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/sync-predicate",
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 200, body: "available" });
+    expect(predicate).toHaveBeenCalledOnce();
   });
 
   it("keeps the rotated Credential when the retried request has a transport failure", async () => {

@@ -113,7 +113,9 @@ export interface CredentialBrokerOptions {
     loginSessionId: string,
   ) => Promise<ProviderCredential | null>;
   readonly requireReauthentication?: (loginSessionId: string) => Promise<void>;
-  readonly isAccessTokenInvalid?: (response: Response) => boolean;
+  readonly isAccessTokenInvalid?: (
+    response: Response,
+  ) => boolean | Promise<boolean>;
   readonly fetch?: typeof fetch;
 }
 
@@ -405,7 +407,7 @@ export class CredentialBroker {
     try {
       let response = await send(credential);
       let responseCredential = credential;
-      if (this.accessTokenInvalid(response)) {
+      if (await this.accessTokenInvalid(response)) {
         const latestCredential = await this.options.readCredential(
           binding.loginSessionId,
         );
@@ -421,7 +423,7 @@ export class CredentialBroker {
         }
         responseCredential = refreshed;
         response = await send(refreshed);
-        if (this.accessTokenInvalid(response)) {
+        if (await this.accessTokenInvalid(response)) {
           await this.markReauthenticationRequired(binding.loginSessionId);
           return REAUTHENTICATION_REQUIRED;
         }
@@ -451,8 +453,11 @@ export class CredentialBroker {
     }
   }
 
-  private accessTokenInvalid(response: Response): boolean {
-    return this.options.isAccessTokenInvalid?.(response) ?? response.status === 401;
+  private async accessTokenInvalid(response: Response): Promise<boolean> {
+    return (
+      (await this.options.isAccessTokenInvalid?.(response)) ??
+      response.status === 401
+    );
   }
 
   private refreshLoginSession(

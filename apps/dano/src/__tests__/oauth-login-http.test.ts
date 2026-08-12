@@ -524,6 +524,59 @@ describe("OAuth authentication over HTTP", () => {
     });
   });
 
+  it("recognizes a successful HTTP response whose provider wrapper rejects the access token", async () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.test",
+      authorizationEndpoint: "https://provider.test/authorize",
+      tokenEndpoint: "https://provider.test/token",
+      identityEndpoint: "https://provider.test/identity",
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "user.read",
+    });
+
+    await expect(
+      provider.isAccessTokenInvalid?.(
+        new Response('{"code":401,"data":null}', { status: 200 }),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("recognizes transport and string wrapper failures while preserving provider responses", async () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.test",
+      authorizationEndpoint: "https://provider.test/authorize",
+      tokenEndpoint: "https://provider.test/token",
+      identityEndpoint: "https://provider.test/identity",
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "user.read",
+    });
+    const cases = [
+      {
+        response: new Response("transport unauthorized", { status: 401 }),
+        expected: true,
+      },
+      {
+        response: new Response('{"code":"401","data":null}'),
+        expected: true,
+      },
+      {
+        response: new Response('{"code":0,"data":{"value":"ok"}}'),
+        expected: false,
+      },
+      { response: new Response("plain provider response"), expected: false },
+    ];
+
+    for (const testCase of cases) {
+      const originalBody = await testCase.response.clone().text();
+      await expect(
+        provider.isAccessTokenInvalid?.(testCase.response),
+      ).resolves.toBe(testCase.expected);
+      await expect(testCase.response.text()).resolves.toBe(originalBody);
+    }
+  });
+
   it("uses openid-client to refresh and retains a refresh token omitted during rotation", async () => {
     const fakeProvider = await startFakeProvider({
       tokenResponse(request: URLSearchParams) {
