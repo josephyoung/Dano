@@ -344,13 +344,16 @@ async function mergeEntry(
       fs.promises.readFile(destinationPath),
     ]);
     if (sourceData.equals(targetData)) return;
-    if (isThemePreferencePath(sourcePath, destinationPath)) {
-      await mergeThemePreference(
+    if (
+      await resolveTransferredFileConflict(
+        sourcePath,
+        destinationPath,
         sourceData,
         targetData,
-        destinationPath,
         journal,
-      );
+        options,
+      )
+    ) {
       return;
     }
     destinationPath = await availableTransferredPath(destinationPath);
@@ -373,20 +376,41 @@ async function mergeEntry(
   journal.created(destinationPath);
 }
 
-async function mergeThemePreference(
+async function resolveTransferredFileConflict(
+  sourcePath: string,
+  targetPath: string,
   sourceData: Buffer,
   targetData: Buffer,
-  targetPath: string,
   journal: FileTransferJournal,
-): Promise<void> {
+  roots: {
+    sourceRootText: string;
+    targetRootText: string;
+  },
+): Promise<boolean> {
+  const sourceRelative = path.relative(roots.sourceRootText, sourcePath);
+  const targetRelative = path.relative(roots.targetRootText, targetPath);
+  if (sourceRelative !== targetRelative) return false;
+  const segments = sourceRelative.split(path.sep);
+  if (
+    segments.length !== 2 ||
+    segments[0] !== "preferences" ||
+    path.extname(segments[1]!) !== ".json"
+  ) {
+    return false;
+  }
+
   const source = parseJsonObject(sourceData);
   const target = parseJsonObject(targetData);
-  if (!source || !target) return;
-  const merged = Buffer.from(`${JSON.stringify({ ...source, ...target })}\n`, "utf8");
-  if (merged.equals(targetData)) return;
+  if (!source || !target) return false;
+  const merged = Buffer.from(
+    `${JSON.stringify({ ...source, ...target })}\n`,
+    "utf8",
+  );
+  if (merged.equals(targetData)) return true;
   const targetMode = (await fs.promises.stat(targetPath)).mode;
   journal.replaced(targetPath, targetData, targetMode);
   await fs.promises.writeFile(targetPath, merged, { mode: targetMode });
+  return true;
 }
 
 function parseJsonObject(data: Buffer): Record<string, unknown> | null {
@@ -398,15 +422,6 @@ function parseJsonObject(data: Buffer): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function isThemePreferencePath(sourcePath: string, targetPath: string): boolean {
-  return (
-    path.basename(sourcePath) === "theme.json" &&
-    path.basename(targetPath) === "theme.json" &&
-    path.basename(path.dirname(sourcePath)) === "preferences" &&
-    path.basename(path.dirname(targetPath)) === "preferences"
-  );
 }
 
 async function mergeSessionDirectory(
