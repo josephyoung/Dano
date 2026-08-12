@@ -129,16 +129,12 @@ export function createOAuth2ProviderAdapter(
           { expectedState: state },
         ),
       );
-      const identityResponse = await oauth.fetchProtectedResource(
+      const identity = await fetchExternalIdentity(
         configuration,
         tokens.access_token,
+        tokens.token_type,
         identityEndpoint,
-        "GET",
       );
-      if (!identityResponse.ok) {
-        throw new Error("Provider identity request failed");
-      }
-      const identity = parseExternalIdentity(await identityResponse.json());
       const expiresIn = tokens.expiresIn();
       return {
         identity,
@@ -155,7 +151,18 @@ export function createOAuth2ProviderAdapter(
         credential.refreshToken,
       );
       const expiresIn = tokens.expiresIn();
-      return tokenResponseCredential(tokens, expiresIn, credential.refreshToken);
+      const refreshed = tokenResponseCredential(
+        tokens,
+        expiresIn,
+        credential.refreshToken,
+      );
+      await fetchExternalIdentity(
+        configuration,
+        refreshed.accessToken,
+        refreshed.tokenType,
+        identityEndpoint,
+      );
+      return refreshed;
     },
 
     isAccessTokenInvalid(response) {
@@ -189,6 +196,27 @@ export function createOAuth2ProviderAdapter(
     ...adapter,
     ...(revokeCredential ? { revokeCredential } : {}),
   };
+}
+
+async function fetchExternalIdentity(
+  configuration: oauth.Configuration,
+  accessToken: string,
+  tokenType: string | undefined,
+  identityEndpoint: URL,
+): Promise<ExternalIdentity> {
+  if (tokenType && tokenType.trim().toLowerCase() !== "bearer") {
+    throw new Error("Provider access token type is unsupported");
+  }
+  const response = await oauth.fetchProtectedResource(
+    configuration,
+    accessToken,
+    identityEndpoint,
+    "GET",
+  );
+  if (!response.ok) {
+    throw new Error("Provider identity request failed");
+  }
+  return parseExternalIdentity(await response.json());
 }
 
 async function deleteQueryRevocation(input: {
