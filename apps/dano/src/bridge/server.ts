@@ -1222,9 +1222,16 @@ export class BridgeServer {
       for (const [clientId, user] of [...this.clientUsers]) {
         if (user.user.id === source.user.id) this.disconnectClient(clientId);
       }
-      await this.userRuntimeRegistry.retireUser(source).catch(error => {
-        console.warn("Transferred Anonymous User cleanup failed:", error);
-      });
+      await this.userRuntimeRegistry
+        .retireUser(source)
+        .then(() =>
+          this.userContextResolver?.completeAnonymousUserCleanup?.(
+            source.user.id,
+          ),
+        )
+        .catch(error => {
+          console.warn("Transferred Anonymous User cleanup failed:", error);
+        });
     } finally {
       finishTransfer();
     }

@@ -51,6 +51,7 @@ export interface UserContextResolver {
     headers: IncomingHttpHeaders,
     expectedUserId: string,
   ): Promise<boolean>;
+  completeAnonymousUserCleanup?(userId: string): Promise<boolean>;
 }
 
 export interface AuthenticatedUserContextResolver extends UserContextResolver {

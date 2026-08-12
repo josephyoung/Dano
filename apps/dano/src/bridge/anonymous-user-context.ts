@@ -21,6 +21,7 @@ const OPAQUE_GUEST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 interface StoredGuestSession {
   readonly userId: string;
   readonly lastActiveAt: number;
+  readonly cleanupPending?: true;
 }
 
 export interface AnonymousUserContextResolverOptions {
@@ -45,6 +46,7 @@ export interface AnonymousUserSweepResult {
 }
 
 export interface AnonymousUserContextResolver extends UserContextResolver {
+  completeAnonymousUserCleanup(userId: string): Promise<boolean>;
   touchAnonymousUser(userId: string): Promise<boolean>;
   sweepExpired(
     options: AnonymousUserSweepOptions,
@@ -71,6 +73,7 @@ export function createAnonymousUserContextResolver(
     { lastActiveAt: number; lastPersistedAt: number }
   >();
   const activityWrites = new Map<string, Promise<boolean>>();
+  const revokingUsers = new Set<string>();
   const recordPaths = new Map<string, string>();
   const usersRootPath = path.resolve(options.runtimeRootPath, "users");
   const sessionsRootPath = path.resolve(
@@ -84,7 +87,7 @@ export function createAnonymousUserContextResolver(
     const guestId = readCookie(headers, cookieName);
     if (!guestId || !OPAQUE_GUEST_ID_PATTERN.test(guestId)) return null;
     const stored = await readStoredSession(sessionsRootPath, guestId);
-    if (!stored) return null;
+    if (!stored || stored.cleanupPending) return null;
     rememberActivity(activity, stored);
     recordPaths.set(
       stored.userId,
@@ -161,15 +164,63 @@ export function createAnonymousUserContextResolver(
       const guestId = readCookie(headers, cookieName);
       if (!guestId || !OPAQUE_GUEST_ID_PATTERN.test(guestId)) return false;
       const stored = await readStoredSession(sessionsRootPath, guestId);
-      if (!stored || stored.userId !== expectedUserId) return false;
-      await fs.promises.rm(guestSessionPath(sessionsRootPath, guestId));
-      activity.delete(expectedUserId);
-      activityWrites.delete(expectedUserId);
-      recordPaths.delete(expectedUserId);
+      if (
+        !stored ||
+        stored.cleanupPending ||
+        stored.userId !== expectedUserId
+      ) {
+        return false;
+      }
+      if (revokingUsers.has(expectedUserId)) return false;
+      revokingUsers.add(expectedUserId);
+      const recordPath = guestSessionPath(sessionsRootPath, guestId);
+      const previous = activityWrites.get(expectedUserId) ?? Promise.resolve(true);
+      const revoking = previous.then(async () => {
+        const current = await readStoredSessionPath(recordPath);
+        if (
+          !current ||
+          current.cleanupPending ||
+          current.userId !== expectedUserId
+        ) {
+          return false;
+        }
+        await writeStoredSession(recordPath, {
+          ...current,
+          cleanupPending: true,
+        });
+        forgetUserActivity(
+          activity,
+          activityWrites,
+          recordPaths,
+          expectedUserId,
+        );
+        return true;
+      });
+      activityWrites.set(expectedUserId, revoking);
+      try {
+        return await revoking;
+      } finally {
+        revokingUsers.delete(expectedUserId);
+        if (activityWrites.get(expectedUserId) === revoking) {
+          activityWrites.delete(expectedUserId);
+        }
+      }
+    },
+
+    async completeAnonymousUserCleanup(userId) {
+      const record = await findStoredSessionByUserId(
+        sessionsRootPath,
+        userId,
+        recordPaths.get(userId),
+      );
+      if (!record?.session.cleanupPending) return false;
+      await fs.promises.rm(record.path);
+      forgetUserActivity(activity, activityWrites, recordPaths, userId);
       return true;
     },
 
     async touchAnonymousUser(userId) {
+      if (revokingUsers.has(userId)) return false;
       const knownState = activity.get(userId);
       if (knownState && recordPaths.has(userId)) {
         knownState.lastActiveAt = Math.max(knownState.lastActiveAt, now());
@@ -185,10 +236,12 @@ export function createAnonymousUserContextResolver(
         userId,
         recordPaths.get(userId),
       );
-      if (!record) {
+      if (!record || record.session.cleanupPending) {
+        activity.delete(userId);
         recordPaths.delete(userId);
         return false;
       }
+      if (revokingUsers.has(userId)) return false;
       recordPaths.set(userId, record.path);
       const state = rememberActivity(activity, record.session);
       state.lastActiveAt = Math.max(state.lastActiveAt, now());
@@ -237,8 +290,9 @@ export function createAnonymousUserContextResolver(
       for (const record of records) {
         recordPaths.set(record.session.userId, record.path);
         if (
+          !record.session.cleanupPending &&
           now() - effectiveLastActiveAt(activity, record.session) <
-          sweepOptions.idleTtlMs
+            sweepOptions.idleTtlMs
         ) {
           continue;
         }
@@ -252,8 +306,9 @@ export function createAnonymousUserContextResolver(
           if (
             !current ||
             current.userId !== record.session.userId ||
-            now() - effectiveLastActiveAt(activity, current) <
-              sweepOptions.idleTtlMs
+            (!current.cleanupPending &&
+              now() - effectiveLastActiveAt(activity, current) <
+                sweepOptions.idleTtlMs)
           ) {
             result.skipped += 1;
             continue;
@@ -264,9 +319,12 @@ export function createAnonymousUserContextResolver(
           };
           await sweepOptions.cleanupUser(userContext);
           await fs.promises.rm(record.path);
-          activity.delete(current.userId);
-          activityWrites.delete(current.userId);
-          recordPaths.delete(current.userId);
+          forgetUserActivity(
+            activity,
+            activityWrites,
+            recordPaths,
+            current.userId,
+          );
           result.removed += 1;
         } catch {
           result.failed += 1;
@@ -277,6 +335,20 @@ export function createAnonymousUserContextResolver(
       return result;
     },
   };
+}
+
+function forgetUserActivity(
+  activity: Map<
+    string,
+    { lastActiveAt: number; lastPersistedAt: number }
+  >,
+  activityWrites: Map<string, Promise<boolean>>,
+  recordPaths: Map<string, string>,
+  userId: string,
+): void {
+  activity.delete(userId);
+  activityWrites.delete(userId);
+  recordPaths.delete(userId);
 }
 
 function rememberActivity(
@@ -448,7 +520,8 @@ function isStoredGuestSession(value: unknown): value is StoredGuestSession {
     "lastActiveAt" in value &&
     typeof value.lastActiveAt === "number" &&
     Number.isFinite(value.lastActiveAt) &&
-    value.lastActiveAt >= 0
+    value.lastActiveAt >= 0 &&
+    (!("cleanupPending" in value) || value.cleanupPending === true)
   );
 }
 

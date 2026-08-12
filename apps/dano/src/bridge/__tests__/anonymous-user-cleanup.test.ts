@@ -17,6 +17,7 @@ const runtimeRoots: string[] = [];
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const root of runtimeRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -142,6 +143,64 @@ describe("Anonymous User cleanup store", () => {
       failed: 0,
     });
     expect(await anonymousUsers.resolveAnonymous!({ cookie })).toBeNull();
+  });
+
+  it("does not let a concurrent activity write restore a revoked guest mapping", async () => {
+    let now = 25_000;
+    const runtimeRootPath = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-revoke-race-"),
+    );
+    runtimeRoots.push(runtimeRootPath);
+    const anonymousUsers = createAnonymousUserContextResolver({
+      runtimeRootPath,
+      secureCookie: false,
+      now: () => now,
+      activityWriteIntervalMs: 0,
+    });
+    const created = await anonymousUsers.resolveForClient!({});
+    if (!created?.setCookie) throw new Error("Expected Anonymous User Cookie");
+    const cookie = created.setCookie.split(";", 1)[0]!;
+    const userId = created.userContext.user.id;
+    const recordPath = path.join(
+      runtimeRootPath,
+      "anonymous-sessions",
+      fs.readdirSync(path.join(runtimeRootPath, "anonymous-sessions"))[0]!,
+    );
+    const readFile = fs.promises.readFile.bind(fs.promises);
+    let recordReads = 0;
+    let releaseStaleRead!: () => void;
+    const staleReadGate = new Promise<void>(resolve => {
+      releaseStaleRead = resolve;
+    });
+    let staleReadStarted!: () => void;
+    const staleReadStart = new Promise<void>(resolve => {
+      staleReadStarted = resolve;
+    });
+    vi.spyOn(fs.promises, "readFile").mockImplementation(
+      (async (...args: Parameters<typeof fs.promises.readFile>) => {
+        const value = await readFile(...args);
+        if (path.resolve(String(args[0])) === recordPath) {
+          recordReads += 1;
+          if (recordReads === 2) {
+            staleReadStarted();
+            await staleReadGate;
+          }
+        }
+        return value;
+      }) as typeof fs.promises.readFile,
+    );
+
+    now = 25_001;
+    const touching = anonymousUsers.touchAnonymousUser(userId);
+    await staleReadStart;
+    const revoking = anonymousUsers.revokeAnonymous!({ cookie }, userId);
+    releaseStaleRead();
+    await touching;
+    await expect(revoking).resolves.toBe(true);
+
+    await expect(
+      anonymousUsers.resolveAnonymous!({ cookie }),
+    ).resolves.toBeNull();
   });
 
   it("renews activity in memory without writing the guest record per request", async () => {
