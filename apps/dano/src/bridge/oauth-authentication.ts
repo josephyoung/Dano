@@ -32,6 +32,7 @@ import {
   type AuthenticatedUser,
   type AuthenticatedUserContext,
   type AuthenticatedUserContextResolver,
+  type ClientUserResolution,
   UserContextError,
 } from "./user-context.js";
 
@@ -284,6 +285,28 @@ export async function createOAuthAuthentication(
     };
   };
 
+  const resolveClientLoginSession = async (
+    headers: http.IncomingHttpHeaders,
+  ): Promise<ClientUserResolution | null> => {
+    const resolved = await resolveLoginSession(headers);
+    if (resolved?.status === "reauth_required") {
+      throw new UserContextError(
+        401,
+        "Dano Login Session requires reauthentication",
+      );
+    }
+    return resolved
+      ? {
+          userContext: resolved.userContext,
+          authentication: {
+            status: "authenticated",
+            user: toBrowserUserSummary(resolved.userContext.user),
+          },
+          loginSessionId: resolved.loginSessionId,
+        }
+      : null;
+  };
+
   return {
     resolve,
     async readProviderCredential(loginSessionId) {
@@ -378,44 +401,8 @@ export async function createOAuthAuthentication(
         }),
       );
     },
-    async resolveForClient(headers) {
-      const resolved = await resolveLoginSession(headers);
-      if (resolved?.status === "reauth_required") {
-        throw new UserContextError(
-          401,
-          "Dano Login Session requires reauthentication",
-        );
-      }
-      return resolved
-        ? {
-            userContext: resolved.userContext,
-            authentication: {
-              status: "authenticated",
-              user: toBrowserUserSummary(resolved.userContext.user),
-            },
-            loginSessionId: resolved.loginSessionId,
-          }
-        : null;
-    },
-    async resolveExisting(headers) {
-      const resolved = await resolveLoginSession(headers);
-      if (resolved?.status === "reauth_required") {
-        throw new UserContextError(
-          401,
-          "Dano Login Session requires reauthentication",
-        );
-      }
-      return resolved
-        ? {
-            userContext: resolved.userContext,
-            authentication: {
-              status: "authenticated",
-              user: toBrowserUserSummary(resolved.userContext.user),
-            },
-            loginSessionId: resolved.loginSessionId,
-          }
-        : null;
-    },
+    resolveForClient: resolveClientLoginSession,
+    resolveExisting: resolveClientLoginSession,
     async handle(
       req: http.IncomingMessage,
       res: http.ServerResponse,
