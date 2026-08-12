@@ -386,6 +386,50 @@ describe("OAuth authentication over HTTP", () => {
     expect(await restored.json()).toMatchObject({ status: "authenticated" });
   });
 
+  it("keeps client creation and existing-client authentication on the same Login Session contract", async () => {
+    const { authentication, origin } = await startOAuthServer(
+      successfulProvider("shared-resolution-user", "shared-resolution-token"),
+    );
+
+    await expect(authentication.resolveForClient!({})).resolves.toBeNull();
+    await expect(authentication.resolveExisting!({})).resolves.toBeNull();
+
+    const loginCookie = await completeLogin(origin);
+    const headers = { cookie: loginCookie };
+    const createdClientResolution = await authentication.resolveForClient!(
+      headers,
+    );
+    const existingClientResolution = await authentication.resolveExisting!(
+      headers,
+    );
+
+    expect(createdClientResolution).toEqual(existingClientResolution);
+    expect(createdClientResolution).toMatchObject({
+      authentication: {
+        status: "authenticated",
+        user: { username: "已登录用户" },
+      },
+      loginSessionId: loginCookie.slice("dano_login=".length),
+      userContext: {
+        user: { username: "已登录用户" },
+      },
+    });
+
+    await authentication.requireReauthentication(
+      loginCookie.slice("dano_login=".length),
+    );
+    const reauthenticationError = {
+      status: 401,
+      message: "Dano Login Session requires reauthentication",
+    };
+    await expect(
+      authentication.resolveForClient!(headers),
+    ).rejects.toMatchObject(reauthenticationError);
+    await expect(
+      authentication.resolveExisting!(headers),
+    ).rejects.toMatchObject(reauthenticationError);
+  });
+
   it("uses openid-client for the confidential Authorization Code exchange without PKCE", async () => {
     const identityFixture = JSON.parse(
       fs.readFileSync(
