@@ -39,6 +39,9 @@ export interface OAuthProviderAdapter {
   refreshCredential?(
     credential: ProviderCredential,
   ): Promise<ProviderCredential>;
+  validateCredential?(
+    credential: ProviderCredential,
+  ): Promise<ExternalIdentity>;
   isAccessTokenInvalid?(response: Response): boolean | Promise<boolean>;
   revokeCredential?(credential: ProviderCredential): Promise<void>;
 }
@@ -156,13 +159,16 @@ export function createOAuth2ProviderAdapter(
         expiresIn,
         credential.refreshToken,
       );
-      await fetchExternalIdentity(
+      return refreshed;
+    },
+
+    async validateCredential(credential) {
+      return fetchExternalIdentity(
         configuration,
-        refreshed.accessToken,
-        refreshed.tokenType,
+        credential.accessToken,
+        credential.tokenType,
         identityEndpoint,
       );
-      return refreshed;
     },
 
     async isAccessTokenInvalid(response) {

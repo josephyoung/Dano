@@ -442,6 +442,7 @@ describe("OAuth authentication over HTTP", () => {
     );
     expect(fakeProvider.identityAuthorization).toEqual([
       "Bearer fake-access-token",
+      "Bearer fake-access-token",
     ]);
     const current = await fetch(`${origin}/api/auth/current`, {
       headers: { Cookie: cookieFrom(callback, "dano_login") },
@@ -611,6 +612,7 @@ describe("OAuth authentication over HTTP", () => {
       refreshToken: "initial-refresh-token",
       tokenType: "Bearer",
     });
+    await provider.validateCredential?.(refreshed!);
 
     expect(fakeProvider.tokenRequests).toHaveLength(1);
     expect(fakeProvider.tokenRequests[0]?.get("grant_type")).toBe("refresh_token");
@@ -654,11 +656,12 @@ describe("OAuth authentication over HTTP", () => {
 
     let rejection: unknown;
     try {
-      await provider.refreshCredential?.({
+      const refreshed = await provider.refreshCredential?.({
         accessToken: "expired-access-secret",
         refreshToken: "initial-refresh-secret",
         tokenType: "Bearer",
       });
+      await provider.validateCredential?.(refreshed!);
     } catch (error) {
       rejection = error;
     }
@@ -695,10 +698,11 @@ describe("OAuth authentication over HTTP", () => {
 
     let rejection: unknown;
     try {
-      await provider.refreshCredential?.({
+      const refreshed = await provider.refreshCredential?.({
         accessToken: "expired-http-failure-secret",
         refreshToken: "refresh-http-failure-secret",
       });
+      await provider.validateCredential?.(refreshed!);
     } catch (error) {
       rejection = error;
     }
@@ -733,10 +737,11 @@ describe("OAuth authentication over HTTP", () => {
 
     let rejection: unknown;
     try {
-      await provider.refreshCredential?.({
+      const refreshed = await provider.refreshCredential?.({
         accessToken: "expired-non-bearer-secret",
         refreshToken: "refresh-non-bearer-secret",
       });
+      await provider.validateCredential?.(refreshed!);
     } catch (error) {
       rejection = error;
     }
@@ -1052,6 +1057,7 @@ describe("OAuth authentication over HTTP", () => {
       },
     };
     const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const existingCookie = await completeLogin(origin, "existing");
     const anonymous = await fetch(`${origin}/api/clients`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1091,10 +1097,17 @@ describe("OAuth authentication over HTTP", () => {
     expect(callback.headers.get("set-cookie")).toMatch(
       /^dano_auth_error=[A-Za-z0-9_-]{43};/,
     );
-    expect(revoked).toEqual(["rollback-token"]);
+    expect(revoked).toEqual([]);
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
-    ).toEqual([]);
+    ).toHaveLength(1);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: existingCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
     expect(fs.readFileSync(retainedPath, "utf8")).toBe("guest remains owner");
     const canonicalUserId = `oauth_${createHash("sha256")
       .update(externalUserId)
@@ -1119,6 +1132,144 @@ describe("OAuth authentication over HTTP", () => {
         )
       ).status,
     ).toBe(200);
+  });
+
+  it("does not revoke an uncommitted Credential when validation cannot establish its User", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("validation-failure-user", "candidate-token"),
+      async validateCredential() {
+        throw new Error("fixture identity validation unavailable");
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fixture&state=${state}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.headers.get("set-cookie")).toMatch(/^dano_auth_error=/);
+    expect(revoked).toEqual([]);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toEqual([]);
+  });
+
+  it("does not cascade revoke a failed candidate while the same User remains active", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("validation-shared-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: "validation-shared-user" },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async validateCredential(credential) {
+        if (credential.accessToken === "access-candidate") {
+          throw new Error("fixture identity validation unavailable");
+        }
+        return { userId: "validation-shared-user" };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const existingCookie = await completeLogin(origin, "existing");
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=candidate&state=${state}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.headers.get("set-cookie")).toMatch(/^dano_auth_error=/);
+    expect(revoked).toEqual([]);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(1);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: existingCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+  });
+
+  it("never revokes a Credential whose validated User differs from exchange", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("validated-owner-b", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: {
+            userId:
+              code === "candidate"
+                ? "claimed-owner-a"
+                : "validated-owner-b",
+          },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async validateCredential() {
+        return { userId: "validated-owner-b" };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const existingCookie = await completeLogin(origin, "existing");
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=candidate&state=${state}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.headers.get("set-cookie")).toMatch(/^dano_auth_error=/);
+    expect(revoked).toEqual([]);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(1);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: existingCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
   });
 
   it("merges guest sessions without replacing an authenticated User's existing data", async () => {
@@ -1644,6 +1795,50 @@ describe("OAuth authentication over HTTP", () => {
     expect(fs.statSync(sessionsPath).isFile()).toBe(true);
   });
 
+  it("removes a Login Session record when publish fails after replacement", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("post-write-failure-user", "post-write-token"),
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const originalChmod = fs.promises.chmod.bind(fs.promises);
+    const chmod = vi.spyOn(fs.promises, "chmod").mockImplementation(
+      async (target, mode) => {
+        await originalChmod(target, mode);
+        if (
+          String(target).includes(`${path.sep}auth${path.sep}login-sessions`) &&
+          String(target).endsWith(".json")
+        ) {
+          throw new Error("fixture post-replacement failure");
+        }
+      },
+    );
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fixture&state=${state}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+    chmod.mockRestore();
+
+    expect(callback.headers.get("set-cookie")).toMatch(/^dano_auth_error=/);
+    expect(revoked).toEqual(["post-write-token"]);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toEqual([]);
+  });
+
   it("expires Login Sessions after eight idle hours", async () => {
     let currentTime = 1_000;
     const provider = successfulProvider("idle-user", "idle-token");
@@ -1958,6 +2153,45 @@ describe("OAuth authentication over HTTP", () => {
     });
   });
 
+  it("rejects a refreshed Credential that resolves to a different User", async () => {
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("refresh-owner-a", "access-a"),
+      async exchangeAuthorizationCode() {
+        return {
+          identity: { userId: "refresh-owner-a" },
+          credential: {
+            accessToken: "access-a",
+            refreshToken: "refresh-a",
+          },
+        };
+      },
+      async refreshCredential() {
+        return { accessToken: "access-b", refreshToken: "refresh-b" };
+      },
+      async validateCredential(credential) {
+        return {
+          userId:
+            credential.accessToken === "access-b"
+              ? "refresh-owner-b"
+              : "refresh-owner-a",
+        };
+      },
+    };
+    const { authentication, origin } = await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin);
+    const loginSessionId = loginCookie.slice("dano_login=".length);
+
+    await expect(
+      authentication.refreshProviderCredential(loginSessionId),
+    ).rejects.toBeInstanceOf(OAuthProviderContractError);
+    await expect(
+      authentication.readProviderCredential(loginSessionId),
+    ).resolves.toEqual({
+      accessToken: "access-a",
+      refreshToken: "refresh-a",
+    });
+  });
+
   it("projects reauthentication, disconnects only its old Bridge Clients, and survives refresh", async () => {
     const provider: OAuthProviderAdapter = {
       ...successfulProvider("shared-reauth-user", "unused"),
@@ -2139,7 +2373,7 @@ describe("OAuth authentication over HTTP", () => {
     await expect(rotatedSse.closed).resolves.toBeUndefined();
     expect(controller.getClients()).not.toContainEqual(rotatedClient.client);
     expect(controller.getClients()).toContainEqual(retainedClient.client);
-    expect(revoked).toEqual(["access-rotated"]);
+    expect(revoked).toEqual([]);
     await expect(
       authentication.readProviderCredential(rotatedSessionId),
     ).resolves.toBeNull();
@@ -2190,6 +2424,60 @@ describe("OAuth authentication over HTTP", () => {
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
     ).toHaveLength(2);
+  });
+
+  it("revokes the replaced Credential when login rotation changes User", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("unused", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: {
+            userId: code === "first" ? "rotation-user-a" : "rotation-user-b",
+          },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async validateCredential(credential) {
+        return {
+          userId:
+            credential.accessToken === "access-first"
+              ? "rotation-user-a"
+              : "rotation-user-b",
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin } = await startOAuthServer(provider);
+    const firstCookie = await completeLogin(origin, "first");
+    const started = await fetch(`${origin}/api/auth/login`, {
+      headers: { Cookie: firstCookie },
+      redirect: "manual",
+    });
+    const flowCookie = cookieFrom(started, "dano_oauth_flow");
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=second&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: `${firstCookie}; ${flowCookie}` },
+        redirect: "manual",
+      },
+    );
+    const secondCookie = cookieFrom(callback, "dano_login");
+
+    expect(revoked).toEqual(["access-first"]);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: secondCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
   });
 
   it("keeps an active Login Session, Client, and SSE when its new callback fails", async () => {
@@ -2381,7 +2669,7 @@ describe("OAuth authentication over HTTP", () => {
     expect(logout.headers.get("set-cookie")).toMatch(
       /^dano_login=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/,
     );
-    expect(revoked).toEqual(["access-first-login"]);
+    expect(revoked).toEqual([]);
     expect(
       await (
         await fetch(`${origin}/api/auth/current`, {
@@ -2453,6 +2741,67 @@ describe("OAuth authentication over HTTP", () => {
       command: "get_state",
       success: true,
     });
+
+    const lastLogout = await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: secondCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+    expect(lastLogout.status).toBe(200);
+    expect(revoked).toEqual(["access-second-login"]);
+  });
+
+  it("retains a same-User Login Session touched at the idle TTL boundary", async () => {
+    let currentTime = 1_000;
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("idle-boundary-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: "idle-boundary-user" },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin } = await startOAuthServer(provider, undefined, {
+      now: () => currentTime,
+      sessionIdleTtlMs: 100,
+      sessionAbsoluteTtlMs: 1_000,
+    });
+    const firstCookie = await completeLogin(origin, "idle-first");
+    const retainedCookie = await completeLogin(origin, "idle-retained");
+    currentTime += 99;
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: retainedCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+    currentTime += 1;
+
+    const logout = await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: firstCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+
+    expect(logout.status).toBe(200);
+    expect(revoked).toEqual([]);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: retainedCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
   });
 
   it("rejects cross-origin logout without revoking the Login Session", async () => {
@@ -2480,6 +2829,237 @@ describe("OAuth authentication over HTTP", () => {
       await (
         await fetch(`${origin}/api/auth/current`, {
           headers: { Cookie: loginCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+  });
+
+  it("serializes concurrent logout so the last same-User Login Session revokes once", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("concurrent-logout-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: "concurrent-logout-user" },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const firstCookie = await completeLogin(origin, "concurrent-first");
+    const secondCookie = await completeLogin(origin, "concurrent-second");
+
+    const responses = await Promise.all(
+      [firstCookie, secondCookie].map(cookie =>
+        fetch(`${origin}/api/auth/logout`, {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            Origin: "https://dano.example.test",
+          },
+        }),
+      ),
+    );
+
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    expect(revoked).toHaveLength(1);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(0);
+  });
+
+  it("blocks only same-User Login Session publication while revoke is in flight", async () => {
+    let sameUserGrantRevision = 0;
+    let releaseRevocation!: () => void;
+    const revocationGate = new Promise<void>(resolve => {
+      releaseRevocation = resolve;
+    });
+    let reportRevocationStarted!: () => void;
+    const revocationStarted = new Promise<void>(resolve => {
+      reportRevocationStarted = resolve;
+    });
+    let reportReplacementExchanged!: () => void;
+    const replacementExchanged = new Promise<void>(resolve => {
+      reportReplacementExchanged = resolve;
+    });
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("unused", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        if (code === "same-replacement") reportReplacementExchanged();
+        return {
+          identity: {
+            userId: code.startsWith("same-")
+              ? "revocation-barrier-user"
+              : "independent-user",
+          },
+          credential: {
+            accessToken: `access-${code}-${sameUserGrantRevision}`,
+          },
+        };
+      },
+      async validateCredential(credential) {
+        if (
+          credential.accessToken.includes("same-") &&
+          !credential.accessToken.endsWith(`-${sameUserGrantRevision}`)
+        ) {
+          throw new Error("fixture Credential was revoked with its grant");
+        }
+        return {
+          userId: credential.accessToken.includes("same-")
+            ? "revocation-barrier-user"
+            : "independent-user",
+        };
+      },
+      async revokeCredential() {
+        reportRevocationStarted();
+        await revocationGate;
+        sameUserGrantRevision += 1;
+      },
+    };
+    const { origin, runtimeRootPath } = await startOAuthServer(provider);
+    const currentCookie = await completeLogin(origin, "same-current");
+    const logout = fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: currentCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+    await revocationStarted;
+
+    const independentCookie = await completeLogin(origin, "other-login");
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: independentCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+
+    const sameLoginStarted = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const sameState = new URL(
+      sameLoginStarted.headers.get("location")!,
+    ).searchParams.get("state")!;
+    let sameCallbackSettled = false;
+    const sameCallback = fetch(
+      `${origin}/api/auth/callback?code=same-replacement&state=${sameState}`,
+      {
+        headers: {
+          Cookie: cookieFrom(sameLoginStarted, "dano_oauth_flow"),
+        },
+        redirect: "manual",
+      },
+    ).then(response => {
+      sameCallbackSettled = true;
+      return response;
+    });
+    await replacementExchanged;
+    expect(sameCallbackSettled).toBe(false);
+    expect(
+      fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
+    ).toHaveLength(1);
+
+    releaseRevocation();
+    expect((await logout).status).toBe(200);
+    expect((await sameCallback).headers.get("set-cookie")).toMatch(
+      /^dano_auth_error=/,
+    );
+    const replacementCookie = await completeLogin(origin, "same-retry");
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: replacementCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+  });
+
+  it("revokes logout Credential when only a different User remains", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("unused", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: `logout-user-${code}` },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async validateCredential(credential) {
+        return {
+          userId: `logout-user-${credential.accessToken.slice("access-".length)}`,
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+        throw new Error("fixture revocation unavailable");
+      },
+    };
+    const { origin } = await startOAuthServer(provider);
+    const firstCookie = await completeLogin(origin, "first");
+    const secondCookie = await completeLogin(origin, "second");
+
+    const logout = await fetch(`${origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: firstCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+
+    expect(logout.status).toBe(200);
+    expect(revoked).toEqual(["access-first"]);
+    expect(
+      await (
+        await fetch(`${origin}/api/auth/current`, {
+          headers: { Cookie: secondCookie },
+        })
+      ).json(),
+    ).toMatchObject({ status: "authenticated" });
+  });
+
+  it("uses persisted Login Sessions to suppress cascading revoke after restart", async () => {
+    const revoked: string[] = [];
+    const provider: OAuthProviderAdapter = {
+      ...successfulProvider("restart-shared-user", "unused"),
+      async exchangeAuthorizationCode({ code }) {
+        return {
+          identity: { userId: "restart-shared-user" },
+          credential: { accessToken: `access-${code}` },
+        };
+      },
+      async revokeCredential(credential) {
+        revoked.push(credential.accessToken);
+      },
+    };
+    const firstRun = await startOAuthServer(provider);
+    const firstCookie = await completeLogin(firstRun.origin, "restart-first");
+    const secondCookie = await completeLogin(firstRun.origin, "restart-second");
+    await firstRun.controller.stop();
+    await firstRun.authentication.dispose();
+
+    const restarted = await startOAuthServer(
+      provider,
+      firstRun.runtimeRootPath,
+    );
+    const logout = await fetch(`${restarted.origin}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Cookie: firstCookie,
+        Origin: "https://dano.example.test",
+      },
+    });
+
+    expect(logout.status).toBe(200);
+    expect(revoked).toEqual([]);
+    expect(
+      await (
+        await fetch(`${restarted.origin}/api/auth/current`, {
+          headers: { Cookie: secondCookie },
         })
       ).json(),
     ).toMatchObject({ status: "authenticated" });
@@ -2542,6 +3122,9 @@ function successfulProvider(
         identity: { userId },
         credential: { accessToken },
       };
+    },
+    async validateCredential() {
+      return { userId };
     },
   };
 }

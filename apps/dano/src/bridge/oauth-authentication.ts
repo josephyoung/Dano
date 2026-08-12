@@ -87,6 +87,11 @@ export async function createOAuthAuthentication(
   if (options.credentialEncryptionKey.key.byteLength !== 32) {
     throw new Error("OAuth credential encryption key must be 32 bytes");
   }
+  if (options.provider.revokeCredential && !options.provider.validateCredential) {
+    throw new Error(
+      "OAuth provider revocation requires Credential validation",
+    );
+  }
   const transactionsPath = path.resolve(
     options.runtimeRootPath,
     "auth",
@@ -137,34 +142,55 @@ export async function createOAuthAuthentication(
     options.maxPendingTransactions ?? MAX_PENDING_TRANSACTIONS;
   const browserLocks = new Map<string, Promise<void>>();
   const loginSessionLocks = new Map<string, Promise<void>>();
+  const loginSessionUserLocks = new Map<string, Promise<void>>();
+  let loginSessionRecordsMutation = Promise.resolve();
+  const mutateLoginSessionRecords = async <T>(
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = loginSessionRecordsMutation;
+    let release: () => void;
+    loginSessionRecordsMutation = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release!();
+    }
+  };
   const knownLoginSessionIds = new Map<string, string>();
   const credentialRefreshes = new Map<
     string,
     Promise<ProviderCredential | null>
   >();
   let currentLifecycle: AuthHttpLifecycle | undefined;
-  await cleanupExpiredRecords(
-    transactionsPath,
-    sessionsPath,
-    errorsPath,
-    now(),
-    stateTtlMs,
-    sessionIdleTtlMs,
-  );
-  const cleanupInterval = setInterval(() => {
-    void cleanupExpiredRecords(
+  await mutateLoginSessionRecords(() =>
+    cleanupExpiredRecords(
       transactionsPath,
       sessionsPath,
       errorsPath,
       now(),
       stateTtlMs,
       sessionIdleTtlMs,
-      recordName => {
-        const sessionId = knownLoginSessionIds.get(recordName);
-        if (!sessionId) return;
-        knownLoginSessionIds.delete(recordName);
-        currentLifecycle?.disconnectLoginSession(sessionId);
-      },
+    ),
+  );
+  const cleanupInterval = setInterval(() => {
+    void mutateLoginSessionRecords(() =>
+      cleanupExpiredRecords(
+        transactionsPath,
+        sessionsPath,
+        errorsPath,
+        now(),
+        stateTtlMs,
+        sessionIdleTtlMs,
+        recordName => {
+          const sessionId = knownLoginSessionIds.get(recordName);
+          if (!sessionId) return;
+          knownLoginSessionIds.delete(recordName);
+          currentLifecycle?.disconnectLoginSession(sessionId);
+        },
+      ),
     ).catch(() => {});
   }, options.sessionGcIntervalMs ?? SESSION_GC_INTERVAL_MS);
   cleanupInterval.unref?.();
@@ -217,11 +243,11 @@ export async function createOAuthAuthentication(
     sessionId: string,
     touch: boolean,
   ): Promise<StoredLoginSession | null> =>
-    touch
-      ? withKeyLock(loginSessionLocks, sessionId, () =>
-          loadSessionUnlocked(sessionId, true),
-        )
-      : loadSessionUnlocked(sessionId, false);
+    mutateLoginSessionRecords(() =>
+      withKeyLock(loginSessionLocks, sessionId, () =>
+        loadSessionUnlocked(sessionId, touch),
+      ),
+    );
 
   const resolve = async (
     headers: http.IncomingHttpHeaders,
@@ -273,43 +299,59 @@ export async function createOAuthAuthentication(
     refreshProviderCredential(loginSessionId) {
       const existing = credentialRefreshes.get(loginSessionId);
       if (existing) return existing;
-      const refresh = withKeyLock(
-        loginSessionLocks,
-        loginSessionId,
-        async () => {
-          const session = await loadSessionUnlocked(loginSessionId, true);
-          if (
-            !session ||
-            session.status !== "active" ||
-            !session.credential ||
-            !options.provider.refreshCredential
-          ) {
-            return null;
-          }
-          const credential = decryptCredential(
-            session.credential,
-            options.credentialEncryptionKey,
-            digest(loginSessionId),
-          );
-          if (!credential.refreshToken) return null;
+      const refresh = (async () => {
+        const session = await loadSession(loginSessionId, true);
+        if (
+          !session ||
+          session.status !== "active" ||
+          !session.credential ||
+          !options.provider.refreshCredential
+        ) {
+          return null;
+        }
+        const credential = decryptCredential(
+          session.credential,
+          options.credentialEncryptionKey,
+          digest(loginSessionId),
+        );
+        if (!credential.refreshToken) return null;
+        return withKeyLock(loginSessionUserLocks, session.user.id, async () => {
+          const current = await loadSession(loginSessionId, false);
+          if (!current || current.status !== "active") return null;
           const refreshed = validCredential(
-            await options.provider.refreshCredential(credential),
+            await options.provider.refreshCredential!(credential),
           );
           const rotated = {
             ...refreshed,
             refreshToken: refreshed.refreshToken ?? credential.refreshToken,
           };
-          await writeLoginSession(loginSessionPath(sessionsPath, loginSessionId), {
-            ...session,
-            credential: encryptCredential(
-              rotated,
-              options.credentialEncryptionKey,
-              digest(loginSessionId),
-            ),
-          });
-          return rotated;
-        },
-      ).finally(() => {
+          if (options.provider.validateCredential) {
+            const refreshedIdentity =
+              await options.provider.validateCredential(rotated);
+            if (externalIdentityUser(refreshedIdentity).id !== current.user.id) {
+              throw new OAuthProviderContractError();
+            }
+          }
+          return mutateLoginSessionRecords(() =>
+            withKeyLock(loginSessionLocks, loginSessionId, async () => {
+              const latest = await loadSessionUnlocked(loginSessionId, false);
+              if (!latest || latest.status !== "active") return null;
+              await writeLoginSession(
+                loginSessionPath(sessionsPath, loginSessionId),
+                {
+                  ...latest,
+                  credential: encryptCredential(
+                    rotated,
+                    options.credentialEncryptionKey,
+                    digest(loginSessionId),
+                  ),
+                },
+              );
+              return rotated;
+            }),
+          );
+        });
+      })().finally(() => {
         if (credentialRefreshes.get(loginSessionId) === refresh) {
           credentialRefreshes.delete(loginSessionId);
         }
@@ -318,21 +360,23 @@ export async function createOAuthAuthentication(
       return refresh;
     },
     async requireReauthentication(loginSessionId) {
-      await withKeyLock(loginSessionLocks, loginSessionId, async () => {
-        const session = await loadSessionUnlocked(loginSessionId, false);
-        if (!session || session.status === "reauth_required") return;
-        const { credential: _credential, ...withoutCredential } = session;
-        const recordPath = loginSessionPath(sessionsPath, loginSessionId);
-        try {
-          await writeLoginSession(recordPath, {
-            ...withoutCredential,
-            status: "reauth_required",
-          });
-        } catch (error) {
-          await fs.promises.rm(recordPath, { force: true }).catch(() => {});
-          throw error;
-        }
-      });
+      await mutateLoginSessionRecords(() =>
+        withKeyLock(loginSessionLocks, loginSessionId, async () => {
+          const session = await loadSessionUnlocked(loginSessionId, false);
+          if (!session || session.status === "reauth_required") return;
+          const { credential: _credential, ...withoutCredential } = session;
+          const recordPath = loginSessionPath(sessionsPath, loginSessionId);
+          try {
+            await writeLoginSession(recordPath, {
+              ...withoutCredential,
+              status: "reauth_required",
+            });
+          } catch (error) {
+            await fs.promises.rm(recordPath, { force: true }).catch(() => {});
+            throw error;
+          }
+        }),
+      );
     },
     async resolveForClient(headers) {
       const resolved = await resolveLoginSession(headers);
@@ -414,8 +458,14 @@ export async function createOAuthAuthentication(
           usersRootPath,
           now,
           stateTtlMs,
+          sessionIdleTtlMs,
           sessionAbsoluteTtlMs,
           lifecycle,
+          mutateLoginSessions: mutateLoginSessionRecords,
+          withUserRevocationBarrier: (userId, operation) =>
+            withKeyLock(loginSessionUserLocks, userId, operation),
+          loginSessionUserId: async loginSessionId =>
+            (await loadSession(loginSessionId, false))?.user.id ?? null,
           rotateLoginSession: loginSessionId =>
             withKeyLock(loginSessionLocks, loginSessionId, async () => {
               const session = await loadSessionUnlocked(loginSessionId, false);
@@ -431,8 +481,7 @@ export async function createOAuthAuthentication(
               const recordPath = loginSessionPath(sessionsPath, loginSessionId);
               await fs.promises.rm(recordPath, { force: true });
               knownLoginSessionIds.delete(path.basename(recordPath));
-              lifecycle.disconnectLoginSession(loginSessionId);
-              return credential;
+              return { credential, userId: session.user.id };
             }),
         });
         return true;
@@ -448,32 +497,49 @@ export async function createOAuthAuthentication(
         }
         const sessionId = readCookie(req.headers.cookie, LOGIN_COOKIE_NAME);
         if (sessionId) {
-          const credential = await withKeyLock(
-            loginSessionLocks,
-            sessionId,
-            async () => {
-              const session = await loadSessionUnlocked(sessionId, false);
-              if (!session) return null;
-              const current =
-                session.status === "active" && session.credential
-                  ? decryptCredential(
-                      session.credential,
-                      options.credentialEncryptionKey,
-                      digest(sessionId),
-                    )
-                  : null;
-              await fs.promises.rm(loginSessionPath(sessionsPath, sessionId), {
-                force: true,
+          const userId = (await loadSession(sessionId, false))?.user.id;
+          if (userId) {
+            await withKeyLock(loginSessionUserLocks, userId, async () => {
+              const result = await mutateLoginSessionRecords(async () => {
+                const removed = await withKeyLock(
+                  loginSessionLocks,
+                  sessionId,
+                  async () => {
+                    const session = await loadSessionUnlocked(sessionId, false);
+                    if (!session) return null;
+                    const current =
+                      session.status === "active" && session.credential
+                        ? decryptCredential(
+                            session.credential,
+                            options.credentialEncryptionKey,
+                            digest(sessionId),
+                          )
+                        : null;
+                    const recordPath = loginSessionPath(sessionsPath, sessionId);
+                    await fs.promises.rm(recordPath, { force: true });
+                    knownLoginSessionIds.delete(path.basename(recordPath));
+                    return { credential: current, userId: session.user.id };
+                  },
+                );
+                const shouldRevoke =
+                  !!removed?.credential &&
+                  !(await hasActiveLoginSessionForUser(
+                    sessionsPath,
+                    removed.userId,
+                    now(),
+                    sessionIdleTtlMs,
+                  ));
+                return { removed, shouldRevoke };
               });
-              knownLoginSessionIds.delete(
-                path.basename(loginSessionPath(sessionsPath, sessionId)),
-              );
-              return current;
-            },
-          );
-          lifecycle.disconnectLoginSession(sessionId);
-          if (credential) {
-            await options.provider.revokeCredential?.(credential).catch(() => {});
+              lifecycle.disconnectLoginSession(sessionId);
+              if (result.shouldRevoke && result.removed?.credential) {
+                await options.provider
+                  .revokeCredential?.(result.removed.credential)
+                  .catch(() => {});
+              }
+            });
+          } else {
+            lifecycle.disconnectLoginSession(sessionId);
           }
         }
         res.setHeader("Set-Cookie", serializeExpiredLoginCookie());
@@ -608,6 +674,11 @@ interface StoredAuthError {
   readonly expiresAt: number;
 }
 
+interface RemovedLoginSession {
+  readonly credential: ProviderCredential | null;
+  readonly userId: string;
+}
+
 async function handleCallback(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -622,11 +693,18 @@ async function handleCallback(
     usersRootPath: string;
     now: () => number;
     stateTtlMs: number;
+    sessionIdleTtlMs: number;
     sessionAbsoluteTtlMs: number;
     lifecycle: AuthHttpLifecycle;
+    mutateLoginSessions<T>(operation: () => Promise<T>): Promise<T>;
+    withUserRevocationBarrier<T>(
+      userId: string,
+      operation: () => Promise<T>,
+    ): Promise<T>;
+    loginSessionUserId(loginSessionId: string): Promise<string | null>;
     rotateLoginSession(
       loginSessionId: string,
-    ): Promise<ProviderCredential | null>;
+    ): Promise<RemovedLoginSession | null>;
   },
 ): Promise<void> {
   const state = url.searchParams.get("state") ?? "";
@@ -659,7 +737,7 @@ async function handleCallback(
       state,
       redirectUri: options.redirectUri,
     });
-    const user = externalIdentityUser(result.identity);
+    let user = externalIdentityUser(result.identity);
     const credential = validCredential(result.credential);
     const sessionId = randomOpaqueId();
     const sessionKey = digest(sessionId);
@@ -678,7 +756,36 @@ async function handleCallback(
       ),
     };
     const sessionPath = loginSessionPath(options.sessionsPath, sessionId);
-    await writeLoginSession(sessionPath, session);
+    await options.withUserRevocationBarrier(user.id, async () => {
+      const validatedIdentity = options.provider.validateCredential
+        ? await options.provider.validateCredential(credential)
+        : result.identity;
+      const validatedUser = externalIdentityUser(validatedIdentity);
+      if (validatedUser.id !== user.id) {
+        throw new OAuthProviderContractError();
+      }
+      user = validatedUser;
+      try {
+        await options.mutateLoginSessions(() =>
+          writeLoginSession(sessionPath, { ...session, user: validatedUser }),
+        );
+      } catch (error) {
+        const hasAnotherActiveLoginSession =
+          await options.mutateLoginSessions(async () => {
+            await fs.promises.rm(sessionPath, { force: true }).catch(() => {});
+            return hasActiveLoginSessionForUser(
+              options.sessionsPath,
+              user.id,
+              options.now(),
+              options.sessionIdleTtlMs,
+            );
+          });
+        if (!hasAnotherActiveLoginSession) {
+          await options.provider.revokeCredential?.(credential).catch(() => {});
+        }
+        throw error;
+      }
+    });
     try {
       if (consumed.transaction.anonymousUserId) {
         await options.lifecycle.transferAnonymousUser(
@@ -690,19 +797,51 @@ async function handleCallback(
           },
         );
       }
-      const replacedCredential = consumed.transaction.replacedLoginSessionId
-        ? await options.rotateLoginSession(
-            consumed.transaction.replacedLoginSessionId,
-          )
+      const replacedLoginSessionId =
+        consumed.transaction.replacedLoginSessionId;
+      const replacedUserId = replacedLoginSessionId
+        ? await options.loginSessionUserId(replacedLoginSessionId)
         : null;
-      if (replacedCredential) {
-        await options.provider
-          .revokeCredential?.(replacedCredential)
-          .catch(() => {});
+      if (replacedLoginSessionId && replacedUserId) {
+        await options.withUserRevocationBarrier(replacedUserId, async () => {
+          const result = await options.mutateLoginSessions(async () => {
+            const removed =
+              await options.rotateLoginSession(replacedLoginSessionId);
+            const shouldRevoke =
+              !!removed?.credential &&
+              !(await hasActiveLoginSessionForUser(
+                options.sessionsPath,
+                removed.userId,
+                options.now(),
+                options.sessionIdleTtlMs,
+              ));
+            return { removed, shouldRevoke };
+          });
+          options.lifecycle.disconnectLoginSession(replacedLoginSessionId);
+          if (result.shouldRevoke && result.removed?.credential) {
+            await options.provider
+              .revokeCredential?.(result.removed.credential)
+              .catch(() => {});
+          }
+        });
       }
     } catch (error) {
-      await fs.promises.rm(sessionPath, { force: true }).catch(() => {});
-      await options.provider.revokeCredential?.(credential).catch(() => {});
+      await options.withUserRevocationBarrier(user.id, async () => {
+        const shouldRevoke = await options.mutateLoginSessions(async () => {
+          await fs.promises.rm(sessionPath, { force: true }).catch(() => {});
+          const hasAnotherActiveLoginSession =
+            await hasActiveLoginSessionForUser(
+              options.sessionsPath,
+              user.id,
+              options.now(),
+              options.sessionIdleTtlMs,
+            );
+          return !hasAnotherActiveLoginSession;
+        });
+        if (shouldRevoke) {
+          await options.provider.revokeCredential?.(credential).catch(() => {});
+        }
+      });
       throw error;
     }
     redirectAfterCallback(
@@ -882,6 +1021,34 @@ function parseLoginSession(serialized: string): StoredLoginSession {
     throw new Error("OAuth Login Session is invalid");
   }
   return value as StoredLoginSession;
+}
+
+async function hasActiveLoginSessionForUser(
+  sessionsPath: string,
+  userId: string,
+  currentTime: number,
+  idleTtlMs: number,
+): Promise<boolean> {
+  for (const name of await fs.promises.readdir(sessionsPath)) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const session = parseLoginSession(
+        await fs.promises.readFile(path.join(sessionsPath, name), "utf8"),
+      );
+      if (
+        session.status !== "active" ||
+        session.user.id !== userId ||
+        currentTime - session.lastActiveAt >= idleTtlMs ||
+        currentTime >= session.absoluteExpiresAt
+      ) {
+        continue;
+      }
+      return true;
+    } catch {
+      // Invalid or unreadable records cannot protect an active Login Session.
+    }
+  }
+  return false;
 }
 
 async function countPendingTransactions(
