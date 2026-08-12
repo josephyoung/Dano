@@ -130,6 +130,7 @@ async function startFakeProvider(options: {
   tokenDelayMs?: number;
   tokenStatus?: number;
   tokenResponse?: unknown | ((request: URLSearchParams) => unknown);
+  identityStatus?: number;
   identity?: unknown;
 } = {}) {
   const tokenRequests: URLSearchParams[] = [];
@@ -185,7 +186,9 @@ async function startFakeProvider(options: {
     if (req.method === "GET" && req.url === "/identity") {
       identityRequestHeaders.push(req.headers);
       identityAuthorization.push(req.headers.authorization ?? "");
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(options.identityStatus ?? 200, {
+        "Content-Type": "application/json",
+      });
       res.end(
         JSON.stringify(
           options.identity ?? {
@@ -546,6 +549,7 @@ describe("OAuth authentication over HTTP", () => {
       clientId: "fake-client",
       clientSecret: "fake-client-secret",
       scope: "profile offline_access",
+      requestHeaders: { "x-provider-context": "fixed-context" },
       allowInsecureRequests: true,
     });
 
@@ -564,7 +568,131 @@ describe("OAuth authentication over HTTP", () => {
       accessToken: "renewed-access-token",
       refreshToken: "initial-refresh-token",
       tokenType: "bearer",
+      expiresAt: expect.any(Number),
     });
+    expect(fakeProvider.identityAuthorization).toEqual([
+      "Bearer renewed-access-token",
+    ]);
+    expect(fakeProvider.identityRequestHeaders[0]?.["x-provider-context"]).toBe(
+      "fixed-context",
+    );
+  });
+
+  it("rejects a refreshed credential when the provider identity contract is invalid", async () => {
+    const fakeProvider = await startFakeProvider({
+      tokenResponse: {
+        access_token: "renewed-access-secret",
+        token_type: "Bearer",
+        expires_in: 1800,
+      },
+      identity: { code: 401, data: null },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "profile offline_access",
+      requestHeaders: { "x-provider-context": "fixed-context" },
+      allowInsecureRequests: true,
+    });
+
+    let rejection: unknown;
+    try {
+      await provider.refreshCredential?.({
+        accessToken: "expired-access-secret",
+        refreshToken: "initial-refresh-secret",
+        tokenType: "Bearer",
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(OAuthProviderContractError);
+    expect(String(rejection)).not.toContain("renewed-access-secret");
+    expect(String(rejection)).not.toContain("initial-refresh-secret");
+    expect(fakeProvider.identityAuthorization).toEqual([
+      "Bearer renewed-access-secret",
+    ]);
+    expect(fakeProvider.identityRequestHeaders[0]?.["x-provider-context"]).toBe(
+      "fixed-context",
+    );
+  });
+
+  it("rejects a refreshed credential when the provider identity request fails", async () => {
+    const fakeProvider = await startFakeProvider({
+      tokenResponse: {
+        access_token: "renewed-http-failure-secret",
+        token_type: "Bearer",
+      },
+      identityStatus: 401,
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "profile offline_access",
+      allowInsecureRequests: true,
+    });
+
+    let rejection: unknown;
+    try {
+      await provider.refreshCredential?.({
+        accessToken: "expired-http-failure-secret",
+        refreshToken: "refresh-http-failure-secret",
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toBe("Provider identity request failed");
+    expect(String(rejection)).not.toMatch(
+      /renewed-http-failure-secret|refresh-http-failure-secret/,
+    );
+    expect(fakeProvider.identityAuthorization).toEqual([
+      "Bearer renewed-http-failure-secret",
+    ]);
+  });
+
+  it("rejects a refreshed non-Bearer credential without sending the wrong scheme", async () => {
+    const fakeProvider = await startFakeProvider({
+      tokenResponse: {
+        access_token: "renewed-non-bearer-secret",
+        token_type: "DPoP",
+      },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "profile offline_access",
+      allowInsecureRequests: true,
+    });
+
+    let rejection: unknown;
+    try {
+      await provider.refreshCredential?.({
+        accessToken: "expired-non-bearer-secret",
+        refreshToken: "refresh-non-bearer-secret",
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(String(rejection)).not.toMatch(
+      /renewed-non-bearer-secret|refresh-non-bearer-secret/,
+    );
+    expect(fakeProvider.identityAuthorization).toEqual([]);
   });
 
   it("supports a provider DELETE revocation contract without exposing the credential", async () => {
