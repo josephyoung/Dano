@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "releaseGate": {
+    "browser": "codex-in-app-browser",
+    "publicSeam": "Dano HTTP/Bridge",
+    "browserInput": [
+      "two authenticated browser contexts",
+      "own and cross resource observations"
+    ],
+    "automatedContract": [
+      "distinct canonical User owner fingerprints",
+      "cross probes target the counterpart browser context resources from the same run",
+      "bidirectional session, transcript, workspace, upload, and preference isolation"
+    ]
+  },
+  "accounts": [
+    {
+      "slot": "a",
+      "username": "dano424a",
+      "password": "Dano424Test!",
+      "preference": "blue"
+    },
+    {
+      "slot": "b",
+      "username": "dano424b",
+      "password": "Dano424Test!",
+      "preference": "purple"
+    }
+  ]
+}
