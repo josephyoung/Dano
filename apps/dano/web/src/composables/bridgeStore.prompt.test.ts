@@ -119,6 +119,80 @@ describe("Bridge prompt acceptance", () => {
     bridge.disconnect();
   });
 
+  it("does not accept the Web-only checking state from auth current", async () => {
+    const clientResponse = deferred<Response>();
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        return new Response(
+          JSON.stringify({
+            status: "checking",
+            loginError: { code: "provider_login_failed" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(input) === "/api/clients") return clientResponse.promise;
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge, parseBridgeAuthenticationState } = await import(
+      "./bridgeStore.svelte"
+    );
+    expect(
+      parseBridgeAuthenticationState({ status: "checking" }),
+    ).toBeUndefined();
+    const bridge = initBridge();
+    await vi.waitFor(() =>
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "/api/clients",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+
+    expect(bridge.authentication).toEqual({ status: "checking" });
+    expect(bridge.notifications).toEqual([]);
+    clientResponse.resolve(new Response(null, { status: 503 }));
+    bridge.disconnect();
+  });
+
+  it("does not accept the Web-only checking state from client creation", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        return new Response(JSON.stringify({ status: "anonymous" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (String(input) === "/api/clients") {
+        return new Response(
+          JSON.stringify({
+            client: { id: "client-1" },
+            eventsUrl: "/events",
+            messagesUrl: "/messages",
+            authentication: { status: "checking" },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+    await vi.waitFor(() => expect(eventSources).toHaveLength(1));
+    eventSources[0]!.open();
+    await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
+
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    bridge.disconnect();
+  });
+
   it("exposes the server-projected User summary to the application", async () => {
     const bridge = await connectBridge(
       Promise.resolve(new Response(null, { status: 202 })),
@@ -265,6 +339,24 @@ describe("Bridge prompt acceptance", () => {
 
     expect(bridge.currentUser).toBeUndefined();
     expect(eventSources).toHaveLength(1);
+    bridge.disconnect();
+  });
+
+  it("ignores the Web-only checking state when it arrives over SSE", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+
+    eventSources[0]!.send({
+      type: "authentication",
+      payload: { status: "checking" },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
     bridge.disconnect();
   });
 

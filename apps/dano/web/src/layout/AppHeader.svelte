@@ -5,10 +5,12 @@
   import Menu from "@lucide/svelte/icons/menu";
   import Palette from "@lucide/svelte/icons/palette";
   import SquarePen from "@lucide/svelte/icons/square-pen";
-  import type { BridgeAuthenticationState } from "@dano/types/protocol";
   import { Button } from "../components/ui/button";
   import * as Popover from "../components/ui/popover";
-  import type { ConnectionStatus } from "../composables/bridgeStore.svelte";
+  import type {
+    BrowserAuthenticationState,
+    ConnectionStatus,
+  } from "../composables/bridgeStore.svelte";
   import { t } from "../i18n";
 
   let {
@@ -29,7 +31,7 @@
     onNewSession?: () => void;
     newSessionPending?: boolean;
     showNewSession?: boolean;
-    authentication: BridgeAuthenticationState;
+    authentication: BrowserAuthenticationState;
     onOpenTheme?: () => void;
     onLogin?: () => void;
     onLogout?: () => void | Promise<void>;
