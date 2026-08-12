@@ -1,5 +1,18 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
+import {
+  ModelRuntime,
+  SessionManager,
+  createAgentSession,
+  type AgentSessionEvent,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
   CredentialBroker,
   type CredentialSession,
@@ -35,6 +48,10 @@ function userMessageEvent(
 
 function turnStartEvent(): AgentSessionEvent {
   return { type: "turn_start" } as AgentSessionEvent;
+}
+
+function agentStartEvent(): AgentSessionEvent {
+  return { type: "agent_start" } as AgentSessionEvent;
 }
 
 function turnEndEvent(): AgentSessionEvent {
@@ -133,6 +150,128 @@ describe("Credential Broker", () => {
         body: '{"enabled":true}',
       }),
     );
+  });
+
+  it("binds each initiating Login Session when Pi starts the Turn before its user message", async () => {
+    const seenAuthorization: string[] = [];
+    const credentialBroker = broker({
+      credentials: { login_a: "access-a", login_b: "access-b" },
+      fetch: vi.fn(async (_url: URL, init?: RequestInit) => {
+        seenAuthorization.push(
+          new Headers(init?.headers).get("authorization") ?? "",
+        );
+        return new Response("ok");
+      }) as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(agentStartEvent());
+    observed.emit(turnStartEvent());
+    observed.emit(userMessageEvent("first"));
+    const first = await credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/first",
+    });
+    observed.emit(turnEndEvent());
+    observed.emit(turnStartEvent());
+    const sameAssistantTurn = await credentialBroker.request(
+      TEST_SCOPE,
+      "agent-a",
+      {
+        method: "GET",
+        path: "/same-assistant-turn",
+      },
+    );
+    observed.emit(turnEndEvent());
+
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_b");
+    observed.emit(turnStartEvent());
+    observed.emit(userMessageEvent("second"));
+    const second = await credentialBroker.request(TEST_SCOPE, "agent-a", {
+      method: "GET",
+      path: "/second",
+    });
+
+    expect(first).toMatchObject({ ok: true, status: 200 });
+    expect(sameAssistantTurn).toMatchObject({ ok: true, status: 200 });
+    expect(second).toMatchObject({ ok: true, status: 200 });
+    expect(seenAuthorization).toEqual([
+      "Bearer access-a",
+      "Bearer access-a",
+      "Bearer access-b",
+    ]);
+  });
+
+  it("binds the current Login Session through the Pi 0.82.1 public lifecycle", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-broker-lifecycle-"));
+    const provider = fauxProvider({ provider: "dano-broker-lifecycle" });
+    provider.setResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall("provider_request", {
+            method: "GET",
+            path: "/skill",
+          }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("done"),
+    ]);
+    const modelRuntime = await ModelRuntime.create({
+      authPath: path.join(root, "agent", "auth.json"),
+      modelsPath: null,
+    });
+    modelRuntime.registerNativeProvider(provider.provider);
+    await modelRuntime.setRuntimeApiKey(provider.provider.id, "test-only");
+    const seenAuthorization: string[] = [];
+    const credentialBroker = broker({
+      credentials: { login_a: "access-a" },
+      fetch: vi.fn(async (_url: URL, init?: RequestInit) => {
+        seenAuthorization.push(
+          new Headers(init?.headers).get("authorization") ?? "",
+        );
+        return new Response("skill-result");
+      }) as typeof fetch,
+    });
+    const { session } = await createAgentSession({
+      cwd: root,
+      agentDir: path.join(root, "agent"),
+      modelRuntime,
+      model: provider.getModel(),
+      thinkingLevel: "off",
+      noTools: "builtin",
+      customTools: [credentialBroker.createTool(TEST_SCOPE)],
+      sessionManager: SessionManager.inMemory(root),
+    });
+    const lifecycle: string[] = [];
+    session.subscribe(event => {
+      if (event.type === "agent_start" || event.type === "turn_start") {
+        lifecycle.push(event.type);
+      } else if (
+        event.type === "message_start" &&
+        event.message.role === "user"
+      ) {
+        lifecycle.push("message_start:user");
+      }
+    });
+    credentialBroker.observe(TEST_SCOPE, session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, session.sessionId, "login_a");
+
+    try {
+      await session.prompt("run provider skill");
+
+      expect(lifecycle.slice(0, 3)).toEqual([
+        "agent_start",
+        "turn_start",
+        "message_start:user",
+      ]);
+      expect(seenAuthorization).toEqual(["Bearer access-a"]);
+    } finally {
+      session.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("coalesces concurrent access-token failures into one Login Session refresh", async () => {

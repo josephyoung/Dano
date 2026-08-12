@@ -132,6 +132,7 @@ export interface AssistantTurnBindingHandle {
 interface SessionBindings {
   readonly pending: AssistantTurnBinding[];
   enqueueTail?: Promise<void>;
+  piTurnStarted?: boolean;
   awaitingTurn?: AssistantTurnBinding;
   assistantTurn?: AssistantTurnBinding;
   activePiTurn?: AssistantTurnBinding;
@@ -508,10 +509,16 @@ export class CredentialBroker {
         const [binding] = state.pending.splice(pendingIndex, 1);
         state.awaitingTurn = binding;
         if (binding?.queueEntry) this.queuedEntries.delete(binding.queueEntry);
+        if (state.piTurnStarted) {
+          state.assistantTurn = binding;
+          state.activePiTurn = binding;
+          state.awaitingTurn = undefined;
+        }
       }
       return;
     }
     if (event.type === "turn_start") {
+      state.piTurnStarted = true;
       if (state.awaitingTurn) {
         state.assistantTurn = state.awaitingTurn;
         state.awaitingTurn = undefined;
@@ -520,11 +527,13 @@ export class CredentialBroker {
       return;
     }
     if (event.type === "turn_end") {
+      state.piTurnStarted = false;
       state.activePiTurn = undefined;
       return;
     }
     if (event.type === "agent_settled") {
       this.clearPending(state);
+      state.piTurnStarted = false;
       state.awaitingTurn = undefined;
       state.assistantTurn = undefined;
       state.activePiTurn = undefined;
