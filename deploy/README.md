@@ -146,6 +146,19 @@ DANO_OAUTH_CREDENTIAL_KEY
 DANO_OAUTH_CREDENTIAL_KEY_VERSION
 ```
 
+If the provider requires fixed transport headers, configure them as a JSON
+object in `DANO_OAUTH_PROVIDER_HEADERS_JSON`. Dano applies them only inside the
+server-side OAuth provider adapter; protocol-generated headers take precedence.
+For providers that require callback state again during code exchange, set
+`DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT=true`; the adapter keeps state scoped
+to the corresponding exchange.
+
+Provider credential revocation is optional. Use
+`DANO_OAUTH_REVOCATION_TRANSPORT=rfc7009` with an explicit
+`DANO_OAUTH_REVOCATION_ENDPOINT` for the standard protocol, or
+`delete-query-basic` for providers that require a DELETE request with Basic
+client authentication. The latter defaults to the configured token endpoint.
+
 The redirect URI must be the fixed `/api/auth/callback` URL. Provider
 server-to-server endpoints, the API origin, and the production callback must
 use trusted HTTPS. URL credentials, fragments, callback query parameters, a
