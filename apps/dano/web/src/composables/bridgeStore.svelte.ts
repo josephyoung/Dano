@@ -3034,15 +3034,18 @@ export function parseBridgeAuthenticationState(
   if (
     !candidate.user ||
     typeof candidate.user !== "object" ||
+    typeof (candidate.user as { id?: unknown }).id !== "string" ||
     typeof (candidate.user as { username?: unknown }).username !== "string"
   ) {
     return undefined;
   }
+  const id = (candidate.user as { id: string }).id;
   const username = (candidate.user as { username: string }).username;
   const avatarUrl = (candidate.user as { avatarUrl?: unknown }).avatarUrl;
   return {
     status: "authenticated",
     user: {
+      id,
       username,
       ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
     },

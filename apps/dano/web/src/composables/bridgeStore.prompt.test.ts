@@ -198,12 +198,14 @@ describe("Bridge prompt acceptance", () => {
       Promise.resolve(new Response(null, { status: 202 })),
       undefined,
       {
+        id: "user-alice",
         username: "Alice",
         avatarUrl: "https://example.test/alice.png",
       },
     );
 
     expect(bridge.currentUser).toEqual({
+      id: "user-alice",
       username: "Alice",
       avatarUrl: "https://example.test/alice.png",
     });
@@ -322,8 +324,11 @@ describe("Bridge prompt acceptance", () => {
     const bridge = await connectBridge(
       Promise.resolve(new Response(null, { status: 202 })),
       undefined,
-      { username: "Alice" },
-      { status: "authenticated", user: { username: "Alice" } },
+      { id: "user-alice", username: "Alice" },
+      {
+        status: "authenticated",
+        user: { id: "user-alice", username: "Alice" },
+      },
     );
 
     eventSources[0]!.send({
@@ -384,8 +389,11 @@ describe("Bridge prompt acceptance", () => {
     const bridge = await connectBridge(
       Promise.resolve(new Response(null, { status: 202 })),
       undefined,
-      { username: "Alice" },
-      { status: "authenticated", user: { username: "Alice" } },
+      { id: "user-alice", username: "Alice" },
+      {
+        status: "authenticated",
+        user: { id: "user-alice", username: "Alice" },
+      },
     );
     const logoutFetch = vi
       .fn<typeof fetch>()

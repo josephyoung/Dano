@@ -107,8 +107,8 @@ function prepareEvidence(evidencePath) {
         aClientFingerprint: null,
         aAfterClientFingerprint: null,
         bClientFingerprint: null,
-        aUserFingerprint: null,
-        bUserFingerprint: null,
+        aUserIdFingerprint: null,
+        bUserIdFingerprint: null,
         aPreference: null,
         bPreference: null,
       },
@@ -213,12 +213,22 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
   if (identity?.aClientFingerprint === identity?.bClientFingerprint) {
     errors.push("A and B must use different Browser Clients");
   }
-  match(identity?.aUserFingerprint, SHA256, "identity.aUserFingerprint", errors);
-  match(identity?.bUserFingerprint, SHA256, "identity.bUserFingerprint", errors);
+  match(
+    identity?.aUserIdFingerprint,
+    SHA256,
+    "identity.aUserIdFingerprint",
+    errors,
+  );
+  match(
+    identity?.bUserIdFingerprint,
+    SHA256,
+    "identity.bUserIdFingerprint",
+    errors,
+  );
   equal(
-    identity?.aUserFingerprint,
-    identity?.bUserFingerprint,
-    "A and B must resolve to the same canonical User fingerprint",
+    identity?.aUserIdFingerprint,
+    identity?.bUserIdFingerprint,
+    "A and B must resolve to the same canonical User ID fingerprint",
     errors,
   );
   equal(identity?.aPreference, markers?.sharedPreference, "identity.aPreference", errors);

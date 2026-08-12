@@ -918,7 +918,10 @@ describe("BridgeServer HTTP/SSE transport", () => {
 
     expect(uploadResponse.status).toBe(201);
     expect(ownerResponse.status).toBe(200);
-    await expect(ownerResponse.json()).resolves.toEqual({ username: "Owner" });
+    await expect(ownerResponse.json()).resolves.toEqual({
+      id: "owner",
+      username: "Owner",
+    });
     expect(missingResponse.status).toBe(401);
     expect(attackerResponse.status).toBe(403);
     expect(attackerMessageResponse.status).toBe(403);

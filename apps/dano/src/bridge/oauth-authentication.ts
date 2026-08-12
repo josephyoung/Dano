@@ -487,8 +487,8 @@ export async function createOAuthAuthentication(
           const userId = (await loadSession(sessionId, false))?.user.id;
           if (userId) {
             await withKeyLock(loginSessionUserLocks, userId, async () => {
-              const result = await mutateLoginSessionRecords(async () => {
-                const removed = await withKeyLock(
+              const removed = await mutateLoginSessionRecords(() =>
+                withKeyLock(
                   loginSessionLocks,
                   sessionId,
                   async () => {
@@ -507,21 +507,12 @@ export async function createOAuthAuthentication(
                     knownLoginSessionIds.delete(path.basename(recordPath));
                     return { credential: current, userId: session.user.id };
                   },
-                );
-                const shouldRevoke =
-                  !!removed?.credential &&
-                  !(await hasActiveLoginSessionForUser(
-                    sessionsPath,
-                    removed.userId,
-                    now(),
-                    sessionIdleTtlMs,
-                  ));
-                return { removed, shouldRevoke };
-              });
+                ),
+              );
               lifecycle.disconnectLoginSession(sessionId);
-              if (result.shouldRevoke && result.removed?.credential) {
+              if (removed?.credential) {
                 await options.provider
-                  .revokeCredential?.(result.removed.credential)
+                  .revokeCredential?.(removed.credential)
                   .catch(() => {});
               }
             });
