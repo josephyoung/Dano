@@ -39,7 +39,7 @@ export interface OAuthProviderAdapter {
   refreshCredential?(
     credential: ProviderCredential,
   ): Promise<ProviderCredential>;
-  isAccessTokenInvalid?(response: Response): boolean;
+  isAccessTokenInvalid?(response: Response): boolean | Promise<boolean>;
   revokeCredential?(credential: ProviderCredential): Promise<void>;
 }
 
@@ -165,8 +165,15 @@ export function createOAuth2ProviderAdapter(
       return refreshed;
     },
 
-    isAccessTokenInvalid(response) {
-      return response.status === 401;
+    async isAccessTokenInvalid(response) {
+      if (response.status === 401) return true;
+      let value: unknown;
+      try {
+        value = await response.clone().json();
+      } catch {
+        return false;
+      }
+      return providerAuthenticationInvalid(value);
     },
 
   };
@@ -336,6 +343,12 @@ function providerDataObject(value: unknown): Record<string, unknown> | null {
     return record.data as Record<string, unknown>;
   }
   return record;
+}
+
+function providerAuthenticationInvalid(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const code = (value as Record<string, unknown>).code;
+  return code === 401 || (typeof code === "string" && code.trim() === "401");
 }
 
 function normalizedIdentifier(value: unknown): string | null {
