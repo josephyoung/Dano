@@ -348,6 +348,7 @@ describe("OAuth authentication over HTTP", () => {
     expect(await current.json()).toEqual({
       status: "authenticated",
       user: {
+        id: expect.stringMatching(/^oauth_[a-f0-9]{64}$/),
         username: "Example User",
         avatarUrl: "https://images.example.test/avatar.png",
       },
@@ -494,6 +495,7 @@ describe("OAuth authentication over HTTP", () => {
     expect(await current.json()).toEqual({
       status: "authenticated",
       user: {
+        id: expect.stringMatching(/^oauth_[a-f0-9]{64}$/),
         username: "Fixture User",
         avatarUrl: "https://avatar.invalid/profile.png",
       },
@@ -563,6 +565,7 @@ describe("OAuth authentication over HTTP", () => {
     expect(await current.json()).toEqual({
       status: "authenticated",
       user: {
+        id: expect.stringMatching(/^oauth_[a-f0-9]{64}$/),
         username: "Wrapped Identity",
         avatarUrl: "https://avatar.invalid/wrapped.png",
       },
@@ -2118,7 +2121,10 @@ describe("OAuth authentication over HTTP", () => {
     });
     expect(await firstCurrent.json()).toEqual({
       status: "authenticated",
-      user: { username: "已登录用户" },
+      user: {
+        id: expect.stringMatching(/^oauth_[a-f0-9]{64}$/),
+        username: "已登录用户",
+      },
     });
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
@@ -2713,7 +2719,7 @@ describe("OAuth authentication over HTTP", () => {
     expect(logout.headers.get("set-cookie")).toMatch(
       /^dano_login=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/,
     );
-    expect(revoked).toEqual([]);
+    expect(revoked).toEqual(["access-first-login"]);
     expect(
       await (
         await fetch(`${origin}/api/auth/current`, {
@@ -2794,7 +2800,10 @@ describe("OAuth authentication over HTTP", () => {
       },
     });
     expect(lastLogout.status).toBe(200);
-    expect(revoked).toEqual(["access-second-login"]);
+    expect(revoked).toEqual([
+      "access-first-login",
+      "access-second-login",
+    ]);
   });
 
   it("retains a same-User Login Session touched at the idle TTL boundary", async () => {
@@ -2878,7 +2887,7 @@ describe("OAuth authentication over HTTP", () => {
     ).toMatchObject({ status: "authenticated" });
   });
 
-  it("serializes concurrent logout so the last same-User Login Session revokes once", async () => {
+  it("serializes concurrent logout and revokes each Login Session Credential", async () => {
     const revoked: string[] = [];
     const provider: OAuthProviderAdapter = {
       ...successfulProvider("concurrent-logout-user", "unused"),
@@ -2909,7 +2918,10 @@ describe("OAuth authentication over HTTP", () => {
     );
 
     expect(responses.map(response => response.status)).toEqual([200, 200]);
-    expect(revoked).toHaveLength(1);
+    expect(revoked.sort()).toEqual([
+      "access-concurrent-first",
+      "access-concurrent-second",
+    ]);
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
     ).toHaveLength(0);
@@ -3066,7 +3078,7 @@ describe("OAuth authentication over HTTP", () => {
     ).toMatchObject({ status: "authenticated" });
   });
 
-  it("uses persisted Login Sessions to suppress cascading revoke after restart", async () => {
+  it("revokes the current Credential after restart without removing another Login Session", async () => {
     const revoked: string[] = [];
     const provider: OAuthProviderAdapter = {
       ...successfulProvider("restart-shared-user", "unused"),
@@ -3099,7 +3111,7 @@ describe("OAuth authentication over HTTP", () => {
     });
 
     expect(logout.status).toBe(200);
-    expect(revoked).toEqual([]);
+    expect(revoked).toEqual(["access-restart-first"]);
     expect(
       await (
         await fetch(`${restarted.origin}/api/auth/current`, {

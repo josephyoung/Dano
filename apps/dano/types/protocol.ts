@@ -1151,6 +1151,8 @@ export interface BridgeQuickActionConfig {
 
 /** Browser-safe projection of the server-authenticated User. */
 export interface BridgeUserSummary {
+  /** Opaque canonical Dano User ID; display data must never replace it. */
+  readonly id: string;
   readonly username: string;
   readonly avatarUrl?: string;
 }

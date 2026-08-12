@@ -172,9 +172,9 @@ describe("real provider Skill release gate", () => {
 
   it.each([
     {
-      label: "different canonical User fingerprints",
+      label: "different canonical User ID fingerprints",
       mutate: (value: any) => {
-        value.observations.identity.bUserFingerprint = "b".repeat(64);
+        value.observations.identity.bUserIdFingerprint = "b".repeat(64);
       },
     },
     {
@@ -299,7 +299,7 @@ function passingEvidence() {
       ...turnEntries(evidence.markers.bAfter, "success", [7_000, 7_200, 7_500, 7_700, 8_000]),
     ].map(entry => JSON.stringify(entry)).join("\n")}\n`,
   );
-  const sameUser = "a".repeat(64);
+  const sameUserId = "a".repeat(64);
   const sameSession = sha256(path.resolve(transcriptPath));
   evidence.completedAt = "2026-08-12T00:00:09.000Z";
   evidence.observations.identity = {
@@ -308,8 +308,8 @@ function passingEvidence() {
     aClientFingerprint: "1".repeat(64),
     aAfterClientFingerprint: "1".repeat(64),
     bClientFingerprint: "2".repeat(64),
-    aUserFingerprint: sameUser,
-    bUserFingerprint: sameUser,
+    aUserIdFingerprint: sameUserId,
+    bUserIdFingerprint: sameUserId,
     aPreference: evidence.markers.sharedPreference,
     bPreference: evidence.markers.sharedPreference,
   };

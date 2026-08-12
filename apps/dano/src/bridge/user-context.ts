@@ -91,8 +91,8 @@ interface JwtClaims {
 
 export function toBrowserUserSummary(user: AuthenticatedUser): BridgeUserSummary {
   return user.avatarUrl
-    ? { username: user.username, avatarUrl: user.avatarUrl }
-    : { username: user.username };
+    ? { id: user.id, username: user.username, avatarUrl: user.avatarUrl }
+    : { id: user.id, username: user.username };
 }
 
 export function createJwtUserContextResolver(

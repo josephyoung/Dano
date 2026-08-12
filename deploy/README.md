@@ -287,10 +287,11 @@ Fill the prepared evidence only from this run's public HTTP/SSE observations:
 - `aStatus` and `bStatus` come from each authenticated auth DTO.
 - Client fingerprints are SHA-256 hashes of the two `/api/clients` response
   Client IDs. A's two prompts must use the same Client; B must be different.
-- User fingerprints are SHA-256 hashes of each Client response's
-  `defaultWorkspacePath`. They must match. Set the User's preference to the
-  prepared `yellow` marker through A and read it through B, then restore the
-  initial preference after capture.
+- User ID fingerprints are SHA-256 hashes of the authenticated auth DTO's
+  browser-safe, opaque `user.id`. They must match; do not record the raw ID.
+  `defaultWorkspacePath` is runtime data and must never be used as User
+  identity. Set the User's preference to the prepared `yellow` marker through A
+  and read it through B, then restore the initial preference after capture.
 - Session fingerprints are SHA-256 hashes of the `sessionPath` returned through
   the Bridge. B must successfully `switch_session` to A's path; record only the
   hash, never the path.

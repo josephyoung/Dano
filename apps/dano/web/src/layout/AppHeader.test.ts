@@ -17,7 +17,7 @@ type AppHeaderProps = {
     | { status: "reauth_required" }
     | {
         status: "authenticated";
-        user: { username: string; avatarUrl?: string };
+        user: { id: string; username: string; avatarUrl?: string };
       };
   onOpenTheme?: () => void;
   onLogin?: () => void;
@@ -85,6 +85,7 @@ describe("AppHeader", () => {
       authentication: {
         status: "authenticated",
         user: {
+          id: "user-alice",
           username: "Alice",
           avatarUrl: "https://example.test/alice.png",
         },
@@ -118,6 +119,7 @@ describe("AppHeader", () => {
       authentication: {
         status: "authenticated",
         user: {
+          id: "user-alice",
           username: "Alice",
           avatarUrl: "https://example.test/missing.png",
         },
