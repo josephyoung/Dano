@@ -295,21 +295,18 @@ Session B in Chrome by signing the same test account into each browser context;
 do not add a second callback address or start a second Dano frontend. Open the
 same Agent Session from both. Session B remains a viewer so the real Pi runtime
 stays alive when session A disconnects. Invoke the Skill from A with a unique
-`gate-a-before` marker. Release its server-side wait and confirm its
-`provider_request` succeeds:
+`gate-a-before` marker. The Skill asks one controlled `ask_user_question`
+single-choice question; answer `continue` from A and confirm its subsequent
+`provider_request` succeeds.
 
-```bash
-PI_CODING_AGENT_DIR=/path/to/test-agent-config \
-node scripts/check-provider-skill-release-gate.mjs release gate-a-before
-```
-
-Invoke it from A again with `gate-a-after`, but leave the server-side wait
-pending. Log out A, confirm its old client is disconnected, then release the
-wait. This continues the already-started Assistant Turn, whose Credential
-remains bound to A; its subsequent `provider_request` must return
-`authentication_required`. Finally invoke the Skill in a new Turn from B with
-`gate-b-after`, release its wait, and confirm it still succeeds. The controlled
-test accounts are recorded in
+Invoke it from A again with `gate-a-after` and leave that question pending. Log
+out A and confirm its old client is disconnected. From B's view of the same
+Agent Session, answer A's pending question with `continue`. This resumes the
+already-started Assistant Turn, whose Credential remains bound to A; its
+subsequent `provider_request` must return `authentication_required`. Finally
+invoke the Skill in a new Turn from B with `gate-b-after`, answer its question
+from B, and confirm the provider request still succeeds. The controlled test
+accounts are recorded in
 `apps/dano/src/__tests__/fixtures/real-oauth-acceptance.json`.
 
 Fill the prepared evidence only from this run's public HTTP/SSE observations.
@@ -328,10 +325,16 @@ callback without recording its address:
 - Session fingerprints are SHA-256 hashes of the `sessionPath` returned through
   the Bridge. B must successfully `switch_session` to A's path; record only the
   hash, never the path.
-- Sequence timestamps surround the public prompt POST/SSE result, logout POST,
-  old-A Client request, B auth DTO read, and release calls. Logout must return
-  200, the old A Client request must return 404, and B must remain
-  `authenticated` before its post-logout Skill Turn succeeds.
+- Record `aBeforeBrowser` as `codex-in-app-browser`; record both
+  `aAfterBrowser` and `bAfterBrowser` as `chrome`. These values identify which
+  browser submitted each public `answer_question` command without recording a
+  Cookie or Login Session ID.
+- Sequence timestamps surround each public prompt, question tool call,
+  `answer_question` command/result, logout POST, old-A Client request, B auth
+  DTO read, and provider result. Logout must return 200 after A's second
+  question call and before B answers it; the old A Client request must
+  return 404, and B must remain `authenticated` before its post-logout Skill
+  Turn succeeds.
 
 Verify the three phases in the shared real Pi transcript without printing response bodies, headers,
 credentials, Cookies, Login Session IDs, or provider addresses:
@@ -342,10 +345,11 @@ DANO_PROVIDER_GATE_SESSION=/path/to/shared-session.jsonl \
 pnpm run test:auth-real-provider-skill -- /path/to/provider-skill-evidence.json
 ```
 
-The verifier requires the Skill's successful wait tool result before each
-`provider_request`, so the held A Turn is reproducible without a hidden
-acceptance endpoint, a copied credential, or a direct Broker call. Remove the
-test Skill after acceptance:
+The verifier requires the Skill's exact canonical `ask_user_question` call and
+its answered `continue` result before each `provider_request`, so the held A
+Turn is portable and reproducible through Dano's public HTTP/SSE command seam,
+without a hidden acceptance endpoint, shell sandbox, copied credential, or
+direct Broker call. Remove the test Skill after acceptance:
 
 ```bash
 PI_CODING_AGENT_DIR=/path/to/test-agent-config \

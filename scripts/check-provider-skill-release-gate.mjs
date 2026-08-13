@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -22,13 +21,12 @@ const FORBIDDEN_EVIDENCE =
 
 try {
   if (mode === "install") installSkill();
-  else if (mode === "release") releaseTurn(process.argv[3]);
   else if (mode === "remove") removeSkill();
   else if (mode === "prepare") prepareEvidence(requiredArgument(3));
   else if (mode === "verify") verifyGate(requiredArgument(3));
   else {
     throw new Error(
-      "usage: check-provider-skill-release-gate.mjs <install|release|remove|prepare|verify> [marker|evidence.json]",
+      "usage: check-provider-skill-release-gate.mjs <install|remove|prepare|verify> [evidence.json]",
     );
   }
 } catch (error) {
@@ -41,35 +39,17 @@ function installSkill() {
   const providerPath = configuredProviderPath();
   const targetDir = join(agentDir, "skills", skillName);
   const targetPath = join(targetDir, "SKILL.md");
-  const waitScriptPath = join(targetDir, "wait-for-release.mjs");
   const rendered = readFileSync(join(fixtureDir, "SKILL.md"), "utf8")
-    .replace("{{PROVIDER_REQUEST_PATH}}", escapeYamlString(providerPath))
-    .replace("{{WAIT_SCRIPT_PATH}}", escapeYamlString(waitScriptPath));
+    .replace("{{PROVIDER_REQUEST_PATH}}", escapeYamlString(providerPath));
   if (rendered.includes("{{")) {
     throw new Error("provider Skill fixture contains an unresolved value");
   }
 
-  mkdirSync(join(targetDir, "releases"), { recursive: true });
+  mkdirSync(targetDir, { recursive: true });
   const stagingPath = join(targetDir, `.SKILL.md.${process.pid}.tmp`);
   writeFileSync(stagingPath, rendered, { mode: 0o600 });
   renameSync(stagingPath, targetPath);
-  copyFileSync(join(fixtureDir, "wait-for-release.mjs"), waitScriptPath);
   console.log(`installed ${skillName}`);
-}
-
-function releaseTurn(marker) {
-  if (!validMarker(marker)) throw new Error("release marker is invalid");
-  const agentDir = requiredEnvironment("PI_CODING_AGENT_DIR");
-  const releaseDir = join(agentDir, "skills", skillName, "releases");
-  if (!existsSync(releaseDir)) {
-    throw new Error("provider Skill release gate is not installed");
-  }
-  writeFileSync(join(releaseDir, marker), "release\n", {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-  console.log(`released ${marker}`);
 }
 
 function removeSkill() {
@@ -86,7 +66,7 @@ function prepareEvidence(evidencePath) {
     throw new Error("provider Skill evidence file already exists");
   }
   const evidence = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId: randomUUID(),
     preparedAt: new Date().toISOString(),
     completedAt: null,
@@ -121,6 +101,11 @@ function prepareEvidence(evidencePath) {
         bSessionFingerprint: null,
         bSwitchStatus: null,
       },
+      questionAnswers: {
+        aBeforeBrowser: null,
+        aAfterBrowser: null,
+        bAfterBrowser: null,
+      },
       sequence: emptySequence(),
     },
   };
@@ -135,16 +120,20 @@ function prepareEvidence(evidencePath) {
 function emptySequence() {
   return {
     aBeforeAcceptedAt: null,
+    aBeforeQuestionCallAt: null,
+    aBeforeQuestionAnsweredAt: null,
     aBeforeResultAt: null,
     aAfterAcceptedAt: null,
-    aAfterWaitStartedAt: null,
+    aAfterQuestionCallAt: null,
     logoutAt: null,
     logoutHttpStatus: null,
     aOldClientHttpStatus: null,
     bAfterLogoutStatus: null,
-    aAfterReleasedAt: null,
+    aAfterQuestionAnsweredAt: null,
     aAfterResultAt: null,
     bAfterAcceptedAt: null,
+    bAfterQuestionCallAt: null,
+    bAfterQuestionAnsweredAt: null,
     bAfterResultAt: null,
   };
 }
@@ -171,7 +160,7 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
   if (FORBIDDEN_EVIDENCE.test(raw)) {
     errors.push("evidence contains forbidden provider or credential data");
   }
-  equal(value.schemaVersion, 1, "schemaVersion", errors);
+  equal(value.schemaVersion, 2, "schemaVersion", errors);
   match(value.runId, /^[0-9a-f-]{36}$/i, "runId", errors);
   isoDate(value.preparedAt, "preparedAt", errors);
   isoDate(value.completedAt, "completedAt", errors);
@@ -266,6 +255,26 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
   );
   equal(runtime?.bSwitchStatus, "succeeded", "sharedRuntime.bSwitchStatus", errors);
 
+  const questionAnswers = value.observations?.questionAnswers;
+  equal(
+    questionAnswers?.aBeforeBrowser,
+    "codex-in-app-browser",
+    "questionAnswers.aBeforeBrowser",
+    errors,
+  );
+  equal(
+    questionAnswers?.aAfterBrowser,
+    "chrome",
+    "questionAnswers.aAfterBrowser",
+    errors,
+  );
+  equal(
+    questionAnswers?.bAfterBrowser,
+    "chrome",
+    "questionAnswers.bAfterBrowser",
+    errors,
+  );
+
   verifySequence(value.observations?.sequence, errors);
   equal(
     sha256(resolve(sessionPath)),
@@ -303,34 +312,42 @@ function verifyTranscriptTimeline(phases, sequence, errors) {
   }
   for (const [actual, field] of [
     [aBefore.userAt, "aBeforeAcceptedAt"],
+    [aBefore.questionCallAt, "aBeforeQuestionCallAt"],
+    [aBefore.questionResultAt, "aBeforeQuestionAnsweredAt"],
     [aBefore.providerResultAt, "aBeforeResultAt"],
     [aAfter.userAt, "aAfterAcceptedAt"],
-    [aAfter.releaseCallAt, "aAfterWaitStartedAt"],
-    [aAfter.releaseResultAt, "aAfterReleasedAt"],
+    [aAfter.questionCallAt, "aAfterQuestionCallAt"],
+    [aAfter.questionResultAt, "aAfterQuestionAnsweredAt"],
     [aAfter.providerResultAt, "aAfterResultAt"],
     [bAfter.userAt, "bAfterAcceptedAt"],
+    [bAfter.questionCallAt, "bAfterQuestionCallAt"],
+    [bAfter.questionResultAt, "bAfterQuestionAnsweredAt"],
     [bAfter.providerResultAt, "bAfterResultAt"],
   ]) {
     equal(actual, sequence?.[field], `sequence.${field} must match Pi transcript`, errors);
   }
   const logout = Date.parse(sequence?.logoutAt ?? "");
-  const held = Date.parse(aAfter.releaseCallAt);
-  const released = Date.parse(aAfter.releaseResultAt);
-  if (!(held < logout && logout < released)) {
-    errors.push("logoutAt must be after the held A Turn starts and before it is released");
+  const presented = Date.parse(aAfter.questionCallAt);
+  const answered = Date.parse(aAfter.questionResultAt);
+  if (!(presented < logout && logout < answered)) {
+    errors.push("logoutAt must be after A's question call and before B answers it");
   }
 }
 
 function verifySequence(sequence, errors) {
   const timeFields = [
     "aBeforeAcceptedAt",
+    "aBeforeQuestionCallAt",
+    "aBeforeQuestionAnsweredAt",
     "aBeforeResultAt",
     "aAfterAcceptedAt",
-    "aAfterWaitStartedAt",
+    "aAfterQuestionCallAt",
     "logoutAt",
-    "aAfterReleasedAt",
+    "aAfterQuestionAnsweredAt",
     "aAfterResultAt",
     "bAfterAcceptedAt",
+    "bAfterQuestionCallAt",
+    "bAfterQuestionAnsweredAt",
     "bAfterResultAt",
   ];
   for (const field of timeFields) isoDate(sequence?.[field], `sequence.${field}`, errors);
@@ -378,8 +395,8 @@ function verifyTranscript(sessionPath, markerValue, expected, providerPath) {
       outcome: providerOutcome(execution.providerResult),
       startIndex: start,
       userAt: isoTimestamp(messageOf(entries[start])),
-      releaseCallAt: execution.releaseCallAt,
-      releaseResultAt: execution.releaseResultAt,
+      questionCallAt: execution.questionCallAt,
+      questionResultAt: execution.questionResultAt,
       providerResultAt: execution.providerResultAt,
     };
     return Object.values(proof).some(value => value === null)
@@ -395,18 +412,23 @@ function turnExecution(entries, markerValue, providerPath) {
   );
   if (
     calls.length !== 2 ||
-    calls[0]?.call.name !== "bash" ||
+    calls[0]?.call.name !== "ask_user_question" ||
     calls[1]?.call.name !== "provider_request"
   ) return null;
-  const releaseCall = calls[0].call;
-  const releaseArguments = releaseCall.arguments ?? releaseCall.args;
-  const expectedCommand = new RegExp(
-    `^node "[^"]*\\/wait-for-release\\.mjs" "${escapeRegExp(markerValue)}"$`,
-  );
+  const questionCall = calls[0].call;
+  const questionArguments = questionCall.arguments ?? questionCall.args;
   if (
-    !record(releaseArguments) ||
-    typeof releaseArguments.command !== "string" ||
-    !expectedCommand.test(releaseArguments.command)
+    !record(questionArguments) ||
+    Object.keys(questionArguments).length !== 5 ||
+    questionArguments.question !== `Continue provider release gate ${markerValue}?` ||
+    questionArguments.inputType !== "radio" ||
+    questionArguments.required !== true ||
+    questionArguments.default !== "continue" ||
+    JSON.stringify(questionArguments.options) !==
+      JSON.stringify([
+        { id: "continue", label: "Continue" },
+        { id: "stop", label: "Stop" },
+      ])
   ) return null;
   const providerArguments = calls[1].call.arguments ?? calls[1].call.args;
   if (
@@ -416,25 +438,30 @@ function turnExecution(entries, markerValue, providerPath) {
     providerArguments.path !== providerPath
   ) return null;
 
-  const releaseResult = matchingResult(entries, releaseCall.id, "bash");
+  const questionResult = matchingResult(
+    entries,
+    questionCall.id,
+    "ask_user_question",
+  );
   const providerResult = matchingResult(
     entries,
     calls[1].call.id,
     "provider_request",
   );
   if (
-    !releaseResult ||
-    releaseResult.index <= calls[0].index ||
-    releaseResult.index >= calls[1].index ||
-    releaseResult.message.isError !== false ||
-    !textOf(releaseResult.message.content).includes(`released ${markerValue}`) ||
+    !questionResult ||
+    questionResult.index <= calls[0].index ||
+    questionResult.index >= calls[1].index ||
+    questionResult.message.isError === true ||
+    questionResult.message.details?.status !== "answered" ||
+    questionResult.message.details?.answer !== "continue" ||
     !providerResult ||
     providerResult.index <= calls[1].index
   ) return null;
   return {
     providerResult: providerResult.message,
-    releaseCallAt: isoTimestamp(messageOf(entries[calls[0].index])),
-    releaseResultAt: isoTimestamp(releaseResult.message),
+    questionCallAt: isoTimestamp(messageOf(entries[calls[0].index])),
+    questionResultAt: isoTimestamp(questionResult.message),
     providerResultAt: isoTimestamp(providerResult.message),
   };
 }
@@ -567,10 +594,6 @@ function isoDate(value, path, errors) {
   if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
     errors.push(`${path} must be an ISO date`);
   }
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function escapeYamlString(value) {

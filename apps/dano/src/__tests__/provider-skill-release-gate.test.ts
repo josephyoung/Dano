@@ -14,6 +14,7 @@ import {
   createAgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAskUserQuestionRuntime } from "../bridge/ask-user-question.js";
 import { CredentialBroker } from "../bridge/credential-broker.js";
 
 const roots: string[] = [];
@@ -46,7 +47,7 @@ describe("real provider Skill release gate", () => {
     );
   });
 
-  it("installs a provider-independent Skill and releases one held Turn", () => {
+  it("installs a provider-independent Skill that holds each Turn with a public question", () => {
     const root = temporaryRoot();
     const agentDir = path.join(root, "agent");
     expect(runGate("install", { PI_CODING_AGENT_DIR: agentDir }).status).toBe(0);
@@ -57,28 +58,21 @@ describe("real provider Skill release gate", () => {
     );
     expect(installed).toContain('path: "/acceptance/profile"');
     expect(installed).not.toMatch(/https?:\/\/|authorization|cookie|token/i);
-    expect(installed.indexOf("`bash`")).toBeLessThan(
+    expect(installed.indexOf("`ask_user_question`")).toBeLessThan(
       installed.indexOf("`provider_request`"),
     );
+    expect(installed).toContain('default: "continue"');
+    expect(installed).not.toMatch(/`bash`|wait-for-release|releases\//i);
     expect(installed).not.toContain("{{");
-
     expect(
-      runGate("release", { PI_CODING_AGENT_DIR: agentDir }, ["gate-a-before"])
-        .status,
-    ).toBe(0);
-    const waitResult = spawnSync(
-      process.execPath,
-      [
+      fs.existsSync(
         path.join(
           agentDir,
           "skills/provider-broker-release-gate/wait-for-release.mjs",
         ),
-        "gate-a-before",
-      ],
-      { encoding: "utf8" },
-    );
-    expect(waitResult.status).toBe(0);
-    expect(waitResult.stdout).toContain("released gate-a-before");
+      ),
+    ).toBe(false);
+    expect(runGate("release", { PI_CODING_AGENT_DIR: agentDir }).status).toBe(1);
   });
 
   it("loads the installed Skill in a real Pi Turn and calls provider_request", async () => {
@@ -90,6 +84,19 @@ describe("real provider Skill release gate", () => {
 
     const modelProvider = fauxProvider({ provider: "provider-skill-release-gate" });
     modelProvider.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("ask_user_question", {
+          question: "Continue provider release gate gate-a-before?",
+          inputType: "radio",
+          options: [
+            { id: "continue", label: "Continue" },
+            { id: "stop", label: "Stop" },
+          ],
+          required: true,
+          default: "continue",
+        }, { id: "gate-question" }),
+        { stopReason: "toolUse" },
+      ),
       fauxAssistantMessage(
         [
           fauxToolCall("provider_request", {
@@ -114,6 +121,7 @@ describe("real provider Skill release gate", () => {
         sessionId === "login-a" ? { accessToken: "access-a" } : null,
       fetch: providerFetch as typeof fetch,
     });
+    const questionRuntime = createAskUserQuestionRuntime();
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
@@ -121,7 +129,7 @@ describe("real provider Skill release gate", () => {
       model: modelProvider.getModel(),
       thinkingLevel: "off",
       noTools: "builtin",
-      customTools: [credentialBroker.createTool("user-a")],
+      customTools: [questionRuntime.tool, credentialBroker.createTool("user-a")],
       sessionManager: SessionManager.create(workspace, path.join(root, "sessions")),
     });
     credentialBroker.observe("user-a", session);
@@ -133,9 +141,17 @@ describe("real provider Skill release gate", () => {
           .getSkills()
           .skills.some(skill => skill.name === "provider-broker-release-gate"),
       ).toBe(true);
-      await session.prompt("/skill:provider-broker-release-gate gate-a-before");
+      const turn = session.prompt("/skill:provider-broker-release-gate gate-a-before");
+      await waitUntil(() => questionRuntime.coordinator.state("gate-question") !== undefined);
+      expect(providerFetch).not.toHaveBeenCalled();
+      questionRuntime.coordinator.answer("gate-question", {
+        cancelled: false,
+        answer: "continue",
+      });
+      await turn;
       expect(providerFetch).toHaveBeenCalledOnce();
       const transcript = fs.readFileSync(session.sessionFile!, "utf8");
+      expect(transcript).toContain("ask_user_question");
       expect(transcript).toContain("provider_request");
       expect(transcript).not.toContain("access-a");
     } finally {
@@ -151,6 +167,7 @@ describe("real provider Skill release gate", () => {
     expect(result.status).toBe(0);
     const raw = fs.readFileSync(evidencePath, "utf8");
     const evidence = JSON.parse(raw) as any;
+    expect(evidence.schemaVersion).toBe(2);
     expect(evidence.capture).toEqual({
       browserContexts: {
         a: "codex-in-app-browser",
@@ -160,9 +177,22 @@ describe("real provider Skill release gate", () => {
       seam: "Dano HTTP/SSE and Pi transcript",
     });
     expect(evidence.observations.sequence).toMatchObject({
+      aBeforeQuestionCallAt: null,
+      aBeforeQuestionAnsweredAt: null,
+      aAfterQuestionCallAt: null,
       logoutHttpStatus: null,
       aOldClientHttpStatus: null,
       bAfterLogoutStatus: null,
+      aAfterQuestionAnsweredAt: null,
+      bAfterQuestionCallAt: null,
+      bAfterQuestionAnsweredAt: null,
+    });
+    expect(evidence.observations.sequence).not.toHaveProperty("aAfterWaitStartedAt");
+    expect(evidence.observations.sequence).not.toHaveProperty("aAfterReleasedAt");
+    expect(evidence.observations.questionAnswers).toEqual({
+      aBeforeBrowser: null,
+      aAfterBrowser: null,
+      bAfterBrowser: null,
     });
     expect(raw).not.toMatch(
       /https?:\/\/|password|client.?secret|token|cookie|authorization/i,
@@ -191,6 +221,26 @@ describe("real provider Skill release gate", () => {
       label: "more than one Dano callback",
       mutate: (value: any) => {
         value.capture.callbackMode = "separate-callbacks";
+      },
+    },
+    {
+      label: "A-before question answered outside the Codex in-app Browser",
+      mutate: (value: any) => {
+        value.observations.questionAnswers.aBeforeBrowser = "chrome";
+      },
+    },
+    {
+      label: "held A-after question not answered from Chrome",
+      mutate: (value: any) => {
+        value.observations.questionAnswers.aAfterBrowser =
+          "codex-in-app-browser";
+      },
+    },
+    {
+      label: "B-after question answered outside Chrome",
+      mutate: (value: any) => {
+        value.observations.questionAnswers.bAfterBrowser =
+          "codex-in-app-browser";
       },
     },
   ])("rejects $label", ({ mutate }) => {
@@ -222,9 +272,9 @@ describe("real provider Skill release gate", () => {
       },
     },
     {
-      label: "logout after the held provider result",
+      label: "logout after B answered the held question",
       mutate: (value: any) => {
-        value.observations.sequence.logoutAt = "2026-08-12T00:00:02.500Z";
+        value.observations.sequence.logoutAt = "2026-08-12T00:00:05.500Z";
       },
     },
     {
@@ -271,6 +321,24 @@ describe("real provider Skill release gate", () => {
   });
 
   it.each([
+    {
+      label: "a non-canonical question",
+      mutate: (entries: any[]) => {
+        const call = entries.find(entry =>
+          textOf(entry).includes('"name":"ask_user_question"'),
+        );
+        call.message.content[0].arguments.default = "stop";
+      },
+    },
+    {
+      label: "a question answer other than continue",
+      mutate: (entries: any[]) => {
+        const result = entries.find(entry =>
+          textOf(entry).includes('"toolName":"ask_user_question"'),
+        );
+        result.message.details.answer = "stop";
+      },
+    },
     {
       label: "a different relative path",
       mutate: (entries: any[]) => {
@@ -349,18 +417,27 @@ function passingEvidence() {
     bSessionFingerprint: sameSession,
     bSwitchStatus: "succeeded",
   };
+  evidence.observations.questionAnswers = {
+    aBeforeBrowser: "codex-in-app-browser",
+    aAfterBrowser: "chrome",
+    bAfterBrowser: "chrome",
+  };
   evidence.observations.sequence = {
     aBeforeAcceptedAt: "2026-08-12T00:00:00.000Z",
+    aBeforeQuestionCallAt: "2026-08-12T00:00:00.200Z",
+    aBeforeQuestionAnsweredAt: "2026-08-12T00:00:00.500Z",
     aBeforeResultAt: "2026-08-12T00:00:01.000Z",
     aAfterAcceptedAt: "2026-08-12T00:00:02.000Z",
-    aAfterWaitStartedAt: "2026-08-12T00:00:03.000Z",
+    aAfterQuestionCallAt: "2026-08-12T00:00:03.000Z",
     logoutAt: "2026-08-12T00:00:04.000Z",
     logoutHttpStatus: 200,
     aOldClientHttpStatus: 404,
     bAfterLogoutStatus: "authenticated",
-    aAfterReleasedAt: "2026-08-12T00:00:05.000Z",
+    aAfterQuestionAnsweredAt: "2026-08-12T00:00:05.000Z",
     aAfterResultAt: "2026-08-12T00:00:06.000Z",
     bAfterAcceptedAt: "2026-08-12T00:00:07.000Z",
+    bAfterQuestionCallAt: "2026-08-12T00:00:07.200Z",
+    bAfterQuestionAnsweredAt: "2026-08-12T00:00:07.500Z",
     bAfterResultAt: "2026-08-12T00:00:08.000Z",
   };
   fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
@@ -383,7 +460,7 @@ function turnEntries(
   outcome: "success" | "authentication_required",
   offsets: readonly [number, number, number, number, number],
 ) {
-  const releaseId = `release-${marker}`;
+  const questionId = `question-${marker}`;
   const providerId = `provider-${marker}`;
   const details =
     outcome === "success"
@@ -400,10 +477,17 @@ function turnEntries(
       content: [
         {
           type: "toolCall",
-          id: releaseId,
-          name: "bash",
+          id: questionId,
+          name: "ask_user_question",
           arguments: {
-            command: `node "/test/wait-for-release.mjs" "${marker}"`,
+            question: `Continue provider release gate ${marker}?`,
+            inputType: "radio",
+            options: [
+              { id: "continue", label: "Continue" },
+              { id: "stop", label: "Stop" },
+            ],
+            required: true,
+            default: "continue",
           },
         },
       ],
@@ -411,9 +495,10 @@ function turnEntries(
     }),
     message({
       role: "toolResult",
-      toolCallId: releaseId,
-      toolName: "bash",
-      content: [{ type: "text", text: `released ${marker}` }],
+      toolCallId: questionId,
+      toolName: "ask_user_question",
+      content: [{ type: "text", text: "answered" }],
+      details: { status: "answered", answer: "continue" },
       isError: false,
       timestamp: timestamp(offsets[2]),
     }),
@@ -476,4 +561,12 @@ function sha256(value: string): string {
 
 function textOf(value: unknown): string {
   return JSON.stringify(value);
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise<void>(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("condition was not reached");
 }

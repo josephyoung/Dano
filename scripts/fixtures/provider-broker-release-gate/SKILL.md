@@ -8,24 +8,33 @@ description: Verify that the current Assistant Turn can make one harmless config
 This test-only Skill verifies the current Assistant Turn's Credential Broker
 binding. It does not perform a business action.
 
-The invocation argument is a release marker. It must match
+The invocation argument is a gate marker. It must match
 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`.
 
-First call `bash` exactly once with this command, replacing `<marker>` with the
-invocation argument:
+First call `ask_user_question` exactly once with this canonical single-choice
+question, replacing `<marker>` with the invocation argument:
 
-```text
-node "{{WAIT_SCRIPT_PATH}}" "<marker>"
+```yaml
+question: "Continue provider release gate <marker>?"
+inputType: radio
+options:
+  - id: continue
+    label: Continue
+  - id: stop
+    label: Stop
+required: true
+default: "continue"
 ```
 
-Wait for that command to finish, then call `provider_request` exactly once with:
+If the answer is `continue`, call `provider_request` exactly once with:
 
 ```yaml
 method: GET
 path: "{{PROVIDER_REQUEST_PATH}}"
 ```
 
-Do not add headers or a body and do not call any other tool. After the call,
+If the answer is not `continue`, stop without calling `provider_request`. Do not
+add headers or a body and do not call any other tool. After the provider call,
 report only the invocation marker and one of these results:
 
 - `success` when the tool result is successful.
