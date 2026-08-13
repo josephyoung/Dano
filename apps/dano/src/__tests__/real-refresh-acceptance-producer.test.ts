@@ -26,6 +26,9 @@ describe("real refresh acceptance producer", () => {
     expect(classifyRefreshExecutionFailure("credential_read")).toBe(
       "credential_read_failed",
     );
+    expect(classifyRefreshExecutionFailure("credential_missing")).toBe(
+      "credential_missing",
+    );
     expect(classifyRefreshExecutionFailure("grant")).toBe("grant_failed");
     expect(classifyRefreshExecutionFailure("identity")).toBe("identity_failed");
     expect(classifyRefreshExecutionFailure("owner")).toBe("owner_mismatch");
@@ -87,6 +90,21 @@ describe("real refresh acceptance producer", () => {
     expect(page).not.toMatch(/cookie|session|token|userId/i);
   });
 
+  it("requires a fresh Client after each explicit browser role binding", () => {
+    const source = fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        "../../../../scripts/run-real-refresh-acceptance.ts",
+      ),
+      "utf8",
+    );
+    expect(source).toContain(
+      "observedLoginSessions.delete(resolution.loginSessionId)",
+    );
+    expect(source).toContain('res.setHeader("location", "/")');
+    expect(source).not.toContain("stage=credential_missing");
+  });
+
   it("rejects stale or missing explicit browser role bindings", async () => {
     const credentials = new Set(["new-iab", "new-chrome"]);
     const selected = await selectRefreshAcceptanceSessions(
@@ -146,6 +164,7 @@ describe("real refresh acceptance producer", () => {
       refreshToken: "rotated-refresh",
     }));
     const seenAuthorization: string[] = [];
+    const observeRequestBinding = vi.fn();
     const broker = new CredentialBroker({
       providerApiOrigin: "https://provider.test",
       readCredential: async () => ({
@@ -153,6 +172,7 @@ describe("real refresh acceptance producer", () => {
         refreshToken: "initial-refresh",
       }),
       refreshCredential,
+      observeRequestBinding,
       isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, {
         observeProviderResponse,
       }),
@@ -178,6 +198,7 @@ describe("real refresh acceptance producer", () => {
       body: '{"code":0,"data":{"ok":true}}',
     });
     expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(observeRequestBinding).toHaveBeenCalledWith("login-a");
     expect(seenAuthorization).toEqual([
       "Bearer expired-access",
       "Bearer renewed-access",
@@ -227,6 +248,33 @@ describe("real refresh acceptance producer", () => {
     ).resolves.toMatchObject({ ok: false, error: { code: "reauth_required" } });
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(requireReauthentication).toHaveBeenCalledOnce();
+  });
+
+  it("contains binding observers and reports a missing initial Credential", async () => {
+    const observeCredentialAvailability = vi.fn(() => {
+      throw new Error("acceptance observer failed");
+    });
+    const broker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => null,
+      observeRequestBinding() {
+        throw new Error("binding observer failed");
+      },
+      observeCredentialAvailability,
+    });
+    const observed = observableSession("agent-a");
+    broker.observe("user-a", observed.session);
+    broker.queueAssistantTurn("user-a", "agent-a", "login-a");
+    observed.emit(userMessageEvent());
+    observed.emit({ type: "turn_start" } as AgentSessionEvent);
+
+    await expect(
+      broker.request("user-a", "agent-a", { method: "GET", path: "/safe" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "authentication_required" },
+    });
+    expect(observeCredentialAvailability).toHaveBeenCalledWith(false);
   });
 
   it("irreversibly fails the evidence phase after an observation error", async () => {

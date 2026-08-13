@@ -177,8 +177,9 @@ const observedAuthentication = {
         }
         if (role === "target") explicitTargetSessionId = resolution.loginSessionId;
         else explicitPeerSessionId = resolution.loginSessionId;
+        observedLoginSessions.delete(resolution.loginSessionId);
         res.statusCode = 303;
-        res.setHeader("location", "/api/acceptance/refresh");
+        res.setHeader("location", "/");
         res.end();
         console.log(`[refresh acceptance] ${role} browser bound`);
         return true;
@@ -232,6 +233,20 @@ const broker = new CredentialBroker({
     return fetch(target, { ...init, headers: requestHeaders });
   },
   readCredential: id => authentication.readProviderCredential(id),
+  observeRequestBinding: id => {
+    const matches = id === explicitTargetSessionId;
+    console.log(
+      `[refresh acceptance] turn binding ${matches ? "confirmed" : "mismatch"}`,
+    );
+    if (!matches) producer.observeEvidenceFailure();
+  },
+  observeCredentialAvailability: available => {
+    if (!available) {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure("credential_missing")}`,
+      );
+    }
+  },
   refreshCredential: async id => {
     const owner = ownerFingerprint(id);
     let stage: Parameters<typeof classifyRefreshExecutionFailure>[0] =
@@ -245,7 +260,12 @@ const broker = new CredentialBroker({
       );
       return null;
     }
-    if (!credentialBefore) return null;
+    if (!credentialBefore) {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure("credential_missing")}`,
+      );
+      return null;
+    }
     try {
       stage = "evidence";
       producer.observeRefreshStart(

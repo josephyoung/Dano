@@ -116,6 +116,8 @@ export interface CredentialBrokerOptions {
   readonly isAccessTokenInvalid?: (
     response: Response,
   ) => boolean | Promise<boolean>;
+  readonly observeRequestBinding?: (loginSessionId: string) => void;
+  readonly observeCredentialAvailability?: (available: boolean) => void;
   readonly fetch?: typeof fetch;
 }
 
@@ -385,10 +387,16 @@ export class CredentialBroker {
 
     const binding = this.sessionState(scope, agentSessionId)?.activePiTurn;
     if (!binding?.loginSessionId) return AUTHENTICATION_REQUIRED;
+    try {
+      this.options.observeRequestBinding?.(binding.loginSessionId);
+    } catch {}
     if (this.reauthenticationRequired.has(binding.loginSessionId)) {
       return REAUTHENTICATION_REQUIRED;
     }
     const credential = await this.options.readCredential(binding.loginSessionId);
+    try {
+      this.options.observeCredentialAvailability?.(Boolean(credential));
+    } catch {}
     if (!credential) return AUTHENTICATION_REQUIRED;
 
     const send = (requestCredential: ProviderCredential) => {

@@ -35,6 +35,7 @@ export type RefreshArmFailureCode =
 
 export type RefreshExecutionStage =
   | "credential_read"
+  | "credential_missing"
   | "grant"
   | "identity"
   | "owner"
@@ -46,6 +47,7 @@ export function classifyRefreshExecutionFailure(
 ): string {
   return {
     credential_read: "credential_read_failed",
+    credential_missing: "credential_missing",
     grant: "grant_failed",
     identity: "identity_failed",
     owner: "owner_mismatch",
