@@ -84,7 +84,10 @@ export async function run() {
       "upload.relativePath",
     );
     const ownPreview = await danoBytes(
-      `${requiredString(upload.previewUrl, "upload.previewUrl")}?clientId=${encodeURIComponent(clientId)}`,
+      previewUrlForClient(
+        requiredString(upload.previewUrl, "upload.previewUrl"),
+        clientId,
+      ),
     );
     const ownWorkspaceRead = await requireRpcSuccess(rpc, {
       type: "read_workspace_file",
@@ -245,6 +248,14 @@ export async function run() {
       ).catch(() => {});
     }
   }
+}
+
+export function previewUrlForClient(value, clientId) {
+  const url = new URL(value, globalThis.location?.origin ?? "http://localhost");
+  if (!url.searchParams.has("clientId")) {
+    url.searchParams.set("clientId", clientId);
+  }
+  return `${url.pathname}${url.search}`;
 }
 
 async function openRpc(eventsUrl, messagesUrl) {

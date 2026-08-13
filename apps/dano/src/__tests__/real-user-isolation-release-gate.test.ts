@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { previewUrlForClient } from "../../../../scripts/real-user-isolation-browser.mjs";
 
 const root = new URL("../../../../", import.meta.url);
 const gateScript = new URL(
@@ -38,6 +39,15 @@ afterEach(async () => {
 });
 
 describe("real OAuth User isolation release gate", () => {
+  it("preserves a preview URL that already carries its Client binding", () => {
+    expect(
+      previewUrlForClient("/api/uploads/u/preview?clientId=client-a", "client-a"),
+    ).toBe("/api/uploads/u/preview?clientId=client-a");
+    expect(previewUrlForClient("/api/uploads/u/preview", "client-a")).toBe(
+      "/api/uploads/u/preview?clientId=client-a",
+    );
+  });
+
   it("records only the two controlled test accounts and public Dano seam", () => {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
