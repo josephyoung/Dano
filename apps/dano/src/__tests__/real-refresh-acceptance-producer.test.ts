@@ -325,11 +325,13 @@ describe("real refresh acceptance producer", () => {
       "credential-after",
     );
     producer.observeProviderResponse(200, false);
+
     producer.observeTranscript(marker, "success");
     producer.observeAuthCurrent("owner-a", "authenticated");
     observePeerAfter(producer);
 
     expect(producer.phaseStatus()).toEqual({ kind: "success", status: "pending" });
+    expect(producer.pendingChecks()).toEqual(["evidence_valid"]);
   });
 
   it("keeps the provider decision when no evidence phase is armed", async () => {
@@ -470,6 +472,14 @@ describe("real refresh acceptance producer", () => {
       "credential-after",
     );
     producer.observeProviderResponse(200, false);
+
+    expect(producer.pendingChecks()).toEqual([
+      "transcript",
+      "auth_current",
+      "peer_credential",
+      "peer_auth_current",
+    ]);
+
     producer.observeTranscript(marker, "success");
     producer.observeAuthCurrent("owner-a", "authenticated");
     producer.observePeerCredential(
@@ -481,6 +491,20 @@ describe("real refresh acceptance producer", () => {
     producer.observeAuthCurrent("owner-b", "authenticated");
 
     expect(producer.phaseStatus()).toEqual({ kind: "success", status: "passed" });
+    expect(producer.pendingChecks()).toEqual([]);
+  });
+
+  it("reports evidence failure as a fixed pending check without runtime values", () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 1_001);
+    observeTwoSessions(producer);
+    producer.arm("success");
+
+    producer.observeEvidenceFailure();
+
+    expect(producer.pendingChecks()).toContain("evidence_valid");
+    expect(producer.pendingChecks().every(check => /^[a-z_]+$/.test(check))).toBe(
+      true,
+    );
   });
 
   it("requires reauth projection, transcript, logout, and isolated Anonymous client for cancel", () => {

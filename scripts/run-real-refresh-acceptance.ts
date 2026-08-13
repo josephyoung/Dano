@@ -83,6 +83,7 @@ const observedLoginSessions = new Map<string, RuntimeObservedLoginSession>();
 let observedLoginSessionSequence = 0;
 let explicitTargetSessionId: string | undefined;
 let explicitPeerSessionId: string | undefined;
+let lastPhaseReport: string | undefined;
 const pendingClientResolutions: Array<
   | ({ status: "authenticated" } & ObservedLoginSession)
   | { status: "anonymous"; workspace: string }
@@ -467,6 +468,8 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     console.log(
       `[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`,
     );
+    lastPhaseReport = undefined;
+    reportPhase();
   } catch (error) {
     if (marker) {
       try {
@@ -483,6 +486,7 @@ async function arm(kind: "success" | "cancel" | "confirm") {
 async function pollTranscript() {
   const marker = producer.currentMarker();
   if (!marker) return;
+  reportPhase();
   const outcome = findTranscriptOutcome(sessionsRootPath, marker, providerPath);
   if (!outcome) return;
   try {
@@ -585,7 +589,13 @@ async function verifyPeerSession(owner: string) {
 
 function reportPhase() {
   const phase = producer.phaseStatus();
-  if (phase.status === "passed") console.log(`[refresh acceptance] ${phase.kind}: PASS`);
+  const report =
+    phase.status === "passed"
+      ? `${phase.kind}: PASS`
+      : `${phase.kind}: pending; pending=${producer.pendingChecks().join(",")}`;
+  if (report === lastPhaseReport) return;
+  lastPhaseReport = report;
+  console.log(`[refresh acceptance] ${report}`);
 }
 
 function findTranscriptOutcome(root: string, marker: string, expectedPath: string): "success" | "reauth_required" | null {

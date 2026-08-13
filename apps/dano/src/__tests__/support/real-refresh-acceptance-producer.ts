@@ -9,6 +9,19 @@ import type {
 export type RefreshPhaseKind = "success" | "cancel" | "confirm";
 type PhaseKind = RefreshPhaseKind;
 type TranscriptOutcome = "success" | "reauth_required";
+export type RefreshAcceptancePendingCheck =
+  | "refresh_finished"
+  | "refresh_grant"
+  | "refresh_identity"
+  | "retry_accepted"
+  | "reauthentication"
+  | "transcript"
+  | "auth_current"
+  | "action"
+  | "anonymous"
+  | "peer_credential"
+  | "peer_auth_current"
+  | "evidence_valid";
 
 export interface RefreshAcceptanceSessionCandidate {
   readonly id: string;
@@ -613,36 +626,36 @@ export class RealRefreshAcceptanceProducer {
 
   phaseStatus(): { kind: PhaseKind; status: "pending" | "passed" } {
     const phase = this.requiredPhase();
-    const passed =
-      phase.kind === "success"
-        ? phase.refreshFinished &&
-          phase.refreshGrant &&
-          phase.refreshIdentity &&
-          phase.retryAccepted &&
-          phase.transcript &&
-          phase.authCurrent &&
-          phase.peerCredential &&
-          phase.peerAuthCurrent
-        : phase.kind === "cancel"
-          ? phase.refreshFinished &&
-            phase.reauthentication &&
-            phase.transcript &&
-            phase.authCurrent &&
-            phase.action &&
-            phase.anonymous &&
-            phase.peerCredential &&
-            phase.peerAuthCurrent
-          : phase.refreshFinished &&
-            phase.reauthentication &&
-            phase.transcript &&
-            phase.authCurrent &&
-            phase.action &&
-            phase.peerCredential &&
-            phase.peerAuthCurrent;
     return {
       kind: phase.kind,
-      status: passed && !phase.evidenceFailed ? "passed" : "pending",
+      status: this.pendingChecks().length === 0 ? "passed" : "pending",
     };
+  }
+
+  pendingChecks(): RefreshAcceptancePendingCheck[] {
+    const phase = this.requiredPhase();
+    const checks: Array<
+      readonly [RefreshAcceptancePendingCheck, boolean]
+    > = [["refresh_finished", phase.refreshFinished]];
+    if (phase.kind === "success") {
+      checks.push(
+        ["refresh_grant", phase.refreshGrant],
+        ["refresh_identity", phase.refreshIdentity],
+        ["retry_accepted", phase.retryAccepted],
+      );
+    } else {
+      checks.push(["reauthentication", phase.reauthentication]);
+    }
+    checks.push(
+      ["transcript", phase.transcript],
+      ["auth_current", phase.authCurrent],
+      ["action", phase.kind === "success" || phase.action],
+      ["anonymous", phase.kind !== "cancel" || phase.anonymous],
+      ["peer_credential", phase.peerCredential],
+      ["peer_auth_current", phase.peerAuthCurrent],
+      ["evidence_valid", !phase.evidenceFailed],
+    );
+    return checks.filter(([, complete]) => !complete).map(([check]) => check);
   }
 
   currentMarker(): string | undefined {
