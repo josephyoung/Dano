@@ -138,6 +138,8 @@ export async function run() {
       raw,
       own: ownDetails,
     };
+    status.ownPayloadKeys = Object.keys(own);
+    status.ownPayloadLength = JSON.stringify(own).length;
     await collectorJson("/own", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
