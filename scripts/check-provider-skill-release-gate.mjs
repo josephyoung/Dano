@@ -68,9 +68,6 @@ function removeSkill() {
 }
 
 function newCaptureRecord() {
-  const fixedMarkers = process.env.DANO_PROVIDER_GATE_FIXED_MARKERS
-    ? JSON.parse(process.env.DANO_PROVIDER_GATE_FIXED_MARKERS)
-    : null;
   return {
     schemaVersion: 2,
     runId: randomUUID(),
@@ -86,9 +83,9 @@ function newCaptureRecord() {
       seam: "Dano HTTP/SSE and Pi transcript",
     },
     markers: {
-      aBefore: fixedMarkers?.aBefore ?? marker("a-before"),
-      aAfter: fixedMarkers?.aAfter ?? marker("a-after"),
-      bAfter: fixedMarkers?.bAfter ?? marker("b-after"),
+      aBefore: marker("a-before"),
+      aAfter: marker("a-after"),
+      bAfter: marker("b-after"),
       sharedPreference: "yellow",
     },
     observations: {
@@ -123,12 +120,6 @@ async function captureGate(evidencePath) {
     throw new Error("provider Skill audit record already exists");
   }
   const options = captureOptions(process.argv.slice(4));
-  const sessionPath = resolve(
-    requiredEnvironment("DANO_PROVIDER_GATE_SESSION"),
-  );
-  if (!existsSync(sessionPath) || statSync(sessionPath).isDirectory()) {
-    throw new Error("DANO_PROVIDER_GATE_SESSION must be one JSONL session file");
-  }
   const browserSource = readFileSync(
     join(root, "scripts/provider-skill-release-gate-browser.mjs"),
     "utf8",
@@ -143,7 +134,6 @@ async function captureGate(evidencePath) {
     aHeld: false,
     aLogout: null,
     bComplete: false,
-    sessionPath,
   };
   let finish;
   let fail;
@@ -339,10 +329,7 @@ function finalizeSkillCapture(evidencePath, evidence, run) {
   if (!a || !b || !run.aLogout || !run.bComplete) throw new Error("capture incomplete");
   if (a.userId !== b.userId) throw new Error("A and B are not the same canonical User");
   if (a.clientId === b.clientId) throw new Error("A and B reused one Browser Client");
-  if (
-    resolve(a.sessionPath) !== resolve(b.sessionPath) ||
-    resolve(a.sessionPath) !== run.sessionPath
-  ) {
+  if (resolve(a.sessionPath) !== resolve(b.sessionPath)) {
     throw new Error("A and B did not share one Agent Session");
   }
   const providerPath = configuredProviderPath();

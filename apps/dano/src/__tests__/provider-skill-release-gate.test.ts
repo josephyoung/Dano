@@ -179,10 +179,9 @@ async function completeCapture(options: {
   const root = temporaryRoot();
   const evidencePath = path.join(root, "evidence.json");
   const transcriptPath = path.join(root, "shared-session.jsonl");
-  const markers = newCaptureMarkers();
-  writeTranscript(transcriptPath, markers);
-  const capture = await startCapture(evidencePath, transcriptPath, markers);
+  const capture = await startCapture(evidencePath);
   const config = await collectorJson(capture.urls.a, "/config");
+  writeTranscript(transcriptPath, config.markers);
   await post(capture.urls.a, "/ready", {
     status: "authenticated",
     clientId: "raw-client-a",
@@ -209,11 +208,7 @@ async function completeCapture(options: {
   return { ...capture, evidencePath, transcriptPath };
 }
 
-async function startCapture(
-  evidencePath: string,
-  transcriptPath: string,
-  markers: Record<string, string>,
-) {
+async function startCapture(evidencePath: string) {
   const child = spawn(
     process.execPath,
     [gateScript, "capture", evidencePath, "--port", "0", "--timeout-ms", "10000"],
@@ -222,8 +217,6 @@ async function startCapture(
       env: {
         ...process.env,
         ...gateEnvironment,
-        DANO_PROVIDER_GATE_SESSION: transcriptPath,
-        DANO_PROVIDER_GATE_FIXED_MARKERS: JSON.stringify(markers),
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -249,14 +242,6 @@ async function startCapture(
     output: () => stdout,
     error: () => stderr,
     exit: once(child, "exit").then(([code]) => ({ code })),
-  };
-}
-
-function newCaptureMarkers(): Record<string, string> {
-  return {
-    aBefore: "dano424-a-before-test",
-    aAfter: "dano424-a-after-test",
-    bAfter: "dano424-b-after-test",
   };
 }
 
