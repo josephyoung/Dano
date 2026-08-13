@@ -81,8 +81,8 @@ interface ActivePhase {
   retryAccepted: boolean;
   peerCredential: boolean;
   peerAuthCurrent: boolean;
-  targetIdentity?: string;
-  peerIdentity?: string;
+  targetUser?: string;
+  peerUser?: string;
   peerOwner?: string;
   peerRecord?: string;
   peerCredentialBefore?: string;
@@ -172,9 +172,9 @@ export class RealRefreshAcceptanceProducer {
 
   observePreflight(
     owner: string,
-    targetIdentity: string,
+    targetUser: string,
     peerOwner: string,
-    peerIdentity: string,
+    peerUser: string,
     peerRecord: string,
     peerCredential: string,
   ) {
@@ -184,19 +184,25 @@ export class RealRefreshAcceptanceProducer {
       throw new Error("Peer Login Session is invalid");
     }
     for (const [value, label] of [
-      [targetIdentity, "Target identity"],
-      [peerIdentity, "Peer identity"],
+      [targetUser, "Target User"],
+      [peerUser, "Peer User"],
       [peerRecord, "Peer Credential record"],
       [peerCredential, "Peer Credential content"],
     ] as const) {
       requireOpaque(value, label);
     }
-    if (targetIdentity !== peerIdentity) {
-      throw new Error("Peer Login Session must belong to the same User");
+    if (
+      targetUser !== this.target?.user ||
+      peerUser !== this.peer?.user ||
+      targetUser !== peerUser
+    ) {
+      throw new Error(
+        "Provider validation must match the browsers' canonical User",
+      );
     }
     phase.preflight = true;
-    phase.targetIdentity = targetIdentity;
-    phase.peerIdentity = peerIdentity;
+    phase.targetUser = targetUser;
+    phase.peerUser = peerUser;
     phase.peerOwner = peerOwner;
     phase.peerRecord = peerRecord;
     phase.peerCredentialBefore = peerCredential;
@@ -311,11 +317,11 @@ export class RealRefreshAcceptanceProducer {
     phase.refreshGrant = true;
   }
 
-  observeRefreshIdentity(owner: string, identity: string) {
+  observeRefreshValidatedUser(owner: string, user: string) {
     const phase = this.requiredPhase();
     this.sameOwner(owner, phase);
-    requireOpaque(identity, "Refreshed identity");
-    if (!phase.refreshGrant || identity !== phase.targetIdentity) {
+    requireOpaque(user, "Refreshed User");
+    if (!phase.refreshGrant || user !== phase.targetUser) {
       throw new Error("Refreshed Credential identity changed");
     }
     phase.refreshIdentity = true;
@@ -366,7 +372,7 @@ export class RealRefreshAcceptanceProducer {
 
   observePeerCredential(
     owner: string,
-    identity: string,
+    user: string,
     record: string,
     credential: string,
   ) {
@@ -374,7 +380,7 @@ export class RealRefreshAcceptanceProducer {
     if (
       !phase.refreshFinished ||
       owner !== phase.peerOwner ||
-      identity !== phase.peerIdentity ||
+      user !== phase.peerUser ||
       record !== phase.peerRecord ||
       credential !== phase.peerCredentialBefore
     ) {

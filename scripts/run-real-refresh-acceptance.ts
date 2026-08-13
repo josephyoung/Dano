@@ -7,10 +7,7 @@ import { createAnonymousUserContextResolver } from "../apps/dano/src/bridge/anon
 import { CredentialBroker } from "../apps/dano/src/bridge/credential-broker.ts";
 import { createOAuthAuthentication } from "../apps/dano/src/bridge/oauth-authentication.ts";
 import { createOAuth2ProviderAdapter } from "../apps/dano/src/bridge/oauth-provider.ts";
-import type {
-  ExternalIdentity,
-  ProviderCredential,
-} from "../apps/dano/src/bridge/oauth-provider.ts";
+import type { ProviderCredential } from "../apps/dano/src/bridge/oauth-provider.ts";
 import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
@@ -105,12 +102,6 @@ const authentication = await createOAuthAuthentication({
         throw new Error("Provider identity validation is unavailable");
       }
       const identity = await provider.validateCredential(credential);
-      if (activeRefreshOwner) {
-        producer.observeRefreshIdentity(
-          activeRefreshOwner,
-          identityFingerprint(identity),
-        );
-      }
       return identity;
     },
   },
@@ -208,6 +199,12 @@ const broker = new CredentialBroker({
         producer.observeRefreshFailure(owner);
         return null;
       }
+      if (!targetSession || targetSession.owner !== owner) {
+        throw new Error(
+          "Refreshed Credential owner is not the target Login Session",
+        );
+      }
+      producer.observeRefreshValidatedUser(owner, targetSession.user);
       producer.observeRefreshSuccess(
         owner,
         loginRecordFingerprint(id),
@@ -297,7 +294,7 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     if (!provider.validateCredential) {
       throw new Error("Provider validation is required");
     }
-    const [targetIdentity, peerIdentity] = await Promise.all([
+    await Promise.all([
       provider.validateCredential(targetCredential),
       provider.validateCredential(peerCredential),
     ]);
@@ -310,9 +307,9 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     const marker = producer.arm(kind);
     producer.observePreflight(
       targetSession.owner,
-      identityFingerprint(targetIdentity),
+      targetSession.user,
       peerSession.owner,
-      identityFingerprint(peerIdentity),
+      peerSession.user,
       loginCredentialRecordFingerprint(peerSession.id),
       credentialFingerprint(peerCredential),
     );
@@ -436,10 +433,10 @@ async function verifyPeerSession(owner: string) {
     }
     const credential = await authentication.readProviderCredential(peerSession.id);
     if (!credential) return;
-    const identity = await provider.validateCredential(credential);
+    await provider.validateCredential(credential);
     producer.observePeerCredential(
       owner,
-      identityFingerprint(identity),
+      peerSession.user,
       loginCredentialRecordFingerprint(peerSession.id),
       credentialFingerprint(credential),
     );
@@ -517,7 +514,6 @@ function refreshGrantFingerprint(value: ProviderCredential) {
   if (!value.refreshToken) throw new Error("Refresh Credential is unavailable");
   return fingerprint(value.refreshToken);
 }
-function identityFingerprint(value: ExternalIdentity) { return fingerprint(value.userId); }
 function fingerprint(value: string | Buffer) { return createHash("sha256").update(value).digest("hex"); }
 function relativePath(value: string) { const url = new URL(value, "https://invalid.test"); if (!value.startsWith("/") || value.startsWith("//") || url.origin !== "https://invalid.test") throw new Error("Provider path must be relative"); return `${url.pathname}${url.search}`; }
 function providerHeaders(value: string | undefined) {

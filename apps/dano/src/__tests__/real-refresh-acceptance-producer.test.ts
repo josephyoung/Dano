@@ -10,6 +10,33 @@ import {
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("binds provider validation to the canonical User resolved for both browsers", () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 500);
+    observeTwoSessions(producer);
+    producer.arm("success");
+
+    expect(() =>
+      producer.observePreflight(
+        "owner-a",
+        "independently-derived-user",
+        "owner-b",
+        "independently-derived-user",
+        "peer-record",
+        "peer-credential",
+      ),
+    ).toThrow(/canonical User/i);
+    expect(() =>
+      producer.observePreflight(
+        "owner-a",
+        "user-a",
+        "owner-b",
+        "user-a",
+        "peer-record",
+        "peer-credential",
+      ),
+    ).not.toThrow();
+  });
+
   it("prepares only an invalid access Credential and never revokes the real refresh grant", () => {
     const source = fs.readFileSync(
       path.resolve(import.meta.dirname, "../../../../scripts/run-real-refresh-acceptance.ts"),
@@ -82,9 +109,9 @@ describe("real refresh acceptance producer", () => {
 
     producer.observePreflight(
       "owner-a",
-      "identity-a",
+      "user-a",
       "owner-b",
-      "identity-a",
+      "user-a",
       "peer-record",
       "peer-credential",
     );
@@ -102,7 +129,7 @@ describe("real refresh acceptance producer", () => {
       "credential-prepared",
     );
     producer.observeRefreshGrant("owner-a", "credential-after");
-    producer.observeRefreshIdentity("owner-a", "identity-a");
+    producer.observeRefreshValidatedUser("owner-a", "user-a");
     producer.observeRefreshSuccess(
       "owner-a",
       "record-after",
@@ -113,7 +140,7 @@ describe("real refresh acceptance producer", () => {
     producer.observeAuthCurrent("owner-a", "authenticated");
     producer.observePeerCredential(
       "owner-b",
-      "identity-a",
+      "user-a",
       "peer-record",
       "peer-credential",
     );
@@ -212,9 +239,9 @@ describe("real refresh acceptance producer", () => {
     producer.arm("success");
     producer.observePreflight(
       "owner-a",
-      "identity-a",
+      "user-a",
       "owner-b",
-      "identity-a",
+      "user-a",
       "peer-record",
       "peer-credential",
     );
@@ -272,7 +299,7 @@ describe("real refresh acceptance producer", () => {
     expect(() =>
       producer.observePeerCredential(
         "owner-b",
-        "identity-a",
+        "user-a",
         "changed-record",
         "peer-credential",
       ),
@@ -335,9 +362,9 @@ function hash(value: string) {
 function observeInvalidAccessPreflight(producer: RealRefreshAcceptanceProducer) {
   producer.observePreflight(
     "owner-a",
-    "identity-a",
+    "user-a",
     "owner-b",
-    "identity-a",
+    "user-a",
     "peer-record",
     "peer-credential",
   );
@@ -354,7 +381,7 @@ function observeInvalidAccessPreflight(producer: RealRefreshAcceptanceProducer) 
 function observePeerAfter(producer: RealRefreshAcceptanceProducer) {
   producer.observePeerCredential(
     "owner-b",
-    "identity-a",
+    "user-a",
     "peer-record",
     "peer-credential",
   );
