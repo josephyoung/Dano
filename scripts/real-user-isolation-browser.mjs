@@ -169,6 +169,7 @@ export async function run() {
         }),
       },
     );
+    status.forgedClientHttpStatus = forgedClientHttpStatus;
     const crossSessionList = await rpc.command({
       type: "list_sessions",
       workspacePath: peer.workspacePath,
