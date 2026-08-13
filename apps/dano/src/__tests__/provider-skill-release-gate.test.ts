@@ -204,6 +204,89 @@ describe("real provider Skill release gate", () => {
     expect(verifyFixture(fixture).status).toBe(0);
   });
 
+  it("accepts the real Bridge slash invocation and safely coerced required flag", () => {
+    const fixture = passingEvidence();
+    const entries = fs
+      .readFileSync(fixture.transcriptPath, "utf8")
+      .trim()
+      .split("\n")
+      .map(line => JSON.parse(line));
+    const firstUser = entries.find(entry =>
+      textOf(entry).includes("<skill name=\\\"provider-broker-release-gate\\\""),
+    );
+    firstUser.message.content = `/skill:provider-broker-release-gate ${JSON.parse(
+      fs.readFileSync(fixture.evidencePath, "utf8"),
+    ).markers.aBefore}`;
+    const firstQuestion = entries.find(entry =>
+      textOf(entry).includes('"name":"ask_user_question"'),
+    );
+    firstQuestion.message.content[0].arguments.required = "true";
+    entries.splice(
+      entries.indexOf(firstQuestion),
+      0,
+      message({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "read-skill-fixture",
+            name: "read",
+            arguments: {
+              path: `/tmp/skills/provider-broker-release-gate/SKILL.md`,
+            },
+          },
+        ],
+        timestamp: firstQuestion.message.timestamp - 1,
+      }),
+      message({
+        role: "toolResult",
+        toolCallId: "read-skill-fixture",
+        toolName: "read",
+        content: [{ type: "text", text: "skill" }],
+        isError: false,
+        timestamp: firstQuestion.message.timestamp - 1,
+      }),
+    );
+    fs.writeFileSync(
+      fixture.transcriptPath,
+      `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`,
+    );
+    expect(verifyFixture(fixture).status).toBe(0);
+  });
+
+  it("rejects any extra tool outside the exact Skill loader", () => {
+    const fixture = passingEvidence();
+    const entries = fs
+      .readFileSync(fixture.transcriptPath, "utf8")
+      .trim()
+      .split("\n")
+      .map(line => JSON.parse(line));
+    const firstQuestion = entries.find(entry =>
+      textOf(entry).includes('"name":"ask_user_question"'),
+    );
+    entries.splice(
+      entries.indexOf(firstQuestion),
+      0,
+      message({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "unexpected-command",
+            name: "bash",
+            arguments: { command: "true" },
+          },
+        ],
+        timestamp: firstQuestion.message.timestamp - 1,
+      }),
+    );
+    fs.writeFileSync(
+      fixture.transcriptPath,
+      `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`,
+    );
+    expect(verifyFixture(fixture).status).toBe(1);
+  });
+
   it.each([
     {
       label: "Login Session A captured outside the Codex in-app Browser",

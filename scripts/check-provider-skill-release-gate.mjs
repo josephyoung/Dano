@@ -375,10 +375,12 @@ function verifyTranscript(sessionPath, markerValue, expected, providerPath) {
     const entries = readEntries(file);
     const start = entries.findIndex(entry => {
       const message = messageOf(entry);
+      const text = textOf(message?.content);
       return (
         message?.role === "user" &&
-        textOf(message.content).includes(markerValue) &&
-        textOf(message.content).includes(`skill name="${skillName}"`)
+        text.includes(markerValue) &&
+        (text.includes(`skill name="${skillName}"`) ||
+          text.includes(`/skill:${skillName}`))
       );
     });
     if (start < 0) continue;
@@ -410,19 +412,32 @@ function turnExecution(entries, markerValue, providerPath) {
   const calls = entries.flatMap((entry, index) =>
     toolCalls(messageOf(entry)).map(call => ({ call, index })),
   );
+  const allowedCalls = calls.filter(({ call }) =>
+    call.name === "read"
+      ? typeof (call.arguments ?? call.args)?.path === "string" &&
+        (call.arguments ?? call.args).path.endsWith(
+          `/skills/${skillName}/SKILL.md`,
+        )
+      : call.name === "ask_user_question" || call.name === "provider_request",
+  );
+  if (allowedCalls.length !== calls.length) return null;
+  const relevantCalls = calls.filter(
+    ({ call }) =>
+      call.name === "ask_user_question" || call.name === "provider_request",
+  );
   if (
-    calls.length !== 2 ||
-    calls[0]?.call.name !== "ask_user_question" ||
-    calls[1]?.call.name !== "provider_request"
+    relevantCalls.length !== 2 ||
+    relevantCalls[0]?.call.name !== "ask_user_question" ||
+    relevantCalls[1]?.call.name !== "provider_request"
   ) return null;
-  const questionCall = calls[0].call;
+  const questionCall = relevantCalls[0].call;
   const questionArguments = questionCall.arguments ?? questionCall.args;
   if (
     !record(questionArguments) ||
     Object.keys(questionArguments).length !== 5 ||
     questionArguments.question !== `Continue provider release gate ${markerValue}?` ||
     questionArguments.inputType !== "radio" ||
-    questionArguments.required !== true ||
+    !booleanLike(questionArguments.required, true) ||
     questionArguments.default !== "continue" ||
     JSON.stringify(questionArguments.options) !==
       JSON.stringify([
@@ -430,7 +445,8 @@ function turnExecution(entries, markerValue, providerPath) {
         { id: "stop", label: "Stop" },
       ])
   ) return null;
-  const providerArguments = calls[1].call.arguments ?? calls[1].call.args;
+  const providerArguments =
+    relevantCalls[1].call.arguments ?? relevantCalls[1].call.args;
   if (
     !record(providerArguments) ||
     Object.keys(providerArguments).length !== 2 ||
@@ -445,22 +461,22 @@ function turnExecution(entries, markerValue, providerPath) {
   );
   const providerResult = matchingResult(
     entries,
-    calls[1].call.id,
+    relevantCalls[1].call.id,
     "provider_request",
   );
   if (
     !questionResult ||
-    questionResult.index <= calls[0].index ||
-    questionResult.index >= calls[1].index ||
+    questionResult.index <= relevantCalls[0].index ||
+    questionResult.index >= relevantCalls[1].index ||
     questionResult.message.isError === true ||
     questionResult.message.details?.status !== "answered" ||
     questionResult.message.details?.answer !== "continue" ||
     !providerResult ||
-    providerResult.index <= calls[1].index
+    providerResult.index <= relevantCalls[1].index
   ) return null;
   return {
     providerResult: providerResult.message,
-    questionCallAt: isoTimestamp(messageOf(entries[calls[0].index])),
+    questionCallAt: isoTimestamp(messageOf(entries[relevantCalls[0].index])),
     questionResultAt: isoTimestamp(questionResult.message),
     providerResultAt: isoTimestamp(providerResult.message),
   };
@@ -578,6 +594,12 @@ function validMarker(value) {
 
 function record(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function booleanLike(value, expected) {
+  if (value === expected) return true;
+  if (typeof value !== "string") return false;
+  return value.trim().toLowerCase() === String(expected);
 }
 
 function equal(actual, expected, path, errors) {
