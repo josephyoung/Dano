@@ -152,7 +152,11 @@ describe("real provider Skill release gate", () => {
     const raw = fs.readFileSync(evidencePath, "utf8");
     const evidence = JSON.parse(raw) as any;
     expect(evidence.capture).toEqual({
-      browser: "codex-in-app-browser",
+      browserContexts: {
+        a: "codex-in-app-browser",
+        b: "chrome",
+      },
+      callbackMode: "single-shared-dano-callback",
       seam: "Dano HTTP/SSE and Pi transcript",
     });
     expect(evidence.observations.sequence).toMatchObject({
@@ -168,6 +172,33 @@ describe("real provider Skill release gate", () => {
   it("accepts only linked same-User, same-session, ordered public evidence", () => {
     const fixture = passingEvidence();
     expect(verifyFixture(fixture).status).toBe(0);
+  });
+
+  it.each([
+    {
+      label: "Login Session A captured outside the Codex in-app Browser",
+      mutate: (value: any) => {
+        value.capture.browserContexts.a = "chrome";
+      },
+    },
+    {
+      label: "Login Session B captured outside Chrome",
+      mutate: (value: any) => {
+        value.capture.browserContexts.b = "codex-in-app-browser";
+      },
+    },
+    {
+      label: "more than one Dano callback",
+      mutate: (value: any) => {
+        value.capture.callbackMode = "separate-callbacks";
+      },
+    },
+  ])("rejects $label", ({ mutate }) => {
+    const fixture = passingEvidence();
+    const evidence = JSON.parse(fs.readFileSync(fixture.evidencePath, "utf8"));
+    mutate(evidence);
+    fs.writeFileSync(fixture.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    expect(verifyFixture(fixture).status).toBe(1);
   });
 
   it.each([

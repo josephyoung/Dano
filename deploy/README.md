@@ -289,11 +289,14 @@ node scripts/check-provider-skill-release-gate.mjs prepare \
   /path/to/provider-skill-evidence.json
 ```
 
-In the Codex in-app Browser, create two Dano Login Sessions for the same test
-account and open the same Agent Session from both. Session B remains a viewer
-so the real Pi runtime stays alive when session A disconnects. Invoke the Skill
-from A with a unique `gate-a-before` marker. Release its server-side wait and
-confirm its `provider_request` succeeds:
+Use the single configured Dano callback and one running Dano origin for both
+Login Sessions. Create Login Session A in the Codex in-app Browser and Login
+Session B in Chrome by signing the same test account into each browser context;
+do not add a second callback address or start a second Dano frontend. Open the
+same Agent Session from both. Session B remains a viewer so the real Pi runtime
+stays alive when session A disconnects. Invoke the Skill from A with a unique
+`gate-a-before` marker. Release its server-side wait and confirm its
+`provider_request` succeeds:
 
 ```bash
 PI_CODING_AGENT_DIR=/path/to/test-agent-config \
@@ -309,7 +312,10 @@ remains bound to A; its subsequent `provider_request` must return
 test accounts are recorded in
 `apps/dano/src/__tests__/fixtures/real-oauth-acceptance.json`.
 
-Fill the prepared evidence only from this run's public HTTP/SSE observations:
+Fill the prepared evidence only from this run's public HTTP/SSE observations.
+Keep the prepared `browserContexts` and `callbackMode` values unchanged; they
+bind A to the Codex in-app Browser, B to Chrome, and both to the same Dano
+callback without recording its address:
 
 - `aStatus` and `bStatus` come from each authenticated auth DTO.
 - Client fingerprints are SHA-256 hashes of the two `/api/clients` response

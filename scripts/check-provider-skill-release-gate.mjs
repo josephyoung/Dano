@@ -91,7 +91,11 @@ function prepareEvidence(evidencePath) {
     preparedAt: new Date().toISOString(),
     completedAt: null,
     capture: {
-      browser: "codex-in-app-browser",
+      browserContexts: {
+        a: "codex-in-app-browser",
+        b: "chrome",
+      },
+      callbackMode: "single-shared-dano-callback",
       seam: "Dano HTTP/SSE and Pi transcript",
     },
     markers: {
@@ -171,7 +175,24 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
   match(value.runId, /^[0-9a-f-]{36}$/i, "runId", errors);
   isoDate(value.preparedAt, "preparedAt", errors);
   isoDate(value.completedAt, "completedAt", errors);
-  equal(value.capture?.browser, "codex-in-app-browser", "capture.browser", errors);
+  equal(
+    value.capture?.browserContexts?.a,
+    "codex-in-app-browser",
+    "capture.browserContexts.a",
+    errors,
+  );
+  equal(
+    value.capture?.browserContexts?.b,
+    "chrome",
+    "capture.browserContexts.b",
+    errors,
+  );
+  equal(
+    value.capture?.callbackMode,
+    "single-shared-dano-callback",
+    "capture.callbackMode",
+    errors,
+  );
   equal(
     value.capture?.seam,
     "Dano HTTP/SSE and Pi transcript",
