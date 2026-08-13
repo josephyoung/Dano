@@ -2312,7 +2312,10 @@ describe("OAuth authentication over HTTP", () => {
       headers: { Cookie: firstCookie, "Content-Type": "application/json" },
       body: "{}",
     });
-    expect(staleReload.status).toBe(401);
+    expect(staleReload.status).toBe(201);
+    await expect(staleReload.json()).resolves.toMatchObject({
+      authentication: { status: "anonymous" },
+    });
   });
 
   it("replaces a reauthentication record without affecting another Login Session", async () => {
