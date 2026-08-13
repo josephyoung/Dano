@@ -11,13 +11,84 @@ import {
 import { createOAuth2ProviderAdapter } from "../bridge/oauth-provider.js";
 import {
   classifyRefreshArmFailure,
+  createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
   prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
+  selectRefreshAcceptanceSessions,
+  refreshAcceptanceControlPage,
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("runs only one arm operation while POSIX signals overlap", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const run = vi.fn(async () => blocked);
+    const arm = createRefreshArmSingleFlight(run);
+
+    const first = arm("success");
+    await expect(arm("success")).resolves.toBe(false);
+    expect(run).toHaveBeenCalledOnce();
+    release();
+    await expect(first).resolves.toBe(true);
+    await expect(arm("cancel")).resolves.toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("rolls back an incomplete phase so a corrected arm can retry", () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 100);
+    observeTwoSessions(producer);
+    const failedMarker = producer.arm("success");
+
+    expect(producer.abortPhase(failedMarker)).toBe(true);
+    expect(() => producer.arm("success")).not.toThrow();
+  });
+
+  it("selects only the explicitly bound active target and peer", async () => {
+    const credentials = new Set(["new-iab", "chrome-peer"]);
+    const selected = await selectRefreshAcceptanceSessions(
+      [
+        sessionCandidate("old-iab", "user-a", 1),
+        sessionCandidate("chrome-peer", "user-a", 2),
+        sessionCandidate("new-iab", "user-a", 3),
+      ],
+      "new-iab",
+      "chrome-peer",
+      async id => (credentials.has(id) ? { accessToken: `access-${id}` } : null),
+    );
+
+    expect(selected?.target.id).toBe("new-iab");
+    expect(selected?.peer.id).toBe("chrome-peer");
+  });
+
+  it("renders visible target and peer binding controls without identifiers", () => {
+    const page = refreshAcceptanceControlPage();
+    expect(page).toContain("设为目标浏览器");
+    expect(page).toContain("设为 Peer 浏览器");
+    expect(page).toContain('name="role" value="target"');
+    expect(page).toContain('name="role" value="peer"');
+    expect(page).not.toMatch(/cookie|session|token|userId/i);
+  });
+
+  it("rejects stale or missing explicit browser role bindings", async () => {
+    const credentials = new Set(["new-iab", "new-chrome"]);
+    const selected = await selectRefreshAcceptanceSessions(
+      [
+        sessionCandidate("old-peer", "user-a", 1),
+        sessionCandidate("new-iab", "user-a", 2),
+        sessionCandidate("new-chrome", "user-a", 3),
+      ],
+      "new-iab",
+      "old-peer",
+      async id => (credentials.has(id) ? { accessToken: `access-${id}` } : null),
+    );
+
+    expect(selected).toBeNull();
+  });
+
   it("classifies arm failures without exposing exception text or identifiers", () => {
     expect(
       classifyRefreshArmFailure(
@@ -237,7 +308,7 @@ describe("real refresh acceptance producer", () => {
 
     expect(source).toContain("prepareInvalidAccessCredential(");
     expect(source).toContain("refreshGrantFingerprint(targetCredential)");
-    expect(source).toContain("refreshGrantFingerprint(storedPrepared)");
+    expect(source).toContain("beforeWrite: preparedCredential =>");
     expect(source).not.toContain("provider.revokeCredential(targetCredential)");
     expect(source).not.toContain("observeRevocation(");
   });
@@ -549,6 +620,17 @@ function observeTwoSessions(producer: RealRefreshAcceptanceProducer) {
 
 function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function sessionCandidate(id: string, user: string, firstSeen: number) {
+  return {
+    id,
+    owner: `owner-${id}`,
+    user,
+    workspace: `workspace-${id}`,
+    client: `client-${id}`,
+    firstSeen,
+  };
 }
 
 function observableSession(sessionId: string) {

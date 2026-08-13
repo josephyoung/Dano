@@ -6,10 +6,24 @@ import type {
   ProviderCredential,
 } from "../../bridge/oauth-provider.js";
 
-type PhaseKind = "success" | "cancel" | "confirm";
+export type RefreshPhaseKind = "success" | "cancel" | "confirm";
+type PhaseKind = RefreshPhaseKind;
 type TranscriptOutcome = "success" | "reauth_required";
 
+export interface RefreshAcceptanceSessionCandidate {
+  readonly id: string;
+  readonly owner: string;
+  readonly user: string;
+  readonly workspace: string;
+  readonly client: string;
+  readonly firstSeen: number;
+}
+
 const SKILL_NAME = "provider-broker-release-gate";
+
+export function refreshAcceptanceControlPage(): string {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>刷新验收浏览器绑定</title><style>body{font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem}form{display:grid;gap:1rem}button{min-height:3rem;padding:0 1.5rem}</style><h1>刷新验收浏览器绑定</h1><p>请在内置浏览器选择目标，在 Chrome 选择 Peer。</p><form method="post"><button name="role" value="target">设为目标浏览器</button><button name="role" value="peer">设为 Peer 浏览器</button></form></html>`;
+}
 
 export type RefreshArmFailureCode =
   | "login_sessions_unavailable"
@@ -18,6 +32,68 @@ export type RefreshArmFailureCode =
   | "phase_incomplete"
   | "credential_prepare_failed"
   | "unexpected_failure";
+
+export function createRefreshArmSingleFlight(
+  run: (kind: RefreshPhaseKind) => Promise<void>,
+): (kind: RefreshPhaseKind) => Promise<boolean> {
+  let pending: Promise<void> | undefined;
+  return async kind => {
+    if (pending) return false;
+    const current = run(kind);
+    pending = current;
+    try {
+      await current;
+      return true;
+    } finally {
+      if (pending === current) pending = undefined;
+    }
+  };
+}
+
+export async function selectRefreshAcceptanceSessions(
+  candidates: readonly RefreshAcceptanceSessionCandidate[],
+  targetId: string | undefined,
+  peerId: string | undefined,
+  readCredential: (id: string) => Promise<ProviderCredential | null>,
+): Promise<
+  | {
+      target: RefreshAcceptanceSessionCandidate;
+      peer: RefreshAcceptanceSessionCandidate;
+      targetCredential: ProviderCredential;
+      peerCredential: ProviderCredential;
+    }
+  | null
+> {
+  const active = (
+    await Promise.all(
+      [...candidates]
+        .sort((left, right) => left.firstSeen - right.firstSeen)
+        .map(async session => ({
+          session,
+          credential: await readCredential(session.id),
+        })),
+    )
+  ).filter(
+    (entry): entry is {
+      session: RefreshAcceptanceSessionCandidate;
+      credential: ProviderCredential;
+    } => Boolean(entry.credential),
+  );
+  const target = active.find(entry => entry.session.id === targetId);
+  const peer = active.find(entry => entry.session.id === peerId);
+  if (
+    !target ||
+    !peer ||
+    target.session.id === peer.session.id ||
+    target.session.user !== peer.session.user
+  ) return null;
+  return {
+    target: target.session,
+    peer: peer.session,
+    targetCredential: target.credential,
+    peerCredential: peer.credential,
+  };
+}
 
 export function classifyRefreshArmFailure(error: unknown): RefreshArmFailureCode {
   const message = error instanceof Error ? error.message : "";
@@ -65,6 +141,7 @@ export async function prepareInvalidAccessCredential(input: {
   loginSessionId: string;
   credential: ProviderCredential;
   encryptionKey: { version: string; key: Uint8Array };
+  beforeWrite?: (prepared: ProviderCredential) => void;
 }): Promise<ProviderCredential> {
   if (!input.credential.refreshToken) {
     throw new Error("A real refresh Credential is required");
@@ -95,6 +172,7 @@ export async function prepareInvalidAccessCredential(input: {
     cipher.update(JSON.stringify(prepared), "utf8"),
     cipher.final(),
   ]);
+  input.beforeWrite?.(prepared);
   await writeFileAtomically(
     input.recordPath,
     `${JSON.stringify({
@@ -222,6 +300,13 @@ export class RealRefreshAcceptanceProducer {
       evidenceFailed: false,
     };
     return marker;
+  }
+
+  abortPhase(marker: string): boolean {
+    if (!this.phase || this.phase.marker !== marker) return false;
+    if (this.phaseStatus().status === "passed") return false;
+    this.phase = undefined;
+    return true;
   }
 
   observePreflight(

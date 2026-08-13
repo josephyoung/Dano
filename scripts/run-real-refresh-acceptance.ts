@@ -12,10 +12,13 @@ import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
   classifyRefreshArmFailure,
+  createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
   prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
+  selectRefreshAcceptanceSessions,
+  refreshAcceptanceControlPage,
 } from "../apps/dano/src/__tests__/support/real-refresh-acceptance-producer.ts";
 
 const runtimeRootPath = resolve(required("DANO_RUNTIME_DIR"));
@@ -66,8 +69,16 @@ type ObservedLoginSession = {
   user: string;
   workspace: string;
 };
-let targetSession: ObservedLoginSession | undefined;
-let peerSession: ObservedLoginSession | undefined;
+type RuntimeObservedLoginSession = ObservedLoginSession & {
+  client: string;
+  firstSeen: number;
+};
+let targetSession: RuntimeObservedLoginSession | undefined;
+let peerSession: RuntimeObservedLoginSession | undefined;
+const observedLoginSessions = new Map<string, RuntimeObservedLoginSession>();
+let observedLoginSessionSequence = 0;
+let explicitTargetSessionId: string | undefined;
+let explicitPeerSessionId: string | undefined;
 const pendingClientResolutions: Array<
   | ({ status: "authenticated" } & ObservedLoginSession)
   | { status: "anonymous"; workspace: string }
@@ -137,6 +148,35 @@ const observedAuthentication = {
     return resolution ?? null;
   },
   async handle(req: Parameters<typeof authentication.handle>[0], res: ServerResponse, url: URL, lifecycle: Parameters<typeof authentication.handle>[3]) {
+    if (url.pathname === "/api/acceptance/refresh") {
+      if (req.method === "GET") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "text/html; charset=utf-8");
+        res.setHeader("cache-control", "no-store");
+        res.end(refreshAcceptanceControlPage());
+        return true;
+      }
+      if (req.method === "POST") {
+        const resolution = await authentication.resolveExisting?.(req.headers);
+        const role = url.searchParams.get("role") ?? await readControlRole(req);
+        if (
+          resolution?.authentication.status !== "authenticated" ||
+          !resolution.loginSessionId ||
+          (role !== "target" && role !== "peer")
+        ) {
+          res.statusCode = 403;
+          res.end();
+          return true;
+        }
+        if (role === "target") explicitTargetSessionId = resolution.loginSessionId;
+        else explicitPeerSessionId = resolution.loginSessionId;
+        res.statusCode = 303;
+        res.setHeader("location", "/api/acceptance/refresh");
+        res.end();
+        console.log(`[refresh acceptance] ${role} browser bound`);
+        return true;
+      }
+    }
     const owner = cookieOwner(req.headers.cookie);
     const body = captureResponse(res);
     const handled = await authentication.handle(req, res, url, lifecycle);
@@ -260,9 +300,19 @@ controller.subscribe(event => {
 });
 
 console.log("[refresh acceptance] ready; login in the in-app Browser first");
-process.on("SIGUSR2", () => void arm("success"));
-process.on("SIGURG", () => void arm("cancel"));
-process.on("SIGWINCH", () => void arm("confirm"));
+const requestArm = createRefreshArmSingleFlight(arm);
+const requestArmFromSignal = (kind: "success" | "cancel" | "confirm") => {
+  void requestArm(kind).then(started => {
+    if (!started) {
+      console.error(
+        `[refresh acceptance] ${kind} could not be armed; stage=arm_in_progress`,
+      );
+    }
+  });
+};
+process.on("SIGUSR2", () => requestArmFromSignal("success"));
+process.on("SIGURG", () => requestArmFromSignal("cancel"));
+process.on("SIGWINCH", () => requestArmFromSignal("confirm"));
 const transcriptTimer = setInterval(() => void pollTranscript(), 250);
 transcriptTimer.unref();
 const stop = async () => {
@@ -275,17 +325,31 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 
 async function arm(kind: "success" | "cancel" | "confirm") {
+  let marker: string | undefined;
   try {
-    if (!targetSession || !peerSession) {
-      throw new Error("Two authenticated browser sessions are required");
-    }
-    const [targetCredential, peerCredential] = await Promise.all([
-      authentication.readProviderCredential(targetSession.id),
-      authentication.readProviderCredential(peerSession.id),
-    ]);
-    if (!targetCredential || !peerCredential) {
+    const selected = await selectRefreshAcceptanceSessions(
+      [...observedLoginSessions.values()],
+      explicitTargetSessionId,
+      explicitPeerSessionId,
+      id => authentication.readProviderCredential(id),
+    );
+    if (!selected) {
       throw new Error("Both browser sessions need active Credentials");
     }
+    targetSession = selected.target;
+    peerSession = selected.peer;
+    const { targetCredential, peerCredential } = selected;
+    producer.observeTargetClient(
+      targetSession.owner,
+      targetSession.client,
+      targetSession.workspace,
+      targetSession.user,
+    );
+    producer.observePeerClient(
+      peerSession.owner,
+      peerSession.client,
+      peerSession.user,
+    );
     if (!provider.validateCredential) {
       throw new Error("Provider validation is required");
     }
@@ -299,7 +363,7 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     pendingLogin = undefined;
     pendingAnonymousWorkspace = undefined;
     pendingPeerCurrentOwner = undefined;
-    const marker = producer.arm(kind);
+    marker = producer.arm(kind);
     producer.observePreflight(
       targetSession.owner,
       targetSession.user,
@@ -308,41 +372,39 @@ async function arm(kind: "success" | "cancel" | "confirm") {
       loginCredentialRecordFingerprint(peerSession.id),
       credentialFingerprint(peerCredential),
     );
-    const prepared = await prepareInvalidAccessCredential({
-      recordPath: join(
+    const recordPath = join(
         runtimeRootPath,
         "auth",
         "login-sessions",
         `${ownerFingerprint(targetSession.id)}.json`,
-      ),
+      );
+    await prepareInvalidAccessCredential({
+      recordPath,
       loginSessionId: targetSession.id,
       credential: targetCredential,
       encryptionKey: {
         version: required("DANO_OAUTH_CREDENTIAL_KEY_VERSION"),
         key: credentialKey,
       },
+      beforeWrite: preparedCredential => {
+        producer.observeInvalidAccessPrepared(
+          targetSession!.owner,
+          credentialFingerprint(targetCredential),
+          credentialFingerprint(preparedCredential),
+          refreshGrantFingerprint(targetCredential),
+          refreshGrantFingerprint(preparedCredential),
+        );
+      },
     });
-    const storedPrepared = await authentication.readProviderCredential(
-      targetSession.id,
-    );
-    if (
-      !storedPrepared ||
-      storedPrepared.accessToken !== prepared.accessToken ||
-      storedPrepared.refreshToken !== targetCredential.refreshToken
-    ) {
-      throw new Error("Prepared Credential was not stored atomically");
-    }
-    producer.observeInvalidAccessPrepared(
-      targetSession.owner,
-      credentialFingerprint(targetCredential),
-      credentialFingerprint(storedPrepared),
-      refreshGrantFingerprint(targetCredential),
-      refreshGrantFingerprint(storedPrepared),
-    );
     console.log(
       `[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`,
     );
   } catch (error) {
+    if (marker) {
+      try {
+        producer.abortPhase(marker);
+      } catch {}
+    }
     const code = classifyRefreshArmFailure(error);
     console.error(
       `[refresh acceptance] ${kind} could not be armed; stage=${code}`,
@@ -398,23 +460,30 @@ function observeLoginSession(
   resolution: ObservedLoginSession,
   client: string,
 ) {
+  const existing = observedLoginSessions.get(resolution.id);
+  const observed = {
+    ...resolution,
+    client,
+    firstSeen: existing?.firstSeen ?? ++observedLoginSessionSequence,
+  };
+  observedLoginSessions.set(observed.id, observed);
   if (!targetSession || targetSession.id === resolution.id) {
-    targetSession = resolution;
+    targetSession = observed;
     producer.observeTargetClient(
-      resolution.owner,
+      observed.owner,
       client,
-      resolution.workspace,
-      resolution.user,
+      observed.workspace,
+      observed.user,
     );
     return;
   }
   if (!peerSession || peerSession.id === resolution.id) {
-    peerSession = resolution;
-    producer.observePeerClient(resolution.owner, client, resolution.user);
+    peerSession = observed;
+    producer.observePeerClient(observed.owner, client, observed.user);
     return;
   }
   if (resolution.id !== peerSession.id) {
-    targetSession = resolution;
+    targetSession = observed;
     producer.observeTargetClient(
       resolution.owner,
       client,
@@ -526,6 +595,11 @@ function providerHeaders(value: string | undefined) {
     throw new Error("Provider headers must be a string-valued object");
   }
   return parsed as Record<string, string>;
+}
+async function readControlRole(req: Parameters<typeof authentication.handle>[0]) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8")).get("role");
 }
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }
 function revocationOptions(endpoint: string) {
