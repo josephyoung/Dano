@@ -12,6 +12,7 @@ import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
   classifyRefreshArmFailure,
+  classifyRefreshExecutionFailure,
   createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
@@ -57,6 +58,9 @@ const failingProvider = createOAuth2ProviderAdapter(
 const producer = new RealRefreshAcceptanceProducer();
 let refreshMode: "normal" | "fail" = "normal";
 let activeRefreshOwner: string | undefined;
+let activeRefreshStage:
+  | Parameters<typeof classifyRefreshExecutionFailure>[0]
+  | undefined;
 let controller: Awaited<ReturnType<typeof startDanoServer>> | undefined;
 let pendingAuthStatus: "authenticated" | "reauth_required" | undefined;
 let pendingLogout: { status: number; owner: string } | undefined;
@@ -91,6 +95,7 @@ const authentication = await createOAuthAuthentication({
   provider: {
     ...provider,
     async refreshCredential(credential) {
+      activeRefreshStage = "grant";
       const selected = refreshMode === "fail" ? failingProvider : provider;
       if (!selected.refreshCredential) throw new Error("Provider refresh is unavailable");
       let refreshed: ProviderCredential;
@@ -111,10 +116,12 @@ const authentication = await createOAuthAuthentication({
       return refreshed;
     },
     async validateCredential(credential) {
+      if (activeRefreshOwner) activeRefreshStage = "identity";
       if (!provider.validateCredential) {
         throw new Error("Provider identity validation is unavailable");
       }
       const identity = await provider.validateCredential(credential);
+      if (activeRefreshOwner) activeRefreshStage = "record";
       return identity;
     },
   },
@@ -227,37 +234,75 @@ const broker = new CredentialBroker({
   readCredential: id => authentication.readProviderCredential(id),
   refreshCredential: async id => {
     const owner = ownerFingerprint(id);
-    const credentialBefore = await authentication.readProviderCredential(id);
+    let stage: Parameters<typeof classifyRefreshExecutionFailure>[0] =
+      "credential_read";
+    let credentialBefore: ProviderCredential | null;
+    try {
+      credentialBefore = await authentication.readProviderCredential(id);
+    } catch {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+      );
+      return null;
+    }
     if (!credentialBefore) return null;
-    producer.observeRefreshStart(
-      owner,
-      loginRecordFingerprint(id),
-      credentialFingerprint(credentialBefore),
-    );
+    try {
+      stage = "evidence";
+      producer.observeRefreshStart(
+        owner,
+        loginRecordFingerprint(id),
+        credentialFingerprint(credentialBefore),
+      );
+    } catch {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+      );
+      return null;
+    }
     activeRefreshOwner = owner;
     try {
+      stage = "grant";
+      activeRefreshStage = stage;
       const refreshed = await authentication.refreshProviderCredential(id);
       if (!refreshed) {
-        producer.observeRefreshFailure(owner);
+        console.error(
+          `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+        );
         return null;
       }
+      stage = "owner";
+      activeRefreshStage = stage;
       if (!targetSession || targetSession.owner !== owner) {
         throw new Error(
           "Refreshed Credential owner is not the target Login Session",
         );
       }
+      stage = "evidence";
+      activeRefreshStage = stage;
       producer.observeRefreshValidatedUser(owner, targetSession.user);
+      stage = "record";
+      activeRefreshStage = stage;
+      const recordFingerprint = loginRecordFingerprint(id);
+      stage = "evidence";
+      activeRefreshStage = stage;
       producer.observeRefreshSuccess(
         owner,
-        loginRecordFingerprint(id),
+        recordFingerprint,
         credentialFingerprint(refreshed),
       );
       return refreshed;
     } catch {
-      producer.observeRefreshFailure(owner);
+      stage = activeRefreshStage ?? stage;
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+      );
+      try {
+        producer.observeRefreshFailure(owner);
+      } catch {}
       return null;
     } finally {
       activeRefreshOwner = undefined;
+      activeRefreshStage = undefined;
     }
   },
   isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, producer),

@@ -11,6 +11,7 @@ import {
 import { createOAuth2ProviderAdapter } from "../bridge/oauth-provider.js";
 import {
   classifyRefreshArmFailure,
+  classifyRefreshExecutionFailure,
   createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
@@ -21,6 +22,19 @@ import {
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("reports only stable refresh execution stages", () => {
+    expect(classifyRefreshExecutionFailure("credential_read")).toBe(
+      "credential_read_failed",
+    );
+    expect(classifyRefreshExecutionFailure("grant")).toBe("grant_failed");
+    expect(classifyRefreshExecutionFailure("identity")).toBe("identity_failed");
+    expect(classifyRefreshExecutionFailure("owner")).toBe("owner_mismatch");
+    expect(classifyRefreshExecutionFailure("record")).toBe("record_write_failed");
+    expect(classifyRefreshExecutionFailure("evidence")).toBe(
+      "producer_evidence_failed",
+    );
+  });
+
   it("runs only one arm operation while POSIX signals overlap", async () => {
     let release!: () => void;
     const blocked = new Promise<void>(resolve => {

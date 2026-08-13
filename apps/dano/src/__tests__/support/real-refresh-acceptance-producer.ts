@@ -33,6 +33,27 @@ export type RefreshArmFailureCode =
   | "credential_prepare_failed"
   | "unexpected_failure";
 
+export type RefreshExecutionStage =
+  | "credential_read"
+  | "grant"
+  | "identity"
+  | "owner"
+  | "record"
+  | "evidence";
+
+export function classifyRefreshExecutionFailure(
+  stage: RefreshExecutionStage,
+): string {
+  return {
+    credential_read: "credential_read_failed",
+    grant: "grant_failed",
+    identity: "identity_failed",
+    owner: "owner_mismatch",
+    record: "record_write_failed",
+    evidence: "producer_evidence_failed",
+  }[stage];
+}
+
 export function createRefreshArmSingleFlight(
   run: (kind: RefreshPhaseKind) => Promise<void>,
 ): (kind: RefreshPhaseKind) => Promise<boolean> {
