@@ -125,6 +125,7 @@ export async function run() {
       authenticationStatus: "authenticated",
       runtimeOwnerFingerprint: await sha256(authentication.user.id),
       raw,
+      own: undefined,
     };
     own.own = {
       resourceFingerprints: await resourceFingerprints(raw),
