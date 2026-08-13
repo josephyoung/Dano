@@ -243,19 +243,28 @@ the Codex in-app Browser and slot B in Chrome against the same running Dano
 origin; a second callback address or second Dano frontend is not part of this
 gate.
 
-Prepare a fresh evidence contract before the browser run:
+Start the live capture producer before the browser run:
 
 ```bash
-pnpm run test:auth-real-users -- prepare /path/to/real-user-evidence.json
+pnpm run test:auth-real-users -- capture /path/to/real-user-evidence.json \
+  --origin http://localhost:5173
 ```
 
-From each browser context, capture only public Dano HTTP/Bridge observations.
-Prove that each account can use its own Client, Agent Session, transcript,
-Runtime Workspace, upload, and preference, then probe the counterpart's exact
-resources in both directions and record the rejected results. Fingerprint
-opaque identifiers before recording them; never copy provider addresses,
-credentials, Cookies, raw identifiers, response bodies, or response headers
-into the evidence.
+The producer prints one run-specific module URL for slot A and one for slot B.
+Import slot A in the authenticated Codex in-app Browser and slot B in
+authenticated Chrome, then call the module's `run()` export. The modules use
+the current browser's HttpOnly login session indirectly through same-origin
+Dano requests; they never read or forward a Cookie. They create and inspect
+their own Client, Agent Session, transcript, Runtime Workspace, upload, and
+preference, exchange the exact in-memory resource targets through the local
+collector, and run the cross-User probes in both directions.
+
+The collector writes the evidence only after both modules finish. Raw resource
+identifiers are used in memory for the cross probes but are fingerprinted
+before persistence. The resulting evidence is signed by the capture process;
+editing or manually filling the JSON invalidates verification. Provider
+addresses, credentials, Cookies, raw identifiers, private payloads, response
+bodies, and response headers are never persisted.
 
 Verify the completed evidence from the same run:
 
@@ -355,6 +364,38 @@ direct Broker call. Remove the test Skill after acceptance:
 PI_CODING_AGENT_DIR=/path/to/test-agent-config \
 node scripts/check-provider-skill-release-gate.mjs remove
 ```
+
+### Real provider refresh release gate
+
+Run the refresh producer with the normal disposable OAuth runtime environment
+and the same read-only `DANO_PROVIDER_ACCEPTANCE_PATH` used by the Skill gate:
+
+```bash
+pnpm run test:auth-real-refresh:run
+```
+
+The producer keeps credentials in process memory and observes the real OAuth
+adapter, encrypted Login Session record, Broker retry, public auth HTTP/SSE
+flow, and Pi transcript directly. It does not write an evidence JSON file or
+expose an acceptance route. For an HTTP-only controlled test provider, opt in
+only for this process with `DANO_REFRESH_ACCEPTANCE_ALLOW_INSECURE=true`.
+
+Use the Codex in-app Browser for every phase. After login, send the indicated
+signal to the producer process, then invoke `provider-broker-release-gate` with
+the printed marker:
+
+- `SIGUSR2`: real refresh succeeds; call `/api/auth/current` and keep the same
+  Login Session.
+- `SIGURG`: the real token endpoint rejects refresh; refresh the Dano page to
+  confirm `reauth_required`, then click **继续匿名使用** and wait for the new
+  Anonymous Client.
+- Log in again, then `SIGWINCH`: repeat the rejected refresh, refresh Dano to
+  display the AlertDialog, and click **重新登录**. Keep the producer running
+  until it prints `confirm: PASS`.
+
+The failure phases use a random incorrect confidential-client secret only for
+the real refresh request. Neither the secret nor any provider token, address,
+Cookie, raw User ID, response body, or response header is printed or persisted.
 
 ```bash
 cp .env.example .env

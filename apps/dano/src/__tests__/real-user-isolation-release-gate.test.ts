@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdtempSync,
@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 
 const root = new URL("../../../../", import.meta.url);
@@ -15,39 +16,42 @@ const gateScript = new URL(
   "../../../../scripts/check-real-user-isolation.mjs",
   import.meta.url,
 ).pathname;
+const browserProducer = new URL(
+  "../../../../scripts/real-user-isolation-browser.mjs",
+  import.meta.url,
+).pathname;
 const manifestPath = new URL(
   "./fixtures/real-oauth-acceptance.json",
   import.meta.url,
 ).pathname;
 const temporaryRoots: string[] = [];
+const children: ChildProcess[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+  for (const child of children.splice(0)) {
+    if (child.exitCode === null) child.kill("SIGTERM");
+    if (child.exitCode === null) await once(child, "exit").catch(() => {});
+  }
   for (const directory of temporaryRoots.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe("real OAuth User isolation release gate", () => {
-  it("records the two controlled test accounts without a provider address", () => {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-      schemaVersion: number;
-      accounts: Array<{
-        slot: string;
-        username: string;
-        password: string;
-        preference: string;
-      }>;
-      releaseGate: {
-        browserContexts: Record<string, string>;
-        callbackMode: string;
-        publicSeam: string;
-        browserInput: string[];
-        automatedContract: string[];
-      };
-    };
+  it("records only the two controlled test accounts and public Dano seam", () => {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
-    expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.accounts).toEqual([
+    expect(manifest).toEqual({
+      schemaVersion: 2,
+      releaseGate: {
+        browserContexts: {
+          a: "codex-in-app-browser",
+          b: "chrome",
+        },
+        callbackMode: "single-shared-dano-callback",
+        publicSeam: "Dano HTTP/SSE/UI",
+      },
+      accounts: [
         {
           slot: "a",
           username: "dano424a",
@@ -60,30 +64,36 @@ describe("real OAuth User isolation release gate", () => {
           password: "Dano424Test!",
           preference: "purple",
         },
-      ]);
-    expect(manifest.releaseGate).toEqual({
-      browserContexts: {
-        a: "codex-in-app-browser",
-        b: "chrome",
-      },
-      callbackMode: "single-shared-dano-callback",
-      publicSeam: "Dano HTTP/Bridge",
-      browserInput: [
-        "slot a authenticated in the Codex in-app Browser",
-        "slot b authenticated in Chrome",
-        "both slots use the same Dano callback",
-        "own and cross resource observations",
-      ],
-      automatedContract: [
-        "distinct canonical User owner fingerprints",
-        "cross probes target the counterpart browser context resources from the same run",
-        "bidirectional session, transcript, workspace, upload, and preference isolation",
       ],
     });
     expect(JSON.stringify(manifest)).not.toMatch(/https?:\/\//i);
   });
 
-  it("publishes the real-browser evidence gate separately from fake-provider tests", () => {
+  it("ships a browser producer that performs the live public-boundary probes", () => {
+    const source = readFileSync(browserProducer, "utf8");
+
+    for (const seam of [
+      "/api/auth/current",
+      "/api/clients",
+      "eventsUrl",
+      "messagesUrl",
+      "/api/uploads",
+      "/preferences/theme",
+      "new_session",
+      "list_sessions",
+      "switch_session",
+      "list_tree_entries",
+      "list_workspace_entries",
+      "read_workspace_file",
+      "register_workspace",
+    ]) {
+      expect(source).toContain(seam);
+    }
+    expect(source).not.toMatch(/client.?secret|access.?token|refresh.?token/i);
+    expect(source).not.toMatch(/dano424[ab]/i);
+  });
+
+  it("publishes the live gate separately from deterministic fake-provider tests", () => {
     const packageJson = JSON.parse(
       readFileSync(new URL("../../../../package.json", import.meta.url), "utf8"),
     ) as { scripts?: Record<string, string> };
@@ -96,241 +106,271 @@ describe("real OAuth User isolation release gate", () => {
     );
   });
 
-  it("prepares a fresh browser evidence template without copying credentials", () => {
-    const directory = mkdtempSync(join(tmpdir(), "dano-real-user-gate-"));
-    temporaryRoots.push(directory);
+  it("does not expose a fillable prepare mode", () => {
+    const directory = tempDirectory();
     const evidencePath = join(directory, "evidence.json");
-
-    execFileSync(
+    const result = spawnSync(
       process.execPath,
       [gateScript, "prepare", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
-    const raw = readFileSync(evidencePath, "utf8");
-    const evidence = JSON.parse(raw) as {
-      schemaVersion: number;
-      runId: string;
-      accounts: Array<{
-        slot: string;
-        username: string;
-        marker: string;
-        observations: unknown;
-      }>;
-      capture: {
-        browserContexts: Record<string, string>;
-        callbackMode: string;
-        seam: string;
-      };
-    };
 
-    expect(evidence.schemaVersion).toBe(1);
-    expect(evidence.runId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(evidence.capture).toEqual({
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("capture");
+    expect(() => readFileSync(evidencePath)).toThrow();
+  });
+
+  it("captures a nonce-bound two-browser run, signs it, and rejects tampering", async () => {
+    const directory = tempDirectory();
+    const evidencePath = join(directory, "evidence.json");
+    const capture = await startCapture(evidencePath);
+
+    const a = await captureSlot(capture.urls.a, "a", "blue", "owner-a");
+    const b = await captureSlot(capture.urls.b, "b", "purple", "owner-b");
+    await submitCross(a, b, "a", "succeeded", 400);
+    await submitCross(a, b, "a");
+    await submitCross(b, a, "b");
+    await capture.exit;
+
+    const raw = readFileSync(evidencePath, "utf8");
+    const evidence = JSON.parse(raw);
+    expect(evidence.schemaVersion).toBe(2);
+    expect(evidence.capture).toMatchObject({
       browserContexts: {
         a: "codex-in-app-browser",
         b: "chrome",
       },
       callbackMode: "single-shared-dano-callback",
-      seam: "Dano HTTP/Bridge",
+      seam: "Dano HTTP/SSE/UI",
+      producer: "live-browser-module",
+      producerSha256: createHash("sha256")
+        .update(readFileSync(browserProducer))
+        .digest("hex"),
     });
-    expect(evidence.accounts.map(account => account.username)).toEqual([
-      "dano424a",
-      "dano424b",
-    ]);
-    expect(evidence.accounts[0]?.marker).not.toBe(evidence.accounts[1]?.marker);
-    expect(evidence.accounts[0]?.observations).toEqual({
-      authenticationStatus: null,
-      runtimeOwnerFingerprint: null,
-      own: {
-        resourceFingerprints: {
-          client: null,
-          session: null,
-          workspace: null,
-          upload: null,
-        },
-        sessionMarkerCount: null,
-        sessionOpen: null,
-        transcriptMarkerCount: null,
-        workspaceMarkerSha256: null,
-        uploadPreviewSha256: null,
-        preference: null,
-      },
-      cross: {
-        targetFingerprints: {
-          client: null,
-          session: null,
-          workspace: null,
-          upload: null,
-        },
-        sessionMarkerCount: null,
-        sessionOpen: null,
-        transcriptMarkerCount: null,
-        workspaceRead: null,
-        uploadPreviewHttpStatus: null,
-        preferenceReadHttpStatus: null,
-      },
+    expect(evidence.accounts.map((account: any) => account.runtimeOwnerFingerprint))
+      .toEqual([sha256("owner-a"), sha256("owner-b")]);
+    expect(evidence.attestation).toMatchObject({
+      algorithm: "Ed25519",
+      publicKey: expect.any(String),
+      signature: expect.any(String),
     });
+    expect(raw).not.toMatch(/raw-(?:client|session|workspace|upload)/);
     expect(raw).not.toContain("Dano424Test!");
     expect(raw).not.toMatch(/https?:\/\//i);
-  });
-
-  it("accepts only complete, bidirectional public-boundary observations", () => {
-    const directory = mkdtempSync(join(tmpdir(), "dano-real-user-gate-"));
-    temporaryRoots.push(directory);
-    const evidencePath = join(directory, "evidence.json");
-    execFileSync(
-      process.execPath,
-      [gateScript, "prepare", evidencePath, "--manifest", manifestPath],
-      { cwd: new URL(".", root), encoding: "utf8" },
-    );
-    const evidence = JSON.parse(readFileSync(evidencePath, "utf8")) as any;
-    evidence.completedAt = new Date().toISOString();
-    evidence.accounts[0].observations = passingObservations({
-      runtimeOwnerFingerprint: "a".repeat(64),
-      preference: "blue",
-      marker: evidence.accounts[0].marker,
-      resourceSeed: "a",
-      crossResourceSeed: "b",
-    });
-    evidence.accounts[1].observations = passingObservations({
-      runtimeOwnerFingerprint: "b".repeat(64),
-      preference: "purple",
-      marker: evidence.accounts[1].marker,
-      resourceSeed: "b",
-      crossResourceSeed: "a",
-    });
-    writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    expect(raw).not.toMatch(/password|cookie|authorization|client.?secret|access.?token|refresh.?token/i);
 
     const output = execFileSync(
       process.execPath,
       [gateScript, "verify", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
+    expect(output).toContain("signed live-browser capture passed");
 
-    expect(output).toContain("Real OAuth User isolation evidence contract passed");
-  });
-
-  it("rejects same-owner evidence and any successful cross-User probe", () => {
-    const directory = mkdtempSync(join(tmpdir(), "dano-real-user-gate-"));
-    temporaryRoots.push(directory);
-    const evidencePath = join(directory, "evidence.json");
-    execFileSync(
+    evidence.accounts[0].cross.sessionOpen = "succeeded";
+    writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    const tampered = spawnSync(
       process.execPath,
-      [gateScript, "prepare", evidencePath, "--manifest", manifestPath],
+      [gateScript, "verify", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
-    const evidence = JSON.parse(readFileSync(evidencePath, "utf8")) as any;
-    evidence.completedAt = new Date().toISOString();
-    evidence.accounts[0].observations = passingObservations({
-      runtimeOwnerFingerprint: "a".repeat(64),
-      preference: "blue",
-      marker: evidence.accounts[0].marker,
-      resourceSeed: "a",
-      crossResourceSeed: "b",
-    });
-    evidence.accounts[1].observations = passingObservations({
-      runtimeOwnerFingerprint: "a".repeat(64),
-      preference: "purple",
-      marker: evidence.accounts[1].marker,
-      resourceSeed: "b",
-      crossResourceSeed: "a",
-    });
-    evidence.accounts[1].observations.cross.workspaceRead = "succeeded";
-    evidence.accounts[1].observations.cross.targetFingerprints.workspace =
-      "c".repeat(64);
-    writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    expect(tampered.status).toBe(1);
+    expect(tampered.stderr).toContain("attestation signature is invalid");
+  });
+
+  it("rejects a hand-written legacy passing-looking JSON", () => {
+    const directory = tempDirectory();
+    const evidencePath = join(directory, "evidence.json");
+    writeFileSync(
+      evidencePath,
+      JSON.stringify({
+        schemaVersion: 2,
+        completedAt: new Date().toISOString(),
+        accounts: [
+          { slot: "a", runtimeOwnerFingerprint: "a".repeat(64) },
+          { slot: "b", runtimeOwnerFingerprint: "b".repeat(64) },
+        ],
+      }),
+    );
 
     const result = spawnSync(
       process.execPath,
       [gateScript, "verify", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
-
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("different canonical User owners");
-    expect(result.stderr).toContain("cross.workspaceRead must be rejected");
-    expect(result.stderr).toContain(
-      "cross.targetFingerprints.workspace must equal",
-    );
-  });
-
-  it("rejects forbidden provider and credential material in evidence", () => {
-    const directory = mkdtempSync(join(tmpdir(), "dano-real-user-gate-"));
-    temporaryRoots.push(directory);
-    const evidencePath = join(directory, "evidence.json");
-    execFileSync(
-      process.execPath,
-      [gateScript, "prepare", evidencePath, "--manifest", manifestPath],
-      { cwd: new URL(".", root), encoding: "utf8" },
-    );
-    const evidence = JSON.parse(readFileSync(evidencePath, "utf8")) as any;
-    evidence.completedAt = new Date().toISOString();
-    evidence.accounts[0].observations = passingObservations({
-      runtimeOwnerFingerprint: "a".repeat(64),
-      preference: "blue",
-      marker: evidence.accounts[0].marker,
-      resourceSeed: "a",
-      crossResourceSeed: "b",
-    });
-    evidence.accounts[1].observations = passingObservations({
-      runtimeOwnerFingerprint: "b".repeat(64),
-      preference: "purple",
-      marker: evidence.accounts[1].marker,
-      resourceSeed: "b",
-      crossResourceSeed: "a",
-    });
-    evidence.providerAddress = "https://provider.invalid";
-    writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
-
-    const result = spawnSync(
-      process.execPath,
-      [gateScript, "verify", evidencePath, "--manifest", manifestPath],
-      { cwd: new URL(".", root), encoding: "utf8" },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("forbidden provider or credential material");
+    expect(result.stderr).toContain("attestation");
   });
 });
 
-function passingObservations(options: {
-  runtimeOwnerFingerprint: string;
-  preference: "blue" | "purple";
-  marker: string;
-  resourceSeed: string;
-  crossResourceSeed: string;
-}) {
-  const markerSha256 = createHash("sha256").update(options.marker).digest("hex");
-  const fingerprints = resourceFingerprints(options.resourceSeed);
+function tempDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "dano-real-user-gate-"));
+  temporaryRoots.push(directory);
+  return directory;
+}
+
+async function startCapture(evidencePath: string): Promise<{
+  urls: Record<"a" | "b", URL>;
+  exit: Promise<void>;
+}> {
+  const child = spawn(
+    process.execPath,
+    [
+      gateScript,
+      "capture",
+      evidencePath,
+      "--manifest",
+      manifestPath,
+      "--origin",
+      "http://localhost:5173",
+      "--port",
+      "0",
+      "--timeout-ms",
+      "10000",
+    ],
+    { cwd: new URL(".", root), stdio: ["ignore", "pipe", "pipe"] },
+  );
+  children.push(child);
+  let stdout = "";
+  let stderr = "";
+  child.stdout!.setEncoding("utf8");
+  child.stderr!.setEncoding("utf8");
+  child.stdout!.on("data", chunk => {
+    stdout += chunk;
+  });
+  child.stderr!.on("data", chunk => {
+    stderr += chunk;
+  });
+  const deadline = Date.now() + 5_000;
+  while (!stdout.includes("SLOT_B=")) {
+    if (child.exitCode !== null) {
+      throw new Error(`capture exited early: ${stderr || stdout}`);
+    }
+    if (Date.now() > deadline) throw new Error(`capture did not start: ${stderr}`);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const url = (slot: "A" | "B") => {
+    const match = new RegExp(`SLOT_${slot}=(http[^\\s]+)`).exec(stdout);
+    if (!match?.[1]) throw new Error(`missing slot ${slot} URL in ${stdout}`);
+    return new URL(match[1]);
+  };
   return {
-    authenticationStatus: "authenticated",
-    runtimeOwnerFingerprint: options.runtimeOwnerFingerprint,
-    own: {
-      resourceFingerprints: fingerprints,
-      sessionMarkerCount: 1,
-      sessionOpen: "succeeded",
-      transcriptMarkerCount: 1,
-      workspaceMarkerSha256: markerSha256,
-      uploadPreviewSha256: markerSha256,
-      preference: options.preference,
-    },
-    cross: {
-      targetFingerprints: resourceFingerprints(options.crossResourceSeed),
-      sessionMarkerCount: 0,
-      sessionOpen: "rejected",
-      transcriptMarkerCount: 0,
-      workspaceRead: "rejected",
-      uploadPreviewHttpStatus: 403,
-      preferenceReadHttpStatus: 403,
-    },
+    urls: { a: url("A"), b: url("B") },
+    exit: once(child, "exit").then(([code]) => {
+      if (code !== 0) throw new Error(`capture failed: ${stderr || stdout}`);
+    }),
   };
 }
 
-function resourceFingerprints(seed: string) {
-  return Object.fromEntries(
-    ["client", "session", "workspace", "upload"].map(resource => [
-      resource,
-      createHash("sha256").update(`${seed}:${resource}`).digest("hex"),
-    ]),
+type CapturedSlot = {
+  collector: string;
+  token: string;
+  slot: "a" | "b";
+  raw: {
+    clientId: string;
+    sessionPath: string;
+    workspacePath: string;
+    uploadId: string;
+    uploadRelativePath: string;
+  };
+};
+
+async function captureSlot(
+  moduleUrl: URL,
+  slot: "a" | "b",
+  preference: string,
+  owner: string,
+): Promise<CapturedSlot> {
+  const collector = moduleUrl.origin;
+  const token = moduleUrl.searchParams.get("token");
+  expect(token).toBeTruthy();
+  const configResponse = await fetch(
+    `${collector}/config?slot=${slot}&token=${token}`,
+    { headers: { Origin: "http://localhost:5173" } },
   );
+  expect(configResponse.status).toBe(200);
+  const config = await configResponse.json() as { marker: string; preference: string };
+  expect(config.preference).toBe(preference);
+  const raw = {
+    clientId: `raw-client-${slot}`,
+    sessionPath: `/raw-session-${slot}`,
+    workspacePath: `/raw-workspace-${slot}`,
+    uploadId: `raw-upload-${slot}`,
+    uploadRelativePath: `uploads/raw-${slot}.txt`,
+  };
+  const own = {
+    authenticationStatus: "authenticated",
+    runtimeOwnerFingerprint: sha256(owner),
+    raw,
+    own: {
+      resourceFingerprints: fingerprints(raw),
+      sessionMarkerCount: 1,
+      sessionOpen: "succeeded",
+      transcriptMarkerCount: 1,
+      workspaceMarkerSha256: sha256(config.marker),
+      uploadPreviewSha256: sha256(config.marker),
+      preference,
+    },
+  };
+  const response = await fetch(`${collector}/own?slot=${slot}&token=${token}`, {
+    method: "POST",
+    headers: {
+      Origin: "http://localhost:5173",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(own),
+  });
+  expect(response.status).toBe(202);
+  return { collector, token: token!, slot, raw };
+}
+
+async function submitCross(
+  current: CapturedSlot,
+  counterpart: CapturedSlot,
+  slot: "a" | "b",
+  sessionOpen = "rejected",
+  expectedStatus = 202,
+): Promise<void> {
+  const peerResponse = await fetch(
+    `${current.collector}/peer?slot=${slot}&token=${current.token}`,
+    { headers: { Origin: "http://localhost:5173" } },
+  );
+  expect(peerResponse.status).toBe(200);
+  await expect(peerResponse.json()).resolves.toEqual(counterpart.raw);
+  const response = await fetch(
+    `${current.collector}/cross?slot=${slot}&token=${current.token}`,
+    {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost:5173",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        targetFingerprints: fingerprints(counterpart.raw),
+        forgedClientHttpStatus: 403,
+        sessionList: "rejected",
+        sessionOpen,
+        transcriptRead: "rejected",
+        workspaceRegister: "rejected",
+        workspaceList: "rejected",
+        workspaceRead: "rejected",
+        uploadPreviewHttpStatus: 403,
+        preferenceReadHttpStatus: 403,
+        preferenceRestored: true,
+      }),
+    },
+  );
+  expect(response.status).toBe(expectedStatus);
+}
+
+function fingerprints(raw: CapturedSlot["raw"]): Record<string, string> {
+  return {
+    client: sha256(raw.clientId),
+    session: sha256(raw.sessionPath),
+    workspace: sha256(raw.workspacePath),
+    upload: sha256(raw.uploadId),
+  };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
