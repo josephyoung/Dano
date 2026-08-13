@@ -50,24 +50,25 @@
 </script>
 
 <AlertDialog.Root bind:open={dialogOpen} onOpenChange={keepRequiredDialogOpen}>
-  <AlertDialog.Content>
-    <AlertDialog.Header>
+  <AlertDialog.Content class="gap-0 overflow-hidden p-0 sm:max-w-md">
+    <AlertDialog.Header class="gap-2 p-6 text-left">
       <AlertDialog.Title>{t("reauthentication.title")}</AlertDialog.Title>
-      <AlertDialog.Description>
+      <AlertDialog.Description class="leading-6">
         {t("reauthentication.description")}
       </AlertDialog.Description>
     </AlertDialog.Header>
     {#if cancelFailed}
-      <Alert.Root variant="destructive">
-        <Alert.Description>
-          {t("reauthentication.continueAnonymouslyFailed")}
-        </Alert.Description>
-      </Alert.Root>
+      <div class="px-6 pb-6">
+        <Alert.Root variant="destructive">
+          <Alert.Description>
+            {t("reauthentication.continueAnonymouslyFailed")}
+          </Alert.Description>
+        </Alert.Root>
+      </div>
     {/if}
-    <AlertDialog.Footer>
+    <AlertDialog.Footer class="border-t bg-muted/30 p-4 sm:p-5">
       <AlertDialog.Cancel
         class="reauth-cancel"
-        size="lg"
         disabled={cancelPending}
         onclick={cancel}
       >
@@ -75,7 +76,6 @@
       </AlertDialog.Cancel>
       <AlertDialog.Action
         class="reauth-confirm"
-        size="lg"
         disabled={cancelPending}
         onclick={confirm}
       >
