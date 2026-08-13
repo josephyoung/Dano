@@ -126,6 +126,8 @@ export async function run() {
     ).length;
     status.listedSessionCount = listedSessionPaths.length;
     status.sessionWasListed = sessionMarkerCount === 1;
+    status.listedSessionTail = listedSessionPaths.map(path => path.slice(-32));
+    status.currentSessionTail = sessionPath.slice(-32);
 
     const raw = {
       clientId,
