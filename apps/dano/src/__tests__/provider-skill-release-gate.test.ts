@@ -135,9 +135,10 @@ describe("real provider Skill release gate", () => {
     expect(source).not.toMatch(/client.?secret|access.?token|refresh.?token|cookie/i);
   });
 
-  it("emits LIVE PASS only after the active collector validates the Pi transcript", async () => {
+  it("emits live HTTP/SSE/Pi collector PASS without claiming browser surface provenance", async () => {
     const fixture = await completeCapture({ sameUser: true });
-    expect(fixture.output()).toContain("LIVE PASS:");
+    expect(fixture.output()).toContain("LIVE HTTP/SSE/Pi COLLECTOR PASS:");
+    expect(fixture.output()).toContain("external IAB/Chrome acceptance record");
     const raw = fs.readFileSync(fixture.evidencePath, "utf8");
     const evidence = JSON.parse(raw);
     expect(evidence.recordPurpose).toBe("redacted-audit-only-not-live-proof");
@@ -150,24 +151,24 @@ describe("real provider Skill release gate", () => {
       [fixture.evidencePath],
     );
     expect(audit.status).toBe(0);
-    expect(audit.stdout).toContain("AUDIT ONLY (NOT LIVE PASS)");
+    expect(audit.stdout).toContain("AUDIT ONLY (NOT LIVE COLLECTOR PASS)");
   });
 
   it("rejects different Users before writing a live audit record", async () => {
     const fixture = await completeCapture({ sameUser: false, expectFailure: true });
-    expect(fixture.output()).not.toContain("LIVE PASS:");
+    expect(fixture.output()).not.toContain("COLLECTOR PASS:");
     expect(fixture.error()).toContain("same canonical User");
     expect(fs.existsSync(fixture.evidencePath)).toBe(false);
   });
 
-  it("refuses prepare and offline verify instead of reconstructing LIVE PASS", () => {
+  it("refuses prepare and offline verify instead of reconstructing a live collector PASS", () => {
     const root = temporaryRoot();
     const evidencePath = path.join(root, "evidence.json");
     for (const mode of ["prepare", "verify"]) {
       const result = runGate(mode, {}, [evidencePath]);
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("cannot prove a live browser Skill run");
-      expect(result.stdout).not.toContain("LIVE PASS");
+      expect(result.stderr).toContain("cannot prove a live HTTP/SSE/Pi Skill collector run or browser surface provenance");
+      expect(result.stdout).not.toContain("COLLECTOR PASS");
     }
   });
 });

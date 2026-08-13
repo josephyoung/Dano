@@ -120,7 +120,7 @@ describe("real OAuth User isolation release gate", () => {
     expect(() => readFileSync(evidencePath)).toThrow();
   });
 
-  it("emits LIVE PASS only from the collector that observed both browser slots", async () => {
+  it("emits live HTTP/SSE/Pi collector PASS without claiming browser surface provenance", async () => {
     const directory = tempDirectory();
     const evidencePath = join(directory, "evidence.json");
     const capture = await startCapture(evidencePath);
@@ -136,7 +136,7 @@ describe("real OAuth User isolation release gate", () => {
     const evidence = JSON.parse(raw);
     expect(evidence.schemaVersion).toBe(2);
     expect(evidence.capture).toMatchObject({
-      browserContexts: {
+      expectedBrowserContexts: {
         a: "codex-in-app-browser",
         b: "chrome",
       },
@@ -151,7 +151,8 @@ describe("real OAuth User isolation release gate", () => {
       .toEqual([sha256("owner-a"), sha256("owner-b")]);
     expect(evidence.recordPurpose).toBe("redacted-audit-only-not-live-proof");
     expect(evidence).not.toHaveProperty("attestation");
-    expect(capture.output()).toContain("LIVE PASS:");
+    expect(capture.output()).toContain("LIVE HTTP/SSE/Pi COLLECTOR PASS:");
+    expect(capture.output()).toContain("external IAB/Chrome acceptance record");
     expect(raw).not.toMatch(/raw-(?:client|session|workspace|upload)/);
     expect(raw).not.toContain("Dano424Test!");
     expect(raw).not.toMatch(/https?:\/\//i);
@@ -162,7 +163,7 @@ describe("real OAuth User isolation release gate", () => {
       [gateScript, "audit", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
-    expect(output).toContain("AUDIT ONLY (NOT LIVE PASS)");
+    expect(output).toContain("AUDIT ONLY (NOT LIVE COLLECTOR PASS)");
 
     evidence.accounts[0].cross.sessionOpen = "succeeded";
     writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
@@ -175,7 +176,7 @@ describe("real OAuth User isolation release gate", () => {
     expect(tampered.stderr).toContain("sessionOpen");
   });
 
-  it("refuses offline verify instead of claiming browser provenance", () => {
+  it("refuses offline verify instead of claiming live or browser surface provenance", () => {
     const directory = tempDirectory();
     const evidencePath = join(directory, "evidence.json");
     writeFileSync(
@@ -196,8 +197,8 @@ describe("real OAuth User isolation release gate", () => {
       { cwd: new URL(".", root), encoding: "utf8" },
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("cannot prove a live browser run");
-    expect(result.stdout).not.toContain("LIVE PASS");
+    expect(result.stderr).toContain("cannot prove a live collector run or browser surface provenance");
+    expect(result.stdout).not.toContain("COLLECTOR PASS");
   });
 });
 

@@ -27,7 +27,7 @@ try {
   else if (mode === "audit") auditGate(requiredArgument(3));
   else if (mode === "prepare" || mode === "verify") {
     throw new Error(
-      "offline evidence cannot prove a live browser Skill run; use capture for LIVE PASS or audit for a non-authoritative record check",
+      "offline evidence cannot prove a live HTTP/SSE/Pi Skill collector run or browser surface provenance; use capture and attach an external IAB/Chrome acceptance record",
     );
   }
   else {
@@ -75,7 +75,7 @@ function newCaptureRecord() {
     completedAt: null,
     recordPurpose: "redacted-audit-only-not-live-proof",
     capture: {
-      browserContexts: {
+      expectedBrowserContexts: {
         a: "codex-in-app-browser",
         b: "chrome",
       },
@@ -105,7 +105,7 @@ function newCaptureRecord() {
         bSessionFingerprint: null,
         bSwitchStatus: null,
       },
-      questionAnswers: {
+      expectedAnswerSurfaces: {
         aBeforeBrowser: null,
         aAfterBrowser: null,
         bAfterBrowser: null,
@@ -266,7 +266,7 @@ async function captureGate(evidencePath) {
   try {
     await completion;
     console.log(
-      "LIVE PASS: active collector verified same User/two Login Sessions, shared Agent Session, A logout authentication_required, and unaffected B success from the live Pi transcript",
+      "LIVE HTTP/SSE/Pi COLLECTOR PASS: active collector verified same User/two Login Sessions, shared Agent Session, A logout authentication_required, and unaffected B success from the live Pi transcript; browser surface provenance requires an external IAB/Chrome acceptance record",
     );
     console.log(`Wrote redacted audit record: ${evidencePath}`);
   } finally {
@@ -366,7 +366,7 @@ function finalizeSkillCapture(evidencePath, evidence, run) {
     bSessionFingerprint: sha256(resolve(b.sessionPath)),
     bSwitchStatus: "succeeded",
   };
-  evidence.observations.questionAnswers = {
+  evidence.observations.expectedAnswerSurfaces = {
     aBeforeBrowser: "codex-in-app-browser",
     aAfterBrowser: "chrome",
     bAfterBrowser: "chrome",
@@ -453,7 +453,7 @@ function auditGate(evidencePath) {
   );
   if (errors.length > 0) throw new Error(errors.join("\n"));
   console.log(
-    "AUDIT ONLY (NOT LIVE PASS): redacted Skill record and Pi transcript structure are valid, but offline files cannot prove browser provenance",
+    "AUDIT ONLY (NOT LIVE COLLECTOR PASS): redacted Skill record and Pi transcript structure are valid, but offline files cannot prove a live run or browser surface provenance",
   );
 }
 
@@ -474,15 +474,15 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
   isoDate(value.preparedAt, "preparedAt", errors);
   isoDate(value.completedAt, "completedAt", errors);
   equal(
-    value.capture?.browserContexts?.a,
+    value.capture?.expectedBrowserContexts?.a,
     "codex-in-app-browser",
-    "capture.browserContexts.a",
+    "capture.expectedBrowserContexts.a",
     errors,
   );
   equal(
-    value.capture?.browserContexts?.b,
+    value.capture?.expectedBrowserContexts?.b,
     "chrome",
-    "capture.browserContexts.b",
+    "capture.expectedBrowserContexts.b",
     errors,
   );
   equal(
@@ -564,23 +564,23 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
   );
   equal(runtime?.bSwitchStatus, "succeeded", "sharedRuntime.bSwitchStatus", errors);
 
-  const questionAnswers = value.observations?.questionAnswers;
+  const expectedAnswerSurfaces = value.observations?.expectedAnswerSurfaces;
   equal(
-    questionAnswers?.aBeforeBrowser,
+    expectedAnswerSurfaces?.aBeforeBrowser,
     "codex-in-app-browser",
-    "questionAnswers.aBeforeBrowser",
+    "expectedAnswerSurfaces.aBeforeBrowser",
     errors,
   );
   equal(
-    questionAnswers?.aAfterBrowser,
+    expectedAnswerSurfaces?.aAfterBrowser,
     "chrome",
-    "questionAnswers.aAfterBrowser",
+    "expectedAnswerSurfaces.aAfterBrowser",
     errors,
   );
   equal(
-    questionAnswers?.bAfterBrowser,
+    expectedAnswerSurfaces?.bAfterBrowser,
     "chrome",
-    "questionAnswers.bAfterBrowser",
+    "expectedAnswerSurfaces.bAfterBrowser",
     errors,
   );
 

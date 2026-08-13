@@ -39,12 +39,12 @@ async function main(argv) {
   const [command, evidencePath, ...rest] = argv;
   if (command === "prepare") {
     throw new Error(
-      "prepare was removed: use capture so evidence is produced by live browser HTTP/SSE probes",
+      "prepare was removed: use capture so the live HTTP/SSE/Pi collector observes the probes",
     );
   }
   if (command === "verify") {
     throw new Error(
-      "offline verify cannot prove a live browser run; use capture for LIVE PASS or audit for a non-authoritative record check",
+      "offline verify cannot prove a live collector run or browser surface provenance; use capture for LIVE HTTP/SSE/Pi COLLECTOR PASS and an external IAB/Chrome acceptance record",
     );
   }
   if (!new Set(["capture", "audit"]).has(command) || !evidencePath) {
@@ -258,7 +258,7 @@ async function captureEvidence(evidencePath, manifest, options) {
     await completion;
     if (finalizationError) throw finalizationError;
     process.stdout.write(
-      "LIVE PASS: the active collector directly observed both authenticated browser modules complete own and bidirectional cross-User probes.\n",
+      "LIVE HTTP/SSE/Pi COLLECTOR PASS: the active collector observed both slots complete authenticated own and bidirectional cross-User probes. Browser surface provenance is not application-layer proof; attach the external IAB/Chrome acceptance record.\n",
     );
     process.stdout.write(`Wrote redacted audit record: ${evidencePath}\n`);
   } finally {
@@ -482,7 +482,7 @@ function writeAuditEvidence(path, run, manifest, producerSha256) {
     preparedAt: run.preparedAt,
     completedAt: new Date().toISOString(),
     capture: {
-      browserContexts: manifest.releaseGate.browserContexts,
+      expectedBrowserContexts: manifest.releaseGate.browserContexts,
       callbackMode: manifest.releaseGate.callbackMode,
       seam: manifest.releaseGate.publicSeam,
       producer: "live-browser-module",
@@ -518,7 +518,7 @@ function auditEvidenceFile(path, manifest) {
   const errors = verifyEvidenceContract(evidence, manifest, raw);
   if (errors.length > 0) throw new Error(errors.join("\n"));
   process.stdout.write(
-    "AUDIT ONLY (NOT LIVE PASS): redacted record structure is valid, but an offline file cannot prove that browsers produced it.\n",
+    "AUDIT ONLY (NOT LIVE COLLECTOR PASS): redacted record structure is valid, but an offline file cannot prove a live run or browser surface provenance.\n",
   );
 }
 
@@ -538,12 +538,17 @@ function verifyEvidenceContract(value, manifest, raw) {
   collectIsoDate(value.preparedAt, "preparedAt", errors);
   collectIsoDate(value.completedAt, "completedAt", errors);
   collectEqual(
-    value.capture?.browserContexts?.a,
+    value.capture?.expectedBrowserContexts?.a,
     "codex-in-app-browser",
-    "capture.browserContexts.a",
+    "capture.expectedBrowserContexts.a",
     errors,
   );
-  collectEqual(value.capture?.browserContexts?.b, "chrome", "capture.browserContexts.b", errors);
+  collectEqual(
+    value.capture?.expectedBrowserContexts?.b,
+    "chrome",
+    "capture.expectedBrowserContexts.b",
+    errors,
+  );
   collectEqual(
     value.capture?.callbackMode,
     "single-shared-dano-callback",

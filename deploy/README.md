@@ -259,16 +259,21 @@ their own Client, Agent Session, transcript, Runtime Workspace, upload, and
 preference, exchange the exact in-memory resource targets through the local
 collector, and run the cross-User probes in both directions.
 
-The collector emits `LIVE PASS` only after both modules finish and its in-memory
-terminal validation succeeds. Raw resource identifiers are used in memory for
+The collector emits `LIVE HTTP/SSE/Pi COLLECTOR PASS` only after both modules
+finish and its in-memory terminal validation succeeds. This proves the observed
+HTTP/SSE/Pi behavior and resource relationships, not which browser surface sent
+the requests: application-layer requests cannot distinguish the Codex in-app
+Browser, Chrome, or another compatible client. Keep the manifest's IAB/Chrome
+mapping as the operation contract and attach the external actual-browser
+acceptance record as the browser-surface provenance. Raw resource identifiers are used in memory for
 the cross probes but are fingerprinted before persistence. The JSON file is a
 redacted audit record only; it does not prove browser provenance and cannot be
-used to reconstruct `LIVE PASS`. Provider
+used to reconstruct a live collector PASS. Provider
 addresses, credentials, Cookies, raw identifiers, private payloads, response
 bodies, and response headers are never persisted.
 
 Optionally check the redacted record's structure. This deliberately prints
-`AUDIT ONLY (NOT LIVE PASS)`:
+`AUDIT ONLY (NOT LIVE COLLECTOR PASS)`:
 
 ```bash
 pnpm run test:auth-real-users -- audit /path/to/real-user-evidence.json
@@ -323,8 +328,10 @@ accounts are recorded in
 Import each printed module in its matching authenticated browser and call
 `run()`. The modules use only public Dano HTTP/SSE commands and the browser's
 HttpOnly Login Session implicitly; they never read or forward Cookies. The
-collector binds A to the Codex in-app Browser, B to Chrome, and both to the
-same Dano callback without recording its address:
+operation contract assigns A to the Codex in-app Browser and B to Chrome, with
+both on the same Dano callback without recording its address. The collector
+cannot prove those browser surfaces from application-layer requests; retain the
+external actual-browser acceptance record for that provenance:
 
 - `aStatus` and `bStatus` come from each authenticated auth DTO.
 - Client fingerprints are SHA-256 hashes of the two `/api/clients` response
@@ -338,9 +345,10 @@ same Dano callback without recording its address:
   the Bridge. B must successfully `switch_session` to A's path; record only the
   hash, never the path.
 - Record `aBeforeBrowser` as `codex-in-app-browser`; record both
-  `aAfterBrowser` and `bAfterBrowser` as `chrome`. These values identify which
-  browser submitted each public `answer_question` command without recording a
-  Cookie or Login Session ID.
+  `aAfterBrowser` and `bAfterBrowser` as `chrome`. These are expected operation
+  labels, not collector-observed browser provenance. The external acceptance
+  record identifies which browser submitted each public `answer_question`
+  command without recording a Cookie or Login Session ID.
 - Sequence timestamps surround each public prompt, question tool call,
   `answer_question` command/result, logout POST, old-A Client request, B auth
   DTO read, and provider result. Logout must return 200 after A's second
@@ -349,11 +357,13 @@ same Dano callback without recording its address:
   Turn succeeds.
 
 The collector retains raw Client and Session mappings only in memory, reads the
-live Pi transcript itself, and emits `LIVE PASS` only after all three ordered
-phases pass. The written JSON is a redacted audit record and cannot reconstruct
+live Pi transcript itself, and emits `LIVE HTTP/SSE/Pi COLLECTOR PASS` only
+after all three ordered phases pass. This proves the behavior and resource
+relationships, while browser-surface provenance remains part of the external
+IAB/Chrome acceptance record. The written JSON is a redacted audit record and cannot reconstruct
 the live result. Its structure can be checked separately without printing
 response bodies, headers, credentials, Cookies, Login Session IDs, or provider
-addresses; this prints `AUDIT ONLY (NOT LIVE PASS)`:
+addresses; this prints `AUDIT ONLY (NOT LIVE COLLECTOR PASS)`:
 
 ```bash
 DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
