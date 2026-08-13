@@ -217,6 +217,9 @@ async function captureEvidence(evidencePath, manifest, options) {
         },
       });
     } catch (error) {
+      process.stderr.write(
+        `[real-user-capture] ${error instanceof Error ? error.message : "capture failed"}\n`,
+      );
       writeJsonResponse(response, 400, {
         error: error instanceof Error ? error.message : "capture request failed",
       }, options.origin);
