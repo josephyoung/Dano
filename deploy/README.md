@@ -259,17 +259,19 @@ their own Client, Agent Session, transcript, Runtime Workspace, upload, and
 preference, exchange the exact in-memory resource targets through the local
 collector, and run the cross-User probes in both directions.
 
-The collector writes the evidence only after both modules finish. Raw resource
-identifiers are used in memory for the cross probes but are fingerprinted
-before persistence. The resulting evidence is signed by the capture process;
-editing or manually filling the JSON invalidates verification. Provider
+The collector emits `LIVE PASS` only after both modules finish and its in-memory
+terminal validation succeeds. Raw resource identifiers are used in memory for
+the cross probes but are fingerprinted before persistence. The JSON file is a
+redacted audit record only; it does not prove browser provenance and cannot be
+used to reconstruct `LIVE PASS`. Provider
 addresses, credentials, Cookies, raw identifiers, private payloads, response
 bodies, and response headers are never persisted.
 
-Verify the completed evidence from the same run:
+Optionally check the redacted record's structure. This deliberately prints
+`AUDIT ONLY (NOT LIVE PASS)`:
 
 ```bash
-pnpm run test:auth-real-users -- verify /path/to/real-user-evidence.json
+pnpm run test:auth-real-users -- audit /path/to/real-user-evidence.json
 ```
 
 ### Real provider Skill/Broker release gate
@@ -288,14 +290,14 @@ DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
 node scripts/check-provider-skill-release-gate.mjs install
 ```
 
-Prepare a fresh evidence contract for this browser run. The file contains only
-random markers, hashes, statuses, and timestamps; it must not contain a provider
-address, Credential, Cookie, Login Session ID, raw Client ID, raw User/runtime
-path, response body, or response headers:
+Start the live collector after installing the Skill and starting the test Dano
+runtime. It prints one run-specific module URL for Login Session A in the Codex
+in-app Browser and one for Login Session B in Chrome:
 
 ```bash
-node scripts/check-provider-skill-release-gate.mjs prepare \
-  /path/to/provider-skill-evidence.json
+pnpm run test:auth-real-provider-skill -- capture \
+  /path/to/provider-skill-evidence.json \
+  --origin http://localhost:5173
 ```
 
 Use the single configured Dano callback and one running Dano origin for both
@@ -318,10 +320,11 @@ from B, and confirm the provider request still succeeds. The controlled test
 accounts are recorded in
 `apps/dano/src/__tests__/fixtures/real-oauth-acceptance.json`.
 
-Fill the prepared evidence only from this run's public HTTP/SSE observations.
-Keep the prepared `browserContexts` and `callbackMode` values unchanged; they
-bind A to the Codex in-app Browser, B to Chrome, and both to the same Dano
-callback without recording its address:
+Import each printed module in its matching authenticated browser and call
+`run()`. The modules use only public Dano HTTP/SSE commands and the browser's
+HttpOnly Login Session implicitly; they never read or forward Cookies. The
+collector binds A to the Codex in-app Browser, B to Chrome, and both to the
+same Dano callback without recording its address:
 
 - `aStatus` and `bStatus` come from each authenticated auth DTO.
 - Client fingerprints are SHA-256 hashes of the two `/api/clients` response
@@ -329,7 +332,7 @@ callback without recording its address:
 - User ID fingerprints are SHA-256 hashes of the authenticated auth DTO's
   browser-safe, opaque `user.id`. They must match; do not record the raw ID.
   `defaultWorkspacePath` is runtime data and must never be used as User
-  identity. Set the User's preference to the prepared `yellow` marker through A
+  identity. Set the User's preference to the collector-provided `yellow` marker through A
   and read it through B, then restore the initial preference after capture.
 - Session fingerprints are SHA-256 hashes of the `sessionPath` returned through
   the Bridge. B must successfully `switch_session` to A's path; record only the
@@ -345,13 +348,18 @@ callback without recording its address:
   return 404, and B must remain `authenticated` before its post-logout Skill
   Turn succeeds.
 
-Verify the three phases in the shared real Pi transcript without printing response bodies, headers,
-credentials, Cookies, Login Session IDs, or provider addresses:
+The collector retains raw Client and Session mappings only in memory, reads the
+live Pi transcript itself, and emits `LIVE PASS` only after all three ordered
+phases pass. The written JSON is a redacted audit record and cannot reconstruct
+the live result. Its structure can be checked separately without printing
+response bodies, headers, credentials, Cookies, Login Session IDs, or provider
+addresses; this prints `AUDIT ONLY (NOT LIVE PASS)`:
 
 ```bash
 DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
 DANO_PROVIDER_GATE_SESSION=/path/to/shared-session.jsonl \
-pnpm run test:auth-real-provider-skill -- /path/to/provider-skill-evidence.json
+pnpm run test:auth-real-provider-skill -- audit \
+  /path/to/provider-skill-evidence.json
 ```
 
 The verifier requires the Skill's exact canonical `ask_user_question` call and

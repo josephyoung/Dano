@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 import {
   createHash,
-  generateKeyPairSync,
   randomBytes,
   randomUUID,
-  sign,
-  verify,
 } from "node:crypto";
 import {
   existsSync,
@@ -45,9 +42,14 @@ async function main(argv) {
       "prepare was removed: use capture so evidence is produced by live browser HTTP/SSE probes",
     );
   }
-  if (!new Set(["capture", "verify"]).has(command) || !evidencePath) {
+  if (command === "verify") {
     throw new Error(
-      "Usage: node scripts/check-real-user-isolation.mjs <capture|verify> <evidence.json> [--manifest <manifest.json>] [--origin <Dano origin>] [--port <port>] [--timeout-ms <milliseconds>]",
+      "offline verify cannot prove a live browser run; use capture for LIVE PASS or audit for a non-authoritative record check",
+    );
+  }
+  if (!new Set(["capture", "audit"]).has(command) || !evidencePath) {
+    throw new Error(
+      "Usage: node scripts/check-real-user-isolation.mjs <capture|audit> <evidence.json> [--manifest <manifest.json>] [--origin <Dano origin>] [--port <port>] [--timeout-ms <milliseconds>]",
     );
   }
   const options = parseOptions(rest);
@@ -56,7 +58,7 @@ async function main(argv) {
     await captureEvidence(evidencePath, manifest, options);
     return;
   }
-  verifyEvidenceFile(evidencePath, manifest);
+  auditEvidenceFile(evidencePath, manifest);
 }
 
 function parseOptions(argv) {
@@ -199,7 +201,7 @@ async function captureEvidence(evidencePath, manifest, options) {
           if (finalized) return;
           finalized = true;
           try {
-            writeSignedEvidence(
+            writeAuditEvidence(
               evidencePath,
               run,
               manifest,
@@ -255,7 +257,10 @@ async function captureEvidence(evidencePath, manifest, options) {
   try {
     await completion;
     if (finalizationError) throw finalizationError;
-    process.stdout.write(`Captured signed real OAuth User evidence: ${evidencePath}\n`);
+    process.stdout.write(
+      "LIVE PASS: the active collector directly observed both authenticated browser modules complete own and bidirectional cross-User probes.\n",
+    );
+    process.stdout.write(`Wrote redacted audit record: ${evidencePath}\n`);
   } finally {
     clearTimeout(timeout);
     process.off("SIGTERM", terminate);
@@ -470,9 +475,8 @@ function validateDistinctOwners(own) {
   }
 }
 
-function writeSignedEvidence(path, run, manifest, producerSha256) {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const unsigned = {
+function writeAuditEvidence(path, run, manifest, producerSha256) {
+  const evidence = {
     schemaVersion: 2,
     runId: run.runId,
     preparedAt: run.preparedAt,
@@ -496,17 +500,11 @@ function writeSignedEvidence(path, run, manifest, producerSha256) {
         cross,
       };
     }),
-    attestation: {
-      algorithm: "Ed25519",
-      publicKey: publicKey.export({ type: "spki", format: "pem" }),
-    },
+    recordPurpose: "redacted-audit-only-not-live-proof",
   };
-  const signature = sign(null, Buffer.from(JSON.stringify(unsigned)), privateKey)
-    .toString("base64");
-  const evidence = {
-    ...unsigned,
-    attestation: { ...unsigned.attestation, signature },
-  };
+  const raw = `${JSON.stringify(evidence, null, 2)}\n`;
+  const errors = verifyEvidenceContract(evidence, manifest, raw);
+  if (errors.length > 0) throw new Error(errors.join("\n"));
   writeFileSync(path, `${JSON.stringify(evidence, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
@@ -514,37 +512,13 @@ function writeSignedEvidence(path, run, manifest, producerSha256) {
   });
 }
 
-function verifyEvidenceFile(path, manifest) {
+function auditEvidenceFile(path, manifest) {
   const raw = readFileSync(path, "utf8");
   const evidence = JSON.parse(raw);
-  if (!isRecord(evidence.attestation)) {
-    throw new Error("signed live capture attestation is required");
-  }
-  const { signature, ...attestation } = evidence.attestation;
-  if (
-    attestation.algorithm !== "Ed25519" ||
-    typeof attestation.publicKey !== "string" ||
-    typeof signature !== "string"
-  ) {
-    throw new Error("signed live capture attestation is invalid");
-  }
-  const unsigned = { ...evidence, attestation };
-  let validSignature = false;
-  try {
-    validSignature = verify(
-      null,
-      Buffer.from(JSON.stringify(unsigned)),
-      attestation.publicKey,
-      Buffer.from(signature, "base64"),
-    );
-  } catch {
-    validSignature = false;
-  }
-  if (!validSignature) throw new Error("attestation signature is invalid");
   const errors = verifyEvidenceContract(evidence, manifest, raw);
   if (errors.length > 0) throw new Error(errors.join("\n"));
   process.stdout.write(
-    "Real OAuth User isolation signed live-browser capture passed: two authenticated owners succeeded on their own session/workspace/upload/transcript/preference resources and were denied in both cross directions.\n",
+    "AUDIT ONLY (NOT LIVE PASS): redacted record structure is valid, but an offline file cannot prove that browsers produced it.\n",
   );
 }
 
@@ -554,6 +528,12 @@ function verifyEvidenceContract(value, manifest, raw) {
     errors.push("evidence contains forbidden provider, credential, URL, or raw resource data");
   }
   collectEqual(value.schemaVersion, 2, "schemaVersion", errors);
+  collectEqual(
+    value.recordPurpose,
+    "redacted-audit-only-not-live-proof",
+    "recordPurpose",
+    errors,
+  );
   collectMatch(value.runId, /^[0-9a-f-]{36}$/i, "runId", errors);
   collectIsoDate(value.preparedAt, "preparedAt", errors);
   collectIsoDate(value.completedAt, "completedAt", errors);

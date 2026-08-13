@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { createServer } from "node:http";
 
 const root = resolve(import.meta.dirname, "..");
 const fixtureDir = join(root, "scripts/fixtures/provider-broker-release-gate");
@@ -22,11 +23,16 @@ const FORBIDDEN_EVIDENCE =
 try {
   if (mode === "install") installSkill();
   else if (mode === "remove") removeSkill();
-  else if (mode === "prepare") prepareEvidence(requiredArgument(3));
-  else if (mode === "verify") verifyGate(requiredArgument(3));
+  else if (mode === "capture") await captureGate(requiredArgument(3));
+  else if (mode === "audit") auditGate(requiredArgument(3));
+  else if (mode === "prepare" || mode === "verify") {
+    throw new Error(
+      "offline evidence cannot prove a live browser Skill run; use capture for LIVE PASS or audit for a non-authoritative record check",
+    );
+  }
   else {
     throw new Error(
-      "usage: check-provider-skill-release-gate.mjs <install|remove|prepare|verify> [evidence.json]",
+      "usage: check-provider-skill-release-gate.mjs <install|remove|capture|audit> [evidence.json]",
     );
   }
 } catch (error) {
@@ -61,15 +67,16 @@ function removeSkill() {
   console.log(`removed ${skillName}`);
 }
 
-function prepareEvidence(evidencePath) {
-  if (existsSync(evidencePath)) {
-    throw new Error("provider Skill evidence file already exists");
-  }
-  const evidence = {
+function newCaptureRecord() {
+  const fixedMarkers = process.env.DANO_PROVIDER_GATE_FIXED_MARKERS
+    ? JSON.parse(process.env.DANO_PROVIDER_GATE_FIXED_MARKERS)
+    : null;
+  return {
     schemaVersion: 2,
     runId: randomUUID(),
     preparedAt: new Date().toISOString(),
     completedAt: null,
+    recordPurpose: "redacted-audit-only-not-live-proof",
     capture: {
       browserContexts: {
         a: "codex-in-app-browser",
@@ -79,9 +86,9 @@ function prepareEvidence(evidencePath) {
       seam: "Dano HTTP/SSE and Pi transcript",
     },
     markers: {
-      aBefore: marker("a-before"),
-      aAfter: marker("a-after"),
-      bAfter: marker("b-after"),
+      aBefore: fixedMarkers?.aBefore ?? marker("a-before"),
+      aAfter: fixedMarkers?.aAfter ?? marker("a-after"),
+      bAfter: fixedMarkers?.bAfter ?? marker("b-after"),
       sharedPreference: "yellow",
     },
     observations: {
@@ -109,12 +116,322 @@ function prepareEvidence(evidencePath) {
       sequence: emptySequence(),
     },
   };
-  writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
+}
+
+async function captureGate(evidencePath) {
+  if (existsSync(evidencePath)) {
+    throw new Error("provider Skill audit record already exists");
+  }
+  const options = captureOptions(process.argv.slice(4));
+  const sessionPath = resolve(
+    requiredEnvironment("DANO_PROVIDER_GATE_SESSION"),
+  );
+  if (!existsSync(sessionPath) || statSync(sessionPath).isDirectory()) {
+    throw new Error("DANO_PROVIDER_GATE_SESSION must be one JSONL session file");
+  }
+  const browserSource = readFileSync(
+    join(root, "scripts/provider-skill-release-gate-browser.mjs"),
+    "utf8",
+  );
+  const evidence = newCaptureRecord();
+  const run = {
+    tokens: {
+      a: randomBytes(32).toString("hex"),
+      b: randomBytes(32).toString("hex"),
+    },
+    raw: { a: null, b: null },
+    aHeld: false,
+    aLogout: null,
+    bComplete: false,
+    sessionPath,
+  };
+  let finish;
+  let fail;
+  const completion = new Promise((resolveCompletion, rejectCompletion) => {
+    finish = resolveCompletion;
+    fail = rejectCompletion;
   });
-  console.log(`prepared provider Skill evidence: ${evidencePath}`);
+  let finalizing = false;
+  const server = createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
+      if (request.method === "OPTIONS") {
+        cors(response, options.origin);
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+      if (request.headers.origin !== options.origin) {
+        json(response, 403, { error: "unexpected browser origin" }, options.origin);
+        return;
+      }
+      const slot = captureSlot(url, run.tokens);
+      if (!slot) {
+        json(response, 403, { error: "invalid capture slot" }, options.origin);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/gate.mjs") {
+        cors(response, options.origin);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "text/javascript; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.end(browserSource);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/config") {
+        json(response, 200, {
+          slot,
+          markers: evidence.markers,
+          sharedPreference: evidence.markers.sharedPreference,
+        }, options.origin);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/ready") {
+        if (run.raw[slot]) throw new Error(`${slot} ready phase already captured`);
+        run.raw[slot] = validateSkillReady(await requestJson(request), slot);
+        json(response, 202, { status: "ready" }, options.origin);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/peer") {
+        const peer = run.raw[slot === "a" ? "b" : "a"];
+        if (!peer) {
+          json(response, 425, { status: "waiting" }, options.origin);
+          return;
+        }
+        json(response, 200, {
+          clientId: peer.clientId,
+          sessionPath: peer.sessionPath,
+        }, options.origin);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/a-held") {
+        if (slot !== "a" || !run.raw.a || !run.raw.b) {
+          throw new Error("A held phase requires both ready browser slots");
+        }
+        run.aHeld = true;
+        json(response, 202, { status: "held" }, options.origin);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/a-logout") {
+        if (slot !== "a" || !run.aHeld) throw new Error("A is not held");
+        run.aLogout = validateLogout(await requestJson(request));
+        json(response, 202, { status: "logged-out" }, options.origin);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/state") {
+        json(response, 200, {
+          bothReady: Boolean(run.raw.a && run.raw.b),
+          aHeld: run.aHeld,
+          aLoggedOut: Boolean(run.aLogout),
+        }, options.origin);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/b-complete") {
+        if (slot !== "b" || !run.aLogout) throw new Error("A logout is incomplete");
+        const completed = await requestJson(request);
+        if (completed.status !== "authenticated") {
+          throw new Error("B must remain authenticated after A logout");
+        }
+        run.bComplete = true;
+        json(response, 202, { status: "complete" }, options.origin);
+        if (!finalizing) {
+          finalizing = true;
+          setImmediate(() => {
+            try {
+              finalizeSkillCapture(evidencePath, evidence, run);
+              finish();
+            } catch (error) {
+              fail(error);
+            } finally {
+              server.close();
+            }
+          });
+        }
+        return;
+      }
+      json(response, 404, { error: "capture route was not found" }, options.origin);
+    } catch (error) {
+      json(
+        response,
+        400,
+        { error: error instanceof Error ? error.message : "capture failed" },
+        options.origin,
+      );
+    }
+  });
+  server.on("error", fail);
+  await new Promise((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(options.port, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("capture server failed");
+  const collector = `http://127.0.0.1:${address.port}`;
+  console.log(`SLOT_A=${collector}/gate.mjs?slot=a&token=${run.tokens.a}`);
+  console.log(`SLOT_B=${collector}/gate.mjs?slot=b&token=${run.tokens.b}`);
+  const timeout = setTimeout(() => {
+    server.close();
+    fail(new Error("provider Skill capture timed out"));
+  }, options.timeoutMs);
+  try {
+    await completion;
+    console.log(
+      "LIVE PASS: active collector verified same User/two Login Sessions, shared Agent Session, A logout authentication_required, and unaffected B success from the live Pi transcript",
+    );
+    console.log(`Wrote redacted audit record: ${evidencePath}`);
+  } finally {
+    clearTimeout(timeout);
+    if (server.listening) await new Promise(resolveClose => server.close(resolveClose));
+  }
+}
+
+function captureOptions(argv) {
+  const options = { origin: "http://localhost:5173", port: 0, timeoutMs: 10 * 60_000 };
+  const fields = new Map([
+    ["--origin", "origin"],
+    ["--port", "port"],
+    ["--timeout-ms", "timeoutMs"],
+  ]);
+  for (let index = 0; index < argv.length; index += 2) {
+    const field = fields.get(argv[index]);
+    const value = argv[index + 1];
+    if (!field || value === undefined) throw new Error(`invalid capture option ${argv[index]}`);
+    options[field] = field === "origin" ? new URL(value).origin : Number(value);
+  }
+  if (!Number.isInteger(options.port) || options.port < 0) throw new Error("--port is invalid");
+  if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1000) {
+    throw new Error("--timeout-ms is invalid");
+  }
+  return options;
+}
+
+function captureSlot(url, tokens) {
+  const slot = url.searchParams.get("slot");
+  const token = url.searchParams.get("token");
+  return (slot === "a" || slot === "b") && token === tokens[slot] ? slot : null;
+}
+
+function validateSkillReady(value, slot) {
+  if (!record(value)) throw new Error("ready capture must be an object");
+  for (const field of ["status", "clientId", "userId", "sessionPath", "preference"] ) {
+    if (typeof value[field] !== "string" || !value[field]) {
+      throw new Error(`ready.${field} is required`);
+    }
+  }
+  if (value.status !== "authenticated") throw new Error(`${slot} must be authenticated`);
+  return { ...value };
+}
+
+function validateLogout(value) {
+  if (
+    !record(value) ||
+    value.logoutHttpStatus !== 200 ||
+    value.oldClientHttpStatus !== 404
+  ) {
+    throw new Error("A logout must revoke its old Browser Client");
+  }
+  return { ...value, observedAt: new Date().toISOString() };
+}
+
+function finalizeSkillCapture(evidencePath, evidence, run) {
+  const a = run.raw.a;
+  const b = run.raw.b;
+  if (!a || !b || !run.aLogout || !run.bComplete) throw new Error("capture incomplete");
+  if (a.userId !== b.userId) throw new Error("A and B are not the same canonical User");
+  if (a.clientId === b.clientId) throw new Error("A and B reused one Browser Client");
+  if (
+    resolve(a.sessionPath) !== resolve(b.sessionPath) ||
+    resolve(a.sessionPath) !== run.sessionPath
+  ) {
+    throw new Error("A and B did not share one Agent Session");
+  }
+  const providerPath = configuredProviderPath();
+  const proofs = [
+    ["aBefore", evidence.markers.aBefore, "success"],
+    ["aAfter", evidence.markers.aAfter, "authentication_required"],
+    ["bAfter", evidence.markers.bAfter, "success"],
+  ].map(([field, markerValue, expected]) => ({
+    field,
+    proof: verifyTranscript(a.sessionPath, markerValue, expected, providerPath),
+  }));
+  if (proofs.some(({ proof }, index) => proof.outcome !== ["success", "authentication_required", "success"][index])) {
+    throw new Error("live Pi transcript did not contain the required Skill outcomes");
+  }
+  const [aBefore, aAfter, bAfter] = proofs.map(item => item.proof);
+  const logoutAt = run.aLogout.observedAt;
+  if (!(Date.parse(aAfter.questionCallAt) < Date.parse(logoutAt) && Date.parse(logoutAt) < Date.parse(aAfter.questionResultAt))) {
+    throw new Error("A logout was not between held question presentation and answer");
+  }
+  evidence.completedAt = new Date().toISOString();
+  evidence.observations.identity = {
+    aStatus: a.status,
+    bStatus: b.status,
+    aClientFingerprint: sha256(a.clientId),
+    aAfterClientFingerprint: sha256(a.clientId),
+    bClientFingerprint: sha256(b.clientId),
+    aUserIdFingerprint: sha256(a.userId),
+    bUserIdFingerprint: sha256(b.userId),
+    aPreference: a.preference,
+    bPreference: b.preference,
+  };
+  evidence.observations.sharedRuntime = {
+    aSessionFingerprint: sha256(resolve(a.sessionPath)),
+    bSessionFingerprint: sha256(resolve(b.sessionPath)),
+    bSwitchStatus: "succeeded",
+  };
+  evidence.observations.questionAnswers = {
+    aBeforeBrowser: "codex-in-app-browser",
+    aAfterBrowser: "chrome",
+    bAfterBrowser: "chrome",
+  };
+  evidence.observations.sequence = {
+    aBeforeAcceptedAt: aBefore.userAt,
+    aBeforeQuestionCallAt: aBefore.questionCallAt,
+    aBeforeQuestionAnsweredAt: aBefore.questionResultAt,
+    aBeforeResultAt: aBefore.providerResultAt,
+    aAfterAcceptedAt: aAfter.userAt,
+    aAfterQuestionCallAt: aAfter.questionCallAt,
+    logoutAt,
+    logoutHttpStatus: run.aLogout.logoutHttpStatus,
+    aOldClientHttpStatus: run.aLogout.oldClientHttpStatus,
+    bAfterLogoutStatus: b.status,
+    aAfterQuestionAnsweredAt: aAfter.questionResultAt,
+    aAfterResultAt: aAfter.providerResultAt,
+    bAfterAcceptedAt: bAfter.userAt,
+    bAfterQuestionCallAt: bAfter.questionCallAt,
+    bAfterQuestionAnsweredAt: bAfter.questionResultAt,
+    bAfterResultAt: bAfter.providerResultAt,
+  };
+  const raw = `${JSON.stringify(evidence, null, 2)}\n`;
+  const errors = verifyEvidence(evidence, raw, providerPath, a.sessionPath);
+  if (errors.length > 0) throw new Error(errors.join("\n"));
+  writeFileSync(evidencePath, raw, { encoding: "utf8", flag: "wx", mode: 0o600 });
+}
+
+async function requestJson(request) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 64 * 1024) throw new Error("capture request is too large");
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function cors(response, origin) {
+  response.setHeader("Access-Control-Allow-Origin", origin);
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Vary", "Origin");
+}
+
+function json(response, status, value, origin) {
+  cors(response, origin);
+  response.statusCode = status;
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.end(`${JSON.stringify(value)}\n`);
 }
 
 function emptySequence() {
@@ -138,7 +455,7 @@ function emptySequence() {
   };
 }
 
-function verifyGate(evidencePath) {
+function auditGate(evidencePath) {
   const raw = readFileSync(evidencePath, "utf8");
   const evidence = JSON.parse(raw);
   const errors = verifyEvidence(
@@ -148,10 +465,9 @@ function verifyGate(evidencePath) {
     requiredEnvironment("DANO_PROVIDER_GATE_SESSION"),
   );
   if (errors.length > 0) throw new Error(errors.join("\n"));
-  console.log("session A before logout: success");
-  console.log("session A after logout: authentication_required");
-  console.log("session B after logout: success");
-  console.log("real provider Skill/Broker evidence contract passed");
+  console.log(
+    "AUDIT ONLY (NOT LIVE PASS): redacted Skill record and Pi transcript structure are valid, but offline files cannot prove browser provenance",
+  );
 }
 
 function verifyEvidence(value, raw, providerPath, sessionPath) {
@@ -161,6 +477,12 @@ function verifyEvidence(value, raw, providerPath, sessionPath) {
     errors.push("evidence contains forbidden provider or credential data");
   }
   equal(value.schemaVersion, 2, "schemaVersion", errors);
+  equal(
+    value.recordPurpose,
+    "redacted-audit-only-not-live-proof",
+    "recordPurpose",
+    errors,
+  );
   match(value.runId, /^[0-9a-f-]{36}$/i, "runId", errors);
   isoDate(value.preparedAt, "preparedAt", errors);
   isoDate(value.completedAt, "completedAt", errors);

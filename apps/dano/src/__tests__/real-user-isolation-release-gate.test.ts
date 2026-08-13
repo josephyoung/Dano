@@ -120,7 +120,7 @@ describe("real OAuth User isolation release gate", () => {
     expect(() => readFileSync(evidencePath)).toThrow();
   });
 
-  it("captures a nonce-bound two-browser run, signs it, and rejects tampering", async () => {
+  it("emits LIVE PASS only from the collector that observed both browser slots", async () => {
     const directory = tempDirectory();
     const evidencePath = join(directory, "evidence.json");
     const capture = await startCapture(evidencePath);
@@ -149,11 +149,9 @@ describe("real OAuth User isolation release gate", () => {
     });
     expect(evidence.accounts.map((account: any) => account.runtimeOwnerFingerprint))
       .toEqual([sha256("owner-a"), sha256("owner-b")]);
-    expect(evidence.attestation).toMatchObject({
-      algorithm: "Ed25519",
-      publicKey: expect.any(String),
-      signature: expect.any(String),
-    });
+    expect(evidence.recordPurpose).toBe("redacted-audit-only-not-live-proof");
+    expect(evidence).not.toHaveProperty("attestation");
+    expect(capture.output()).toContain("LIVE PASS:");
     expect(raw).not.toMatch(/raw-(?:client|session|workspace|upload)/);
     expect(raw).not.toContain("Dano424Test!");
     expect(raw).not.toMatch(/https?:\/\//i);
@@ -161,23 +159,23 @@ describe("real OAuth User isolation release gate", () => {
 
     const output = execFileSync(
       process.execPath,
-      [gateScript, "verify", evidencePath, "--manifest", manifestPath],
+      [gateScript, "audit", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
-    expect(output).toContain("signed live-browser capture passed");
+    expect(output).toContain("AUDIT ONLY (NOT LIVE PASS)");
 
     evidence.accounts[0].cross.sessionOpen = "succeeded";
     writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     const tampered = spawnSync(
       process.execPath,
-      [gateScript, "verify", evidencePath, "--manifest", manifestPath],
+      [gateScript, "audit", evidencePath, "--manifest", manifestPath],
       { cwd: new URL(".", root), encoding: "utf8" },
     );
     expect(tampered.status).toBe(1);
-    expect(tampered.stderr).toContain("attestation signature is invalid");
+    expect(tampered.stderr).toContain("sessionOpen");
   });
 
-  it("rejects a hand-written legacy passing-looking JSON", () => {
+  it("refuses offline verify instead of claiming browser provenance", () => {
     const directory = tempDirectory();
     const evidencePath = join(directory, "evidence.json");
     writeFileSync(
@@ -198,7 +196,8 @@ describe("real OAuth User isolation release gate", () => {
       { cwd: new URL(".", root), encoding: "utf8" },
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("attestation");
+    expect(result.stderr).toContain("cannot prove a live browser run");
+    expect(result.stdout).not.toContain("LIVE PASS");
   });
 });
 
@@ -211,6 +210,7 @@ function tempDirectory(): string {
 async function startCapture(evidencePath: string): Promise<{
   urls: Record<"a" | "b", URL>;
   exit: Promise<void>;
+  output(): string;
 }> {
   const child = spawn(
     process.execPath,
@@ -255,6 +255,7 @@ async function startCapture(evidencePath: string): Promise<{
   };
   return {
     urls: { a: url("A"), b: url("B") },
+    output: () => stdout,
     exit: once(child, "exit").then(([code]) => {
       if (code !== 0) throw new Error(`capture failed: ${stderr || stdout}`);
     }),
