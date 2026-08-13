@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
-import { previewUrlForClient } from "../../../../scripts/real-user-isolation-browser.mjs";
 
 const root = new URL("../../../../", import.meta.url);
 const gateScript = new URL(
@@ -21,6 +20,9 @@ const browserProducer = new URL(
   "../../../../scripts/real-user-isolation-browser.mjs",
   import.meta.url,
 ).pathname;
+const { previewUrlForClient } = (await import(browserProducer)) as {
+  previewUrlForClient(value: string, clientId: string): string;
+};
 const manifestPath = new URL(
   "./fixtures/real-oauth-acceptance.json",
   import.meta.url,
