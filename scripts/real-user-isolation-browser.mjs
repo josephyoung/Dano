@@ -125,17 +125,17 @@ export async function run() {
       authenticationStatus: "authenticated",
       runtimeOwnerFingerprint: await sha256(authentication.user.id),
       raw,
-      own: {
-        resourceFingerprints: await resourceFingerprints(raw),
-        sessionMarkerCount,
-        sessionOpen: ownSessionOpen.success ? "succeeded" : "rejected",
-        transcriptMarkerCount: 1,
-        workspaceMarkerSha256: await sha256(
-          requiredString(ownWorkspaceRead.data?.content, "workspace content"),
-        ),
-        uploadPreviewSha256: await sha256(ownPreview),
-        preference: ownPreference.accentColorPreset,
-      },
+    };
+    own.own = {
+      resourceFingerprints: await resourceFingerprints(raw),
+      sessionMarkerCount,
+      sessionOpen: ownSessionOpen.success ? "succeeded" : "rejected",
+      transcriptMarkerCount: 1,
+      workspaceMarkerSha256: await sha256(
+        requiredString(ownWorkspaceRead.data?.content, "workspace content"),
+      ),
+      uploadPreviewSha256: await sha256(ownPreview),
+      preference: ownPreference.accentColorPreset,
     };
     await collectorJson("/own", {
       method: "POST",

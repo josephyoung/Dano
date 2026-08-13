@@ -744,7 +744,9 @@ function assertExactKeys(value, expected, path) {
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
-    throw new Error(`${path} must contain only: ${wanted.join(", ")}`);
+    throw new Error(
+      `${path} must contain only: ${wanted.join(", ")}; received: ${actual.join(", ")}`,
+    );
   }
 }
 
