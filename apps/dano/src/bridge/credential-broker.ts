@@ -118,6 +118,14 @@ export interface CredentialBrokerOptions {
   ) => boolean | Promise<boolean>;
   readonly observeRequestBinding?: (loginSessionId: string) => void;
   readonly observeCredentialAvailability?: (available: boolean) => void;
+  readonly observeRequestStage?: (
+    stage:
+      | "binding_confirmed"
+      | "reauth_short_circuit"
+      | "credential_read"
+      | "request_sent"
+      | "invalid_detected",
+  ) => void;
   readonly fetch?: typeof fetch;
 }
 
@@ -390,9 +398,18 @@ export class CredentialBroker {
     try {
       this.options.observeRequestBinding?.(binding.loginSessionId);
     } catch {}
+    try {
+      this.options.observeRequestStage?.("binding_confirmed");
+    } catch {}
     if (this.reauthenticationRequired.has(binding.loginSessionId)) {
+      try {
+        this.options.observeRequestStage?.("reauth_short_circuit");
+      } catch {}
       return REAUTHENTICATION_REQUIRED;
     }
+    try {
+      this.options.observeRequestStage?.("credential_read");
+    } catch {}
     const credential = await this.options.readCredential(binding.loginSessionId);
     try {
       this.options.observeCredentialAvailability?.(Boolean(credential));
@@ -400,6 +417,9 @@ export class CredentialBroker {
     if (!credential) return AUTHENTICATION_REQUIRED;
 
     const send = (requestCredential: ProviderCredential) => {
+      try {
+        this.options.observeRequestStage?.("request_sent");
+      } catch {}
       const headers = requestHeaders(request.headers, requestCredential);
       if (body !== undefined && typeof request.body !== "string") {
         headers["content-type"] ??= "application/json";
@@ -416,6 +436,9 @@ export class CredentialBroker {
       let response = await send(credential);
       let responseCredential = credential;
       if (await this.accessTokenInvalid(response)) {
+        try {
+          this.options.observeRequestStage?.("invalid_detected");
+        } catch {}
         const latestCredential = await this.options.readCredential(
           binding.loginSessionId,
         );

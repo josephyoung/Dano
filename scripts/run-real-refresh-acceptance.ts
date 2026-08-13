@@ -247,6 +247,9 @@ const broker = new CredentialBroker({
       );
     }
   },
+  observeRequestStage: stage => {
+    console.log(`[refresh acceptance] broker stage=${stage}`);
+  },
   refreshCredential: async id => {
     const owner = ownerFingerprint(id);
     let stage: Parameters<typeof classifyRefreshExecutionFailure>[0] =

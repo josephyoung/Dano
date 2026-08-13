@@ -165,6 +165,7 @@ describe("real refresh acceptance producer", () => {
     }));
     const seenAuthorization: string[] = [];
     const observeRequestBinding = vi.fn();
+    const observeRequestStage = vi.fn();
     const broker = new CredentialBroker({
       providerApiOrigin: "https://provider.test",
       readCredential: async () => ({
@@ -173,6 +174,7 @@ describe("real refresh acceptance producer", () => {
       }),
       refreshCredential,
       observeRequestBinding,
+      observeRequestStage,
       isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, {
         observeProviderResponse,
       }),
@@ -199,6 +201,13 @@ describe("real refresh acceptance producer", () => {
     });
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(observeRequestBinding).toHaveBeenCalledWith("login-a");
+    expect(observeRequestStage.mock.calls.map(call => call[0])).toEqual([
+      "binding_confirmed",
+      "credential_read",
+      "request_sent",
+      "invalid_detected",
+      "request_sent",
+    ]);
     expect(seenAuthorization).toEqual([
       "Bearer expired-access",
       "Bearer renewed-access",
