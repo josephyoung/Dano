@@ -110,7 +110,6 @@ export async function run() {
     const ownSessions = await requireRpcSuccess(rpc, {
       type: "list_sessions",
       workspacePath,
-      query: config.marker,
       includeActive: true,
     });
     const listedSessionPaths = Array.isArray(ownSessions.data?.sessions)
