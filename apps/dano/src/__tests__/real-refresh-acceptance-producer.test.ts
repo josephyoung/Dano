@@ -7,72 +7,94 @@ import {
 describe("real refresh acceptance producer", () => {
   it("accepts only machine-observed success rotation on the same Credential owner", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 1_000);
-    producer.observeAuthenticatedClient("owner-a", "client-a", "workspace-a");
+    observeTwoSessions(producer);
     const marker = producer.arm("success");
 
-    expect(producer.classifyProviderResponse(200)).toBe(true);
+    producer.observePreflight(
+      "owner-a",
+      "identity-a",
+      "owner-b",
+      "identity-a",
+      "peer-record",
+      "peer-credential",
+    );
+    producer.observeRevocation("owner-a");
+    producer.observeProviderResponse(401, true);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
       "credential-before",
     );
+    producer.observeRefreshGrant("owner-a", "credential-after");
+    producer.observeRefreshIdentity("owner-a", "identity-a");
     producer.observeRefreshSuccess(
       "owner-a",
       "record-after",
       "credential-after",
     );
-    expect(producer.classifyProviderResponse(200)).toBe(false);
+    producer.observeProviderResponse(200, false);
     producer.observeTranscript(marker, "success");
-    producer.observeAuthCurrent("authenticated");
+    producer.observeAuthCurrent("owner-a", "authenticated");
+    producer.observePeerCredential(
+      "owner-b",
+      "identity-a",
+      "peer-record",
+      "peer-credential",
+    );
+    producer.observeAuthCurrent("owner-b", "authenticated");
 
     expect(producer.phaseStatus()).toEqual({ kind: "success", status: "passed" });
   });
 
   it("requires reauth projection, transcript, logout, and isolated Anonymous client for cancel", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 2_000);
-    producer.observeAuthenticatedClient("owner-a", "client-a", "workspace-a");
+    observeTwoSessions(producer);
     const marker = producer.arm("cancel");
-    producer.classifyProviderResponse(200);
+    observeRevokedPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
       "credential-before",
     );
+    producer.observeRefreshRejection("owner-a");
     producer.observeRefreshFailure("owner-a");
     producer.observeReauthentication("owner-a");
     producer.observeTranscript(marker, "reauth_required");
-    producer.observeAuthCurrent("reauth_required");
+    producer.observeAuthCurrent("owner-a", "reauth_required");
     producer.observeLogout(200, "owner-a");
     expect(producer.phaseStatus().status).toBe("pending");
     producer.observeAnonymousClient("workspace-b");
+    observePeerAfter(producer);
 
     expect(producer.phaseStatus()).toEqual({ kind: "cancel", status: "passed" });
   });
 
   it("requires the actual same-origin login redirect after reauth for confirm", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 3_000);
-    producer.observeAuthenticatedClient("owner-b", "client-b", "workspace-b");
+    observeTwoSessions(producer);
     const marker = producer.arm("confirm");
-    producer.classifyProviderResponse(200);
+    observeRevokedPreflight(producer);
     producer.observeRefreshStart(
-      "owner-b",
+      "owner-a",
       "record-before",
       "credential-before",
     );
-    producer.observeRefreshFailure("owner-b");
-    producer.observeReauthentication("owner-b");
+    producer.observeRefreshRejection("owner-a");
+    producer.observeRefreshFailure("owner-a");
+    producer.observeReauthentication("owner-a");
     producer.observeTranscript(marker, "reauth_required");
-    producer.observeAuthCurrent("reauth_required");
-    producer.observeLoginRedirect(302, "owner-b");
+    producer.observeAuthCurrent("owner-a", "reauth_required");
+    producer.observeLoginRedirect(302, "owner-a");
+    observePeerAfter(producer);
 
     expect(producer.phaseStatus()).toEqual({ kind: "confirm", status: "passed" });
   });
 
   it("fails closed on reordered or forged owner observations", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 4_000);
-    producer.observeAuthenticatedClient("owner-a", "client-a", "workspace-a");
+    observeTwoSessions(producer);
     producer.arm("success");
-    producer.classifyProviderResponse(200);
+    observeRevokedPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "same-record",
@@ -90,9 +112,9 @@ describe("real refresh acceptance producer", () => {
 
   it("rejects an encrypted record rewrite when the Credential did not rotate", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 5_000);
-    producer.observeAuthenticatedClient("owner-a", "client-a", "workspace-a");
+    observeTwoSessions(producer);
     producer.arm("success");
-    producer.classifyProviderResponse(200);
+    observeRevokedPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
@@ -106,6 +128,70 @@ describe("real refresh acceptance producer", () => {
         "same-credential",
       ),
     ).toThrow(/rotate/i);
+  });
+
+  it("rejects a synthetic invalidation without a completed real revocation", () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 6_000);
+    observeTwoSessions(producer);
+    producer.arm("success");
+    producer.observePreflight(
+      "owner-a",
+      "identity-a",
+      "owner-b",
+      "identity-a",
+      "peer-record",
+      "peer-credential",
+    );
+
+    expect(() => producer.observeProviderResponse(200, true)).toThrow(
+      /revocation/i,
+    );
+  });
+
+  it("requires the peer to be a distinct Login Session and Client of the same canonical User", () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 6_500);
+    producer.observeTargetClient(
+      "owner-a",
+      "client-a",
+      "workspace-a",
+      "user-a",
+    );
+
+    expect(() =>
+      producer.observePeerClient("owner-b", "client-a", "user-a"),
+    ).toThrow(/peer/i);
+    expect(() =>
+      producer.observePeerClient("owner-b", "client-b", "user-b"),
+    ).toThrow(/same User/i);
+  });
+
+  it("does not pass until the same User peer Login Session remains usable", () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 7_000);
+    observeTwoSessions(producer);
+    const marker = producer.arm("cancel");
+    observeRevokedPreflight(producer);
+    producer.observeRefreshStart(
+      "owner-a",
+      "record-before",
+      "credential-before",
+    );
+    producer.observeRefreshRejection("owner-a");
+    producer.observeRefreshFailure("owner-a");
+    producer.observeReauthentication("owner-a");
+    producer.observeTranscript(marker, "reauth_required");
+    producer.observeAuthCurrent("owner-a", "reauth_required");
+    producer.observeLogout(200, "owner-a");
+    producer.observeAnonymousClient("anonymous-workspace");
+
+    expect(producer.phaseStatus().status).toBe("pending");
+    expect(() =>
+      producer.observePeerCredential(
+        "owner-b",
+        "identity-a",
+        "changed-record",
+        "peer-credential",
+      ),
+    ).toThrow(/peer/i);
   });
 
   it("binds refresh proof to the exact Skill question and provider result", () => {
@@ -146,6 +232,39 @@ describe("real refresh acceptance producer", () => {
     ).toBe("reauth_required");
   });
 });
+
+function observeTwoSessions(producer: RealRefreshAcceptanceProducer) {
+  producer.observeTargetClient(
+    "owner-a",
+    "client-a",
+    "workspace-a",
+    "user-a",
+  );
+  producer.observePeerClient("owner-b", "client-b", "user-a");
+}
+
+function observeRevokedPreflight(producer: RealRefreshAcceptanceProducer) {
+  producer.observePreflight(
+    "owner-a",
+    "identity-a",
+    "owner-b",
+    "identity-a",
+    "peer-record",
+    "peer-credential",
+  );
+  producer.observeRevocation("owner-a");
+  producer.observeProviderResponse(401, true);
+}
+
+function observePeerAfter(producer: RealRefreshAcceptanceProducer) {
+  producer.observePeerCredential(
+    "owner-b",
+    "identity-a",
+    "peer-record",
+    "peer-credential",
+  );
+  producer.observeAuthCurrent("owner-b", "authenticated");
+}
 
 function skillTurn(marker: string, providerDetails: object) {
   return [

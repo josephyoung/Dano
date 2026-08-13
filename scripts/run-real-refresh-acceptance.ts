@@ -7,6 +7,10 @@ import { createAnonymousUserContextResolver } from "../apps/dano/src/bridge/anon
 import { CredentialBroker } from "../apps/dano/src/bridge/credential-broker.ts";
 import { createOAuthAuthentication } from "../apps/dano/src/bridge/oauth-authentication.ts";
 import { createOAuth2ProviderAdapter } from "../apps/dano/src/bridge/oauth-provider.ts";
+import type {
+  ExternalIdentity,
+  ProviderCredential,
+} from "../apps/dano/src/bridge/oauth-provider.ts";
 import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
@@ -21,6 +25,7 @@ const sessionsRootPath = resolve(
 const providerApiOrigin = new URL(required("DANO_OAUTH_API_ORIGIN")).origin;
 const providerPath = relativePath(required("DANO_PROVIDER_ACCEPTANCE_PATH"));
 const appOrigin = new URL(required("DANO_OAUTH_REDIRECT_URI")).origin;
+const tokenEndpoint = required("DANO_OAUTH_TOKEN_ENDPOINT");
 const credentialKey = Buffer.from(required("DANO_OAUTH_CREDENTIAL_KEY"), "base64url");
 if (credentialKey.byteLength !== 32) throw new Error("OAuth Credential key must be 32 bytes");
 mkdirSync(sessionsRootPath, { recursive: true });
@@ -29,7 +34,7 @@ const headers = providerHeaders(process.env.DANO_OAUTH_PROVIDER_HEADERS_JSON);
 const providerOptions = (clientSecret: string) => ({
   issuer: required("DANO_OAUTH_ISSUER"),
   authorizationEndpoint: required("DANO_OAUTH_AUTHORIZATION_ENDPOINT"),
-  tokenEndpoint: required("DANO_OAUTH_TOKEN_ENDPOINT"),
+  tokenEndpoint,
   identityEndpoint: required("DANO_OAUTH_IDENTITY_ENDPOINT"),
   clientId: required("DANO_OAUTH_CLIENT_ID"),
   clientSecret,
@@ -37,6 +42,7 @@ const providerOptions = (clientSecret: string) => ({
   requestHeaders: headers,
   sendStateToTokenEndpoint:
     process.env.DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT?.trim() === "true",
+  revocation: revocationOptions(tokenEndpoint),
   allowInsecureRequests: process.env.DANO_REFRESH_ACCEPTANCE_ALLOW_INSECURE === "true",
 });
 const provider = createOAuth2ProviderAdapter(
@@ -47,12 +53,25 @@ const failingProvider = createOAuth2ProviderAdapter(
 );
 const producer = new RealRefreshAcceptanceProducer();
 let refreshMode: "normal" | "fail" = "normal";
+let activeRefreshOwner: string | undefined;
 let controller: Awaited<ReturnType<typeof startDanoServer>> | undefined;
 let pendingAuthStatus: "authenticated" | "reauth_required" | undefined;
-let pendingClientResolution:
-  | { status: "authenticated"; owner: string; workspace: string }
+let pendingLogout: { status: number; owner: string } | undefined;
+let pendingLogin: { status: number; owner: string } | undefined;
+let pendingAnonymousWorkspace: string | undefined;
+let pendingPeerCurrentOwner: string | undefined;
+type ObservedLoginSession = {
+  id: string;
+  owner: string;
+  user: string;
+  workspace: string;
+};
+let targetSession: ObservedLoginSession | undefined;
+let peerSession: ObservedLoginSession | undefined;
+const pendingClientResolutions: Array<
+  | ({ status: "authenticated" } & ObservedLoginSession)
   | { status: "anonymous"; workspace: string }
-  | undefined;
+> = [];
 
 const authentication = await createOAuthAuthentication({
   runtimeRootPath,
@@ -63,7 +82,35 @@ const authentication = await createOAuthAuthentication({
     async refreshCredential(credential) {
       const selected = refreshMode === "fail" ? failingProvider : provider;
       if (!selected.refreshCredential) throw new Error("Provider refresh is unavailable");
-      return selected.refreshCredential(credential);
+      let refreshed: ProviderCredential;
+      try {
+        refreshed = await selected.refreshCredential(credential);
+      } catch (error) {
+        if (activeRefreshOwner && refreshMode === "fail") {
+          producer.observeRefreshRejection(activeRefreshOwner);
+        }
+        throw error;
+      }
+      if (activeRefreshOwner) {
+        producer.observeRefreshGrant(
+          activeRefreshOwner,
+          credentialFingerprint(refreshed),
+        );
+      }
+      return refreshed;
+    },
+    async validateCredential(credential) {
+      if (!provider.validateCredential) {
+        throw new Error("Provider identity validation is unavailable");
+      }
+      const identity = await provider.validateCredential(credential);
+      if (activeRefreshOwner) {
+        producer.observeRefreshIdentity(
+          activeRefreshOwner,
+          identityFingerprint(identity),
+        );
+      }
+      return identity;
     },
   },
   credentialEncryptionKey: {
@@ -77,19 +124,21 @@ const observedAuthentication = {
   async resolveForClient(requestHeaders: IncomingHttpHeaders) {
     const resolution = await authentication.resolveForClient?.(requestHeaders);
     if (resolution?.authentication.status === "authenticated" && resolution.loginSessionId) {
-      pendingClientResolution = {
+      pendingClientResolutions.push({
         status: "authenticated",
+        id: resolution.loginSessionId,
         owner: ownerFingerprint(resolution.loginSessionId),
+        user: fingerprint(resolution.userContext.user.id),
         workspace: fingerprint(resolution.userContext.folderPath),
-      };
+      });
     } else if (
       resolution?.authentication.status === "anonymous" &&
       producer.currentKind() === "cancel"
     ) {
-      pendingClientResolution = {
+      pendingClientResolutions.push({
         status: "anonymous",
         workspace: fingerprint(resolution.userContext.folderPath),
-      };
+      });
     }
     return resolution ?? null;
   },
@@ -101,15 +150,24 @@ const observedAuthentication = {
       const value = body.json();
       if (url.pathname === "/api/auth/current" && req.method === "GET") {
         const status = value?.status;
-        if (status === "authenticated" || status === "reauth_required") {
-          pendingAuthStatus = status;
-          applyPendingAuthStatus();
+        if (
+          owner &&
+          (status === "authenticated" || status === "reauth_required")
+        ) {
+          if (owner === peerSession?.owner && status === "authenticated") {
+            pendingPeerCurrentOwner = owner;
+            void verifyPeerSession(owner);
+          } else {
+            pendingAuthStatus = status;
+            applyPendingAuthStatus(owner);
+          }
         }
       } else if (url.pathname === "/api/auth/logout" && req.method === "POST" && owner) {
-        producer.observeLogout(res.statusCode, owner);
+        pendingLogout = { status: res.statusCode, owner };
+        applyPendingAction();
       } else if (url.pathname === "/api/auth/login" && req.method === "GET" && owner) {
-        producer.observeLoginRedirect(res.statusCode, owner);
-        reportPhase();
+        pendingLogin = { status: res.statusCode, owner };
+        applyPendingAction();
       }
     });
     return handled;
@@ -142,6 +200,7 @@ const broker = new CredentialBroker({
       loginRecordFingerprint(id),
       credentialFingerprint(credentialBefore),
     );
+    activeRefreshOwner = owner;
     try {
       const refreshed = await authentication.refreshProviderCredential(id);
       if (!refreshed) {
@@ -157,9 +216,18 @@ const broker = new CredentialBroker({
     } catch {
       producer.observeRefreshFailure(owner);
       return null;
+    } finally {
+      activeRefreshOwner = undefined;
     }
   },
-  isAccessTokenInvalid: async response => producer.classifyProviderResponse(response.status),
+  isAccessTokenInvalid: async response => {
+    if (!provider.isAccessTokenInvalid) {
+      throw new Error("Provider invalid-token detection is unavailable");
+    }
+    const invalid = await provider.isAccessTokenInvalid(response);
+    producer.observeProviderResponse(response.status, invalid);
+    return invalid;
+  },
   requireReauthentication: async id => {
     await authentication.requireReauthentication(id);
     producer.observeReauthentication(ownerFingerprint(id));
@@ -187,27 +255,21 @@ controller = await startDanoServer(
   },
 );
 controller.subscribe(event => {
-  if (event.type !== "client_connect" || !pendingClientResolution) return;
-  const resolution = pendingClientResolution;
-  pendingClientResolution = undefined;
+  if (event.type !== "client_connect") return;
+  const resolution = pendingClientResolutions.shift();
+  if (!resolution) return;
   if (resolution.status === "authenticated") {
-    producer.observeAuthenticatedClient(
-      resolution.owner,
-      fingerprint(event.client.id),
-      resolution.workspace,
-    );
+    observeLoginSession(resolution, fingerprint(event.client.id));
   } else {
-    try {
-      producer.observeAnonymousClient(resolution.workspace);
-      reportPhase();
-    } catch {}
+    pendingAnonymousWorkspace = resolution.workspace;
+    applyPendingAction();
   }
 });
 
 console.log("[refresh acceptance] ready; login in the in-app Browser first");
-process.on("SIGUSR2", () => arm("success"));
-process.on("SIGURG", () => arm("cancel"));
-process.on("SIGWINCH", () => arm("confirm"));
+process.on("SIGUSR2", () => void arm("success"));
+process.on("SIGURG", () => void arm("cancel"));
+process.on("SIGWINCH", () => void arm("confirm"));
 const transcriptTimer = setInterval(() => void pollTranscript(), 250);
 transcriptTimer.unref();
 const stop = async () => {
@@ -219,11 +281,48 @@ const stop = async () => {
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 
-function arm(kind: "success" | "cancel" | "confirm") {
-  refreshMode = kind === "success" ? "normal" : "fail";
-  pendingAuthStatus = undefined;
-  const marker = producer.arm(kind);
-  console.log(`[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`);
+async function arm(kind: "success" | "cancel" | "confirm") {
+  try {
+    if (!targetSession || !peerSession) {
+      throw new Error("Two authenticated browser sessions are required");
+    }
+    const [targetCredential, peerCredential] = await Promise.all([
+      authentication.readProviderCredential(targetSession.id),
+      authentication.readProviderCredential(peerSession.id),
+    ]);
+    if (!targetCredential || !peerCredential) {
+      throw new Error("Both browser sessions need active Credentials");
+    }
+    if (!provider.validateCredential || !provider.revokeCredential) {
+      throw new Error("Provider validation and revocation are required");
+    }
+    const [targetIdentity, peerIdentity] = await Promise.all([
+      provider.validateCredential(targetCredential),
+      provider.validateCredential(peerCredential),
+    ]);
+    refreshMode = kind === "success" ? "normal" : "fail";
+    pendingAuthStatus = undefined;
+    pendingLogout = undefined;
+    pendingLogin = undefined;
+    pendingAnonymousWorkspace = undefined;
+    pendingPeerCurrentOwner = undefined;
+    const marker = producer.arm(kind);
+    producer.observePreflight(
+      targetSession.owner,
+      identityFingerprint(targetIdentity),
+      peerSession.owner,
+      identityFingerprint(peerIdentity),
+      loginCredentialRecordFingerprint(peerSession.id),
+      credentialFingerprint(peerCredential),
+    );
+    await provider.revokeCredential(targetCredential);
+    producer.observeRevocation(targetSession.owner);
+    console.log(
+      `[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`,
+    );
+  } catch {
+    console.error(`[refresh acceptance] ${kind} could not be armed`);
+  }
 }
 
 async function pollTranscript() {
@@ -233,18 +332,93 @@ async function pollTranscript() {
   if (!outcome) return;
   try {
     producer.observeTranscript(marker, outcome);
-    applyPendingAuthStatus();
+    if (targetSession) applyPendingAuthStatus(targetSession.owner);
+    applyPendingAction();
+    if (pendingPeerCurrentOwner) {
+      void verifyPeerSession(pendingPeerCurrentOwner);
+    }
     reportPhase();
   } catch {}
 }
 
-function applyPendingAuthStatus() {
+function applyPendingAuthStatus(owner: string) {
   if (!pendingAuthStatus) return;
   try {
-    producer.observeAuthCurrent(pendingAuthStatus);
+    producer.observeAuthCurrent(owner, pendingAuthStatus);
     pendingAuthStatus = undefined;
+    applyPendingAction();
     reportPhase();
   } catch {}
+}
+
+function applyPendingAction() {
+  try {
+    if (pendingLogout) {
+      producer.observeLogout(pendingLogout.status, pendingLogout.owner);
+      pendingLogout = undefined;
+    }
+    if (pendingLogin) {
+      producer.observeLoginRedirect(pendingLogin.status, pendingLogin.owner);
+      pendingLogin = undefined;
+    }
+    if (pendingAnonymousWorkspace) {
+      producer.observeAnonymousClient(pendingAnonymousWorkspace);
+      pendingAnonymousWorkspace = undefined;
+    }
+    reportPhase();
+  } catch {}
+}
+
+function observeLoginSession(
+  resolution: ObservedLoginSession,
+  client: string,
+) {
+  if (!targetSession || targetSession.id === resolution.id) {
+    targetSession = resolution;
+    producer.observeTargetClient(
+      resolution.owner,
+      client,
+      resolution.workspace,
+      resolution.user,
+    );
+    return;
+  }
+  if (!peerSession || peerSession.id === resolution.id) {
+    peerSession = resolution;
+    producer.observePeerClient(resolution.owner, client, resolution.user);
+    return;
+  }
+  if (resolution.id !== peerSession.id) {
+    targetSession = resolution;
+    producer.observeTargetClient(
+      resolution.owner,
+      client,
+      resolution.workspace,
+      resolution.user,
+    );
+  }
+}
+
+async function verifyPeerSession(owner: string) {
+  try {
+    if (!peerSession || owner !== peerSession.owner || !provider.validateCredential) {
+      return;
+    }
+    const credential = await authentication.readProviderCredential(peerSession.id);
+    if (!credential) return;
+    const identity = await provider.validateCredential(credential);
+    producer.observePeerCredential(
+      owner,
+      identityFingerprint(identity),
+      loginCredentialRecordFingerprint(peerSession.id),
+      credentialFingerprint(credential),
+    );
+    producer.observeAuthCurrent(owner, "authenticated");
+    pendingPeerCurrentOwner = undefined;
+    reportPhase();
+  } catch {
+    console.error("[refresh acceptance] peer Login Session verification failed");
+  }
 }
 
 function reportPhase() {
@@ -292,8 +466,24 @@ function cookieOwner(cookie: string | undefined): string | null {
 function loginRecordFingerprint(id: string): string {
   return fingerprint(readFileSync(join(runtimeRootPath, "auth", "login-sessions", `${ownerFingerprint(id)}.json`)));
 }
+function loginCredentialRecordFingerprint(id: string): string {
+  const record = JSON.parse(
+    readFileSync(
+      join(
+        runtimeRootPath,
+        "auth",
+        "login-sessions",
+        `${ownerFingerprint(id)}.json`,
+      ),
+      "utf8",
+    ),
+  ) as { credential?: unknown };
+  if (!record.credential) throw new Error("Login Session Credential is unavailable");
+  return fingerprint(JSON.stringify(record.credential));
+}
 function ownerFingerprint(value: string) { return fingerprint(value); }
 function credentialFingerprint(value: unknown) { return fingerprint(JSON.stringify(value)); }
+function identityFingerprint(value: ExternalIdentity) { return fingerprint(value.userId); }
 function fingerprint(value: string | Buffer) { return createHash("sha256").update(value).digest("hex"); }
 function relativePath(value: string) { const url = new URL(value, "https://invalid.test"); if (!value.startsWith("/") || value.startsWith("//") || url.origin !== "https://invalid.test") throw new Error("Provider path must be relative"); return `${url.pathname}${url.search}`; }
 function providerHeaders(value: string | undefined) {
@@ -310,3 +500,18 @@ function providerHeaders(value: string | undefined) {
   return parsed as Record<string, string>;
 }
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }
+function revocationOptions(endpoint: string) {
+  const transport = required("DANO_OAUTH_REVOCATION_TRANSPORT");
+  const configuredEndpoint = process.env.DANO_OAUTH_REVOCATION_ENDPOINT?.trim();
+  if (transport === "rfc7009") {
+    if (!configuredEndpoint) throw new Error("OAuth revocation endpoint is required");
+    return { transport, endpoint: configuredEndpoint } as const;
+  }
+  if (transport === "delete-query-basic") {
+    return {
+      transport,
+      endpoint: configuredEndpoint || endpoint,
+    } as const;
+  }
+  throw new Error("OAuth revocation transport is unsupported");
+}

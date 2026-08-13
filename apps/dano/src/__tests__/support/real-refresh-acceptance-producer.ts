@@ -18,37 +18,82 @@ interface ActivePhase {
   authCurrent: boolean;
   action: boolean;
   anonymous: boolean;
+  preflight: boolean;
+  revoked: boolean;
+  refreshGrant: boolean;
+  refreshRejected: boolean;
+  refreshIdentity: boolean;
+  retryAccepted: boolean;
+  peerCredential: boolean;
+  peerAuthCurrent: boolean;
+  targetIdentity?: string;
+  peerIdentity?: string;
+  peerOwner?: string;
+  peerRecord?: string;
+  peerCredentialBefore?: string;
   recordBefore?: string;
   credentialBefore?: string;
 }
 
 export class RealRefreshAcceptanceProducer {
-  private authenticated?: { owner: string; client: string; workspace: string };
+  private target?: {
+    owner: string;
+    client: string;
+    workspace: string;
+    user: string;
+  };
+  private peer?: { owner: string; client: string; user: string };
   private phase?: ActivePhase;
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  observeAuthenticatedClient(owner: string, client: string, workspace: string) {
+  observeTargetClient(
+    owner: string,
+    client: string,
+    workspace: string,
+    user: string,
+  ) {
     requireOpaque(owner, "Credential owner");
     requireOpaque(client, "Browser Client");
     requireOpaque(workspace, "Runtime Workspace");
-    this.authenticated = { owner, client, workspace };
+    requireOpaque(user, "User");
+    if (this.phase && this.phaseStatus().status !== "passed") {
+      if (this.target?.owner !== owner) {
+        throw new Error("Cannot replace the target Login Session during a phase");
+      }
+    }
+    this.target = { owner, client, workspace, user };
+  }
+
+  observePeerClient(owner: string, client: string, user: string) {
+    requireOpaque(owner, "Peer Credential owner");
+    requireOpaque(client, "Peer Browser Client");
+    requireOpaque(user, "Peer User");
+    if (
+      !this.target ||
+      owner === this.target.owner ||
+      client === this.target.client ||
+      user !== this.target.user
+    ) {
+      throw new Error("Peer must be another Login Session for the same User");
+    }
+    this.peer = { owner, client, user };
   }
 
   arm(kind: PhaseKind): string {
     if (this.phase && this.phaseStatus().status !== "passed") {
       throw new Error("The previous refresh acceptance phase is incomplete");
     }
-    if (!this.authenticated) {
-      throw new Error("An authenticated Browser Client is required");
+    if (!this.target || !this.peer) {
+      throw new Error("Two same-User authenticated Login Sessions are required");
     }
     const marker =
       `refresh-${kind}-${this.now()}-${randomBytes(8).toString("hex")}`;
     this.phase = {
       kind,
       marker,
-      owner: this.authenticated.owner,
-      authenticatedWorkspace: this.authenticated.workspace,
+      owner: this.target.owner,
+      authenticatedWorkspace: this.target.workspace,
       invalidated: false,
       refreshStarted: false,
       refreshFinished: false,
@@ -57,23 +102,78 @@ export class RealRefreshAcceptanceProducer {
       authCurrent: false,
       action: false,
       anonymous: false,
+      preflight: false,
+      revoked: false,
+      refreshGrant: false,
+      refreshRejected: false,
+      refreshIdentity: false,
+      retryAccepted: false,
+      peerCredential: false,
+      peerAuthCurrent: false,
     };
     return marker;
   }
 
-  classifyProviderResponse(status: number): boolean {
+  observePreflight(
+    owner: string,
+    targetIdentity: string,
+    peerOwner: string,
+    peerIdentity: string,
+    peerRecord: string,
+    peerCredential: string,
+  ) {
+    const phase = this.requiredPhase();
+    this.sameOwner(owner, phase);
+    if (peerOwner !== this.peer?.owner || peerOwner === owner) {
+      throw new Error("Peer Login Session is invalid");
+    }
+    for (const [value, label] of [
+      [targetIdentity, "Target identity"],
+      [peerIdentity, "Peer identity"],
+      [peerRecord, "Peer Credential record"],
+      [peerCredential, "Peer Credential content"],
+    ] as const) {
+      requireOpaque(value, label);
+    }
+    if (targetIdentity !== peerIdentity) {
+      throw new Error("Peer Login Session must belong to the same User");
+    }
+    phase.preflight = true;
+    phase.targetIdentity = targetIdentity;
+    phase.peerIdentity = peerIdentity;
+    phase.peerOwner = peerOwner;
+    phase.peerRecord = peerRecord;
+    phase.peerCredentialBefore = peerCredential;
+  }
+
+  observeRevocation(owner: string) {
+    const phase = this.requiredPhase();
+    this.sameOwner(owner, phase);
+    if (!phase.preflight || phase.revoked) {
+      throw new Error("Provider revocation is out of order");
+    }
+    phase.revoked = true;
+  }
+
+  observeProviderResponse(status: number, accessTokenInvalid: boolean) {
     const phase = this.requiredPhase();
     if (!Number.isInteger(status) || status < 100 || status > 599) {
       throw new Error("Provider response status is invalid");
     }
     if (!phase.invalidated) {
+      if (!phase.revoked || !accessTokenInvalid) {
+        throw new Error("A real provider revocation response is required");
+      }
       phase.invalidated = true;
-      return true;
+      return;
     }
     if (!phase.refreshFinished) {
       throw new Error("Provider retry occurred before refresh completed");
     }
-    return status === 401;
+    if (phase.kind !== "success" || accessTokenInvalid) {
+      throw new Error("Provider retry did not accept the refreshed Credential");
+    }
+    phase.retryAccepted = true;
   }
 
   observeRefreshStart(
@@ -105,6 +205,8 @@ export class RealRefreshAcceptanceProducer {
     if (
       phase.kind !== "success" ||
       !phase.refreshStarted ||
+      !phase.refreshGrant ||
+      !phase.refreshIdentity ||
       phase.recordBefore === recordAfter ||
       phase.credentialBefore === credentialAfter
     ) {
@@ -113,13 +215,50 @@ export class RealRefreshAcceptanceProducer {
     phase.refreshFinished = true;
   }
 
+  observeRefreshGrant(owner: string, credentialAfter: string) {
+    const phase = this.requiredPhase();
+    this.sameOwner(owner, phase);
+    requireOpaque(credentialAfter, "Refreshed Credential content");
+    if (
+      phase.kind !== "success" ||
+      !phase.refreshStarted ||
+      phase.credentialBefore === credentialAfter
+    ) {
+      throw new Error("Real refresh grant is invalid or out of order");
+    }
+    phase.refreshGrant = true;
+  }
+
+  observeRefreshIdentity(owner: string, identity: string) {
+    const phase = this.requiredPhase();
+    this.sameOwner(owner, phase);
+    requireOpaque(identity, "Refreshed identity");
+    if (!phase.refreshGrant || identity !== phase.targetIdentity) {
+      throw new Error("Refreshed Credential identity changed");
+    }
+    phase.refreshIdentity = true;
+  }
+
   observeRefreshFailure(owner: string) {
     const phase = this.requiredPhase();
     this.sameOwner(owner, phase);
-    if (phase.kind === "success" || !phase.refreshStarted) {
+    if (
+      phase.kind === "success" ||
+      !phase.refreshStarted ||
+      !phase.refreshRejected
+    ) {
       throw new Error("Refresh failure is out of order");
     }
     phase.refreshFinished = true;
+  }
+
+  observeRefreshRejection(owner: string) {
+    const phase = this.requiredPhase();
+    this.sameOwner(owner, phase);
+    if (phase.kind === "success" || !phase.refreshStarted || phase.refreshGrant) {
+      throw new Error("Real refresh rejection is invalid or out of order");
+    }
+    phase.refreshRejected = true;
   }
 
   observeReauthentication(owner: string) {
@@ -143,8 +282,38 @@ export class RealRefreshAcceptanceProducer {
     phase.transcript = true;
   }
 
-  observeAuthCurrent(status: "authenticated" | "reauth_required") {
+  observePeerCredential(
+    owner: string,
+    identity: string,
+    record: string,
+    credential: string,
+  ) {
     const phase = this.requiredPhase();
+    if (
+      !phase.refreshFinished ||
+      owner !== phase.peerOwner ||
+      identity !== phase.peerIdentity ||
+      record !== phase.peerRecord ||
+      credential !== phase.peerCredentialBefore
+    ) {
+      throw new Error("Peer Login Session or Credential changed");
+    }
+    phase.peerCredential = true;
+  }
+
+  observeAuthCurrent(
+    owner: string,
+    status: "authenticated" | "reauth_required",
+  ) {
+    const phase = this.requiredPhase();
+    if (owner === phase.peerOwner) {
+      if (!phase.peerCredential || status !== "authenticated") {
+        throw new Error("Peer public auth state is invalid or out of order");
+      }
+      phase.peerAuthCurrent = true;
+      return;
+    }
+    this.sameOwner(owner, phase);
     const expected =
       phase.kind === "success" ? "authenticated" : "reauth_required";
     if (status !== expected || !phase.transcript) {
@@ -192,19 +361,30 @@ export class RealRefreshAcceptanceProducer {
     const phase = this.requiredPhase();
     const passed =
       phase.kind === "success"
-        ? phase.refreshFinished && phase.transcript && phase.authCurrent
+        ? phase.refreshFinished &&
+          phase.refreshGrant &&
+          phase.refreshIdentity &&
+          phase.retryAccepted &&
+          phase.transcript &&
+          phase.authCurrent &&
+          phase.peerCredential &&
+          phase.peerAuthCurrent
         : phase.kind === "cancel"
           ? phase.refreshFinished &&
             phase.reauthentication &&
             phase.transcript &&
             phase.authCurrent &&
             phase.action &&
-            phase.anonymous
+            phase.anonymous &&
+            phase.peerCredential &&
+            phase.peerAuthCurrent
           : phase.refreshFinished &&
             phase.reauthentication &&
             phase.transcript &&
             phase.authCurrent &&
-            phase.action;
+            phase.action &&
+            phase.peerCredential &&
+            phase.peerAuthCurrent;
     return { kind: phase.kind, status: passed ? "passed" : "pending" };
   }
 
