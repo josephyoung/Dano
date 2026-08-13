@@ -236,6 +236,33 @@ TLS terminator); do not treat the HTTP example as OAuth acceptance. In the
 HTTPS browser flow, verify the login entry in the left Menu, clean callback
 return, authenticated Menu, logout, and the new usable Anonymous User.
 
+### Real OAuth User isolation release gate
+
+Use one Dano callback for both controlled test accounts. Authenticate slot A in
+the Codex in-app Browser and slot B in Chrome against the same running Dano
+origin; a second callback address or second Dano frontend is not part of this
+gate.
+
+Prepare a fresh evidence contract before the browser run:
+
+```bash
+pnpm run test:auth-real-users -- prepare /path/to/real-user-evidence.json
+```
+
+From each browser context, capture only public Dano HTTP/Bridge observations.
+Prove that each account can use its own Client, Agent Session, transcript,
+Runtime Workspace, upload, and preference, then probe the counterpart's exact
+resources in both directions and record the rejected results. Fingerprint
+opaque identifiers before recording them; never copy provider addresses,
+credentials, Cookies, raw identifiers, response bodies, or response headers
+into the evidence.
+
+Verify the completed evidence from the same run:
+
+```bash
+pnpm run test:auth-real-users -- verify /path/to/real-user-evidence.json
+```
+
 ### Real provider Skill/Broker release gate
 
 Use the test-only `provider-broker-release-gate` Skill to prove that a real Pi

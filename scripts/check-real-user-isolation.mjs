@@ -30,7 +30,7 @@ function main(argv) {
     throw new Error(errors.join("\n"));
   }
   process.stdout.write(
-    "Real OAuth User isolation evidence contract passed: the in-app Browser observations describe two isolated canonical User owners at the Dano HTTP/Bridge boundary.\n",
+    "Real OAuth User isolation evidence contract passed: the in-app Browser and Chrome observations describe two isolated canonical User owners using one shared Dano callback at the Dano HTTP/Bridge boundary.\n",
   );
 }
 
@@ -69,14 +69,33 @@ function readManifest(path) {
   assertRecord(value.releaseGate, "manifest.releaseGate");
   assertExactKeys(
     value.releaseGate,
-    ["browser", "publicSeam", "browserInput", "automatedContract"],
+    [
+      "browserContexts",
+      "callbackMode",
+      "publicSeam",
+      "browserInput",
+      "automatedContract",
+    ],
     "manifest.releaseGate",
   );
+  assertRecord(
+    value.releaseGate.browserContexts,
+    "manifest.releaseGate.browserContexts",
+  );
+  assertExactKeys(
+    value.releaseGate.browserContexts,
+    ["a", "b"],
+    "manifest.releaseGate.browserContexts",
+  );
   if (
-    value.releaseGate.browser !== "codex-in-app-browser" ||
+    value.releaseGate.browserContexts.a !== "codex-in-app-browser" ||
+    value.releaseGate.browserContexts.b !== "chrome" ||
+    value.releaseGate.callbackMode !== "single-shared-dano-callback" ||
     value.releaseGate.publicSeam !== "Dano HTTP/Bridge"
   ) {
-    throw new Error("manifest.releaseGate must use the in-app Browser and Dano HTTP/Bridge seam");
+    throw new Error(
+      "manifest.releaseGate must use the in-app Browser for slot a, Chrome for slot b, one shared Dano callback, and the Dano HTTP/Bridge seam",
+    );
   }
   for (const field of ["browserInput", "automatedContract"]) {
     if (
@@ -129,7 +148,8 @@ function prepareEvidence(path, manifest) {
     preparedAt,
     completedAt: null,
     capture: {
-      browser: "codex-in-app-browser",
+      browserContexts: manifest.releaseGate.browserContexts,
+      callbackMode: manifest.releaseGate.callbackMode,
       seam: "Dano HTTP/Bridge",
     },
     accounts: manifest.accounts.map(account => ({
@@ -216,7 +236,7 @@ function verifyEvidence(value, manifest, rawEvidence) {
   ) {
     errors.push("evidence.completedAt must not precede preparedAt");
   }
-  verifyCapture(value.capture, errors);
+  verifyCapture(value.capture, manifest.releaseGate, errors);
   if (!Array.isArray(value.accounts) || value.accounts.length !== 2) {
     errors.push("evidence.accounts must contain exactly two browser observations");
     return errors;
@@ -269,16 +289,39 @@ function verifyCrossTargets(account, counterpart, path, errors) {
   }
 }
 
-function verifyCapture(value, errors) {
+function verifyCapture(value, releaseGate, errors) {
   if (!isRecord(value)) {
     errors.push("evidence.capture must be an object");
     return;
   }
-  collectExactKeys(value, ["browser", "seam"], "evidence.capture", errors);
+  collectExactKeys(
+    value,
+    ["browserContexts", "callbackMode", "seam"],
+    "evidence.capture",
+    errors,
+  );
+  if (!isRecord(value.browserContexts)) {
+    errors.push("evidence.capture.browserContexts must be an object");
+  } else {
+    collectExactKeys(
+      value.browserContexts,
+      ["a", "b"],
+      "evidence.capture.browserContexts",
+      errors,
+    );
+    for (const slot of ["a", "b"]) {
+      collectEqual(
+        value.browserContexts[slot],
+        releaseGate.browserContexts[slot],
+        `evidence.capture.browserContexts.${slot}`,
+        errors,
+      );
+    }
+  }
   collectEqual(
-    value.browser,
-    "codex-in-app-browser",
-    "evidence.capture.browser",
+    value.callbackMode,
+    releaseGate.callbackMode,
+    "evidence.capture.callbackMode",
     errors,
   );
   collectEqual(value.seam, "Dano HTTP/Bridge", "evidence.capture.seam", errors);

@@ -1,10 +1,16 @@
 {
   "schemaVersion": 1,
   "releaseGate": {
-    "browser": "codex-in-app-browser",
+    "browserContexts": {
+      "a": "codex-in-app-browser",
+      "b": "chrome"
+    },
+    "callbackMode": "single-shared-dano-callback",
     "publicSeam": "Dano HTTP/Bridge",
     "browserInput": [
-      "two authenticated browser contexts",
+      "slot a authenticated in the Codex in-app Browser",
+      "slot b authenticated in Chrome",
+      "both slots use the same Dano callback",
       "own and cross resource observations"
     ],
     "automatedContract": [

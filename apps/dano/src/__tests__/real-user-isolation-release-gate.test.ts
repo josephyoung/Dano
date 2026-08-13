@@ -38,7 +38,8 @@ describe("real OAuth User isolation release gate", () => {
         preference: string;
       }>;
       releaseGate: {
-        browser: string;
+        browserContexts: Record<string, string>;
+        callbackMode: string;
         publicSeam: string;
         browserInput: string[];
         automatedContract: string[];
@@ -61,10 +62,16 @@ describe("real OAuth User isolation release gate", () => {
         },
       ]);
     expect(manifest.releaseGate).toEqual({
-      browser: "codex-in-app-browser",
+      browserContexts: {
+        a: "codex-in-app-browser",
+        b: "chrome",
+      },
+      callbackMode: "single-shared-dano-callback",
       publicSeam: "Dano HTTP/Bridge",
       browserInput: [
-        "two authenticated browser contexts",
+        "slot a authenticated in the Codex in-app Browser",
+        "slot b authenticated in Chrome",
+        "both slots use the same Dano callback",
         "own and cross resource observations",
       ],
       automatedContract: [
@@ -109,10 +116,23 @@ describe("real OAuth User isolation release gate", () => {
         marker: string;
         observations: unknown;
       }>;
+      capture: {
+        browserContexts: Record<string, string>;
+        callbackMode: string;
+        seam: string;
+      };
     };
 
     expect(evidence.schemaVersion).toBe(1);
     expect(evidence.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(evidence.capture).toEqual({
+      browserContexts: {
+        a: "codex-in-app-browser",
+        b: "chrome",
+      },
+      callbackMode: "single-shared-dano-callback",
+      seam: "Dano HTTP/Bridge",
+    });
     expect(evidence.accounts.map(account => account.username)).toEqual([
       "dano424a",
       "dano424b",
