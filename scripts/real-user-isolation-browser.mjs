@@ -108,11 +108,20 @@ export async function run() {
       query: config.marker,
       includeActive: true,
     });
-    const sessionMarkerCount = Array.isArray(ownSessions.data?.sessions)
-      ? ownSessions.data.sessions.filter(session =>
-          session.path === sessionPath || session.sessionPath === sessionPath,
-        ).length
-      : 0;
+    const listedSessionPaths = Array.isArray(ownSessions.data?.sessions)
+      ? ownSessions.data.sessions.map(session =>
+          typeof session.path === "string"
+            ? session.path
+            : typeof session.sessionPath === "string"
+              ? session.sessionPath
+              : "",
+        )
+      : [];
+    const sessionMarkerCount = listedSessionPaths.filter(
+      listed => listed === sessionPath,
+    ).length;
+    status.listedSessionCount = listedSessionPaths.length;
+    status.sessionWasListed = sessionMarkerCount === 1;
 
     const raw = {
       clientId,
