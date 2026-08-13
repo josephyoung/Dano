@@ -462,7 +462,9 @@ function validateCrossCapture(value, peerRaw) {
     requireEqual(value[field], "rejected", `cross.${field}`);
   }
   requireEqual(value.uploadPreviewHttpStatus, 403, "cross.uploadPreviewHttpStatus");
-  requireEqual(value.preferenceReadHttpStatus, 403, "cross.preferenceReadHttpStatus");
+  if (![403, 404].includes(value.preferenceReadHttpStatus)) {
+    throw new Error("cross.preferenceReadHttpStatus must fail closed");
+  }
   requireEqual(value.preferenceRestored, true, "cross.preferenceRestored");
   return { ...value };
 }
@@ -653,7 +655,9 @@ function verifySanitizedCross(value, path, errors) {
     collectEqual(value?.[field], "rejected", `${path}.${field}`, errors);
   }
   collectEqual(value?.uploadPreviewHttpStatus, 403, `${path}.uploadPreviewHttpStatus`, errors);
-  collectEqual(value?.preferenceReadHttpStatus, 403, `${path}.preferenceReadHttpStatus`, errors);
+  if (![403, 404].includes(value?.preferenceReadHttpStatus)) {
+    errors.push(`${path}.preferenceReadHttpStatus must fail closed`);
+  }
   collectEqual(value?.preferenceRestored, true, `${path}.preferenceRestored`, errors);
 }
 

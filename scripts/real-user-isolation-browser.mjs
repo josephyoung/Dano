@@ -203,6 +203,7 @@ export async function run() {
     const preferenceReadHttpStatus = await danoStatus(
       `/api/clients/${encodeURIComponent(peer.clientId)}/preferences/theme`,
     );
+    status.preferenceReadHttpStatus = preferenceReadHttpStatus;
 
     status.phase = "restore-preference";
     await danoJson(preferenceEndpoint, {
