@@ -2909,6 +2909,27 @@ async function startDefaultWorkspaceSession(
   defaultSessionStartedForPage = true;
 
   try {
+    const sessionsResp = await loadWorkspaceSessions({
+      workspacePath,
+      limit: 1,
+      merge: "replace",
+    });
+    const sessionData = sessionsResp.success
+      ? (sessionsResp.data as { sessions?: SessionEntry[] } | undefined)
+      : undefined;
+    const existingSession = sessionData?.sessions?.[0];
+    if (existingSession) {
+      const switchResp = await switchSession(existingSession.path);
+      await Promise.all(bootstrap);
+      if (!switchResp.success) await restoreLiveSessionState();
+      return true;
+    }
+    if (!sessionsResp.success) {
+      await Promise.all(bootstrap);
+      await restoreLiveSessionState();
+      return true;
+    }
+
     const registerResp = await registerWorkspace(workspacePath);
     if (!registerResp.success) {
       pushNotification(
