@@ -11,6 +11,14 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
+import { isDeepStrictEqual } from "node:util";
+
+const appRequire = createRequire(
+  new URL("../apps/dano/package.json", import.meta.url),
+);
+const jiti = appRequire("jiti").createJiti(import.meta.url);
+let normalizeAskUserQuestionCardRequest;
 
 const root = resolve(import.meta.dirname, "..");
 const fixtureDir = join(root, "scripts/fixtures/provider-broker-release-gate");
@@ -767,18 +775,22 @@ function turnExecution(entries, markerValue, providerPath) {
   ) return null;
   const questionCall = relevantCalls[0].call;
   const questionArguments = questionCall.arguments ?? questionCall.args;
+  const questionCard = normalizeQuestionCard(questionArguments);
   if (
     !record(questionArguments) ||
     Object.keys(questionArguments).length !== 5 ||
-    questionArguments.question !== `Continue provider release gate ${markerValue}?` ||
-    questionArguments.inputType !== "radio" ||
-    !booleanLike(questionArguments.required, true) ||
-    questionArguments.default !== "continue" ||
-    JSON.stringify(questionArguments.options) !==
-      JSON.stringify([
+    !isDeepStrictEqual(questionCard, {
+      batch: false,
+      id: "answer",
+      kind: "single",
+      question: `Continue provider release gate ${markerValue}?`,
+      options: [
         { id: "continue", label: "Continue" },
         { id: "stop", label: "Stop" },
-      ])
+      ],
+      required: true,
+      default: "continue",
+    })
   ) return null;
   const providerArguments =
     relevantCalls[1].call.arguments ?? relevantCalls[1].call.args;
@@ -815,6 +827,13 @@ function turnExecution(entries, markerValue, providerPath) {
     questionResultAt: isoTimestamp(questionResult.message),
     providerResultAt: isoTimestamp(providerResult.message),
   };
+}
+
+function normalizeQuestionCard(argumentsValue) {
+  normalizeAskUserQuestionCardRequest ??= jiti(
+    "../apps/dano/src/bridge/ask-user-question.ts",
+  ).normalizeAskUserQuestionCardRequest;
+  return normalizeAskUserQuestionCardRequest(argumentsValue);
 }
 
 function isoTimestamp(message) {
@@ -929,12 +948,6 @@ function validMarker(value) {
 
 function record(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function booleanLike(value, expected) {
-  if (value === expected) return true;
-  if (typeof value !== "string") return false;
-  return value.trim().toLowerCase() === String(expected);
 }
 
 function equal(actual, expected, path, errors) {

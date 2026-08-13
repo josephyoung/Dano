@@ -204,7 +204,16 @@ describe("real provider Skill release gate", () => {
     );
     expect(audit.status).toBe(0);
     expect(audit.stdout).toContain("AUDIT ONLY (NOT LIVE COLLECTOR PASS)");
-  });
+  }, 10_000);
+
+  it("accepts the model-compatible question arguments emitted by the live Pi transcript", async () => {
+    const fixture = await completeCapture({
+      sameUser: true,
+      compatibleQuestionArguments: true,
+    });
+
+    expect(fixture.output()).toContain("LIVE HTTP/SSE/Pi COLLECTOR PASS:");
+  }, 10_000);
 
   it("rejects different Users before writing a live audit record", async () => {
     const fixture = await completeCapture({ sameUser: false, expectFailure: true });
@@ -248,6 +257,7 @@ describe("real provider Skill release gate", () => {
 async function completeCapture(options: {
   sameUser: boolean;
   differentModel?: boolean;
+  compatibleQuestionArguments?: boolean;
   probeEarlyLogout?: boolean;
   expectFailure?: boolean;
 }) {
@@ -256,7 +266,11 @@ async function completeCapture(options: {
   const transcriptPath = path.join(root, "shared-session.jsonl");
   const capture = await startCapture(evidencePath);
   const config = await collectorJson(capture.urls.a, "/config");
-  writeTranscript(transcriptPath, config.markers);
+  writeTranscript(
+    transcriptPath,
+    config.markers,
+    options.compatibleQuestionArguments,
+  );
   await post(capture.urls.a, "/ready", {
     status: "authenticated",
     clientId: "raw-client-a",
@@ -344,12 +358,16 @@ async function startCapture(evidencePath: string) {
   };
 }
 
-function writeTranscript(transcriptPath: string, markers: Record<string, string>) {
+function writeTranscript(
+  transcriptPath: string,
+  markers: Record<string, string>,
+  compatibleQuestionArguments = false,
+) {
   const now = Date.now();
   const offsets = [
-    ...turnEntries(markers.aBefore, "success", [-10_000, -9_800, -9_600, -9_400, -9_200], now),
-    ...turnEntries(markers.aAfter, "authentication_required", [-7_000, -6_000, 1_000, 1_200, 1_400], now),
-    ...turnEntries(markers.bAfter, "success", [2_000, 2_200, 2_400, 2_600, 2_800], now),
+    ...turnEntries(markers.aBefore, "success", [-10_000, -9_800, -9_600, -9_400, -9_200], now, compatibleQuestionArguments),
+    ...turnEntries(markers.aAfter, "authentication_required", [-7_000, -6_000, 1_000, 1_200, 1_400], now, compatibleQuestionArguments),
+    ...turnEntries(markers.bAfter, "success", [2_000, 2_200, 2_400, 2_600, 2_800], now, compatibleQuestionArguments),
   ];
   fs.writeFileSync(
     transcriptPath,
@@ -357,7 +375,7 @@ function writeTranscript(transcriptPath: string, markers: Record<string, string>
   );
 }
 
-function turnEntries(marker: string, outcome: "success" | "authentication_required", offsets: number[], base: number) {
+function turnEntries(marker: string, outcome: "success" | "authentication_required", offsets: number[], base: number, compatibleQuestionArguments = false) {
   const questionId = `question-${marker}`;
   const providerId = `provider-${marker}`;
   const details = outcome === "success"
@@ -369,7 +387,7 @@ function turnEntries(marker: string, outcome: "success" | "authentication_requir
   });
   return [
     message({ role: "user", content: `/skill:provider-broker-release-gate ${marker}` }, offsets[0]),
-    message({ role: "assistant", content: [{ type: "toolCall", id: questionId, name: "ask_user_question", arguments: { question: `Continue provider release gate ${marker}?`, inputType: "radio", options: [{ id: "continue", label: "Continue" }, { id: "stop", label: "Stop" }], required: true, default: "continue" } }] }, offsets[1]),
+    message({ role: "assistant", content: [{ type: "toolCall", id: questionId, name: "ask_user_question", arguments: { question: `Continue provider release gate ${marker}?`, inputType: "radio", options: compatibleQuestionArguments ? JSON.stringify([{ id: "continue", label: "Continue" }, { id: "stop", label: "Stop" }]) : [{ id: "continue", label: "Continue" }, { id: "stop", label: "Stop" }], required: compatibleQuestionArguments ? "True" : true, default: "continue" } }] }, offsets[1]),
     message({ role: "toolResult", toolCallId: questionId, toolName: "ask_user_question", content: [{ type: "text", text: "answered" }], details: { status: "answered", answer: "continue" }, isError: false }, offsets[2]),
     message({ role: "assistant", content: [{ type: "toolCall", id: providerId, name: "provider_request", arguments: { method: "GET", path: gateEnvironment.DANO_PROVIDER_ACCEPTANCE_PATH } }] }, offsets[3]),
     message({ role: "toolResult", toolCallId: providerId, toolName: "provider_request", content: [{ type: "text", text: JSON.stringify(details) }], details, isError: false }, offsets[4]),
