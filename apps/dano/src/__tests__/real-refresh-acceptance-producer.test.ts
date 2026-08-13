@@ -15,8 +15,10 @@ import {
   createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
+  isRefreshCurrentObservationAction,
   prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
+  resolveRefreshCurrentObservation,
   selectRefreshAcceptanceSessions,
   refreshAcceptanceControlPage,
 } from "./support/real-refresh-acceptance-producer.js";
@@ -87,7 +89,42 @@ describe("real refresh acceptance producer", () => {
     expect(page).toContain("设为 Peer 浏览器");
     expect(page).toContain('name="role" value="target"');
     expect(page).toContain('name="role" value="peer"');
+    expect(page).toContain('action="?action=target-current"');
+    expect(page).toContain('action="?action=peer-current"');
     expect(page).not.toMatch(/cookie|session|token|userId/i);
+  });
+
+  it("binds a visible auth-state observation only to its explicit browser role", () => {
+    expect(isRefreshCurrentObservationAction("target-current")).toBe(true);
+    expect(isRefreshCurrentObservationAction("peer-current")).toBe(true);
+    expect(isRefreshCurrentObservationAction(null)).toBe(false);
+    expect(
+      resolveRefreshCurrentObservation({
+        action: "target-current",
+        loginSessionId: "iab-login",
+        status: "authenticated",
+        explicitTargetSessionId: "iab-login",
+        explicitPeerSessionId: "chrome-login",
+      }),
+    ).toEqual({ role: "target", status: "authenticated" });
+    expect(
+      resolveRefreshCurrentObservation({
+        action: "peer-current",
+        loginSessionId: "chrome-login",
+        status: "authenticated",
+        explicitTargetSessionId: "iab-login",
+        explicitPeerSessionId: "chrome-login",
+      }),
+    ).toEqual({ role: "peer", status: "authenticated" });
+    expect(
+      resolveRefreshCurrentObservation({
+        action: "target-current",
+        loginSessionId: "chrome-login",
+        status: "authenticated",
+        explicitTargetSessionId: "iab-login",
+        explicitPeerSessionId: "chrome-login",
+      }),
+    ).toBeNull();
   });
 
   it("requires a fresh Client after each explicit browser role binding", () => {
@@ -102,6 +139,8 @@ describe("real refresh acceptance producer", () => {
       "observedLoginSessions.delete(resolution.loginSessionId)",
     );
     expect(source).toContain('res.setHeader("location", "/")');
+    expect(source).toContain("isRefreshCurrentObservationAction(action)");
+    expect(source).not.toContain('url.pathname === "/api/auth/current"');
     expect(source).not.toContain("stage=credential_missing");
   });
 
@@ -669,15 +708,154 @@ describe("real refresh acceptance producer", () => {
     const entries = skillTurn(marker, { ok: true, status: 200 });
 
     expect(
-      findRefreshAcceptanceTranscriptOutcome(entries, marker, "/api/safe"),
+      findRefreshAcceptanceTranscriptOutcome(
+        entries,
+        marker,
+        "/api/safe",
+        "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
+      ),
     ).toBe("success");
 
-    const question = entries[1] as {
+    const question = entries[3] as {
       message: { content: Array<{ arguments: { question: string } }> };
     };
     question.message.content[0]!.arguments.question = "Continue?";
     expect(
-      findRefreshAcceptanceTranscriptOutcome(entries, marker, "/api/safe"),
+      findRefreshAcceptanceTranscriptOutcome(
+        entries,
+        marker,
+        "/api/safe",
+        "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
+      ),
+    ).toBeNull();
+  });
+
+  it("requires the exact canonical Skill invocation without surrounding text", () => {
+    const marker = "refresh-success-1002-1234567890abcdef";
+    const expectedSkillPath =
+      "/runtime/agent/skills/provider-broker-release-gate/SKILL.md";
+    for (const content of [
+      `Please Use provider-broker-release-gate ${marker}`,
+      `Use provider-broker-release-gate ${marker} now`,
+      `/skill:provider-broker-release-gate ${marker}`,
+      `<skill name="provider-broker-release-gate">${marker}</skill>`,
+    ]) {
+      const entries = skillTurn(marker, { ok: true, status: 200 });
+      (entries[0] as { message: { content: string } }).message.content = content;
+      expect(
+        findRefreshAcceptanceTranscriptOutcome(
+          entries,
+          marker,
+          "/api/safe",
+          expectedSkillPath,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("allows exactly one successful canonical Skill read before the question", () => {
+    const marker = "refresh-success-1001-1234567890abcdef";
+    const expectedSkillPath =
+      "/runtime/agent/skills/provider-broker-release-gate/SKILL.md";
+    const entries = skillTurn(marker, { ok: true, status: 200 });
+
+    const duplicateRead = entries.slice();
+    duplicateRead.splice(3, 0, entries[1]!, entries[2]!);
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        duplicateRead,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBeNull();
+
+    const readAfterQuestion = entries.slice();
+    const [readCall, readResult] = readAfterQuestion.splice(1, 2);
+    readAfterQuestion.splice(4, 0, readCall!, readResult!);
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        readAfterQuestion,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBeNull();
+
+    const failedRead = structuredClone(entries);
+    (failedRead[2] as { message: { isError?: boolean } }).message.isError = true;
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        failedRead,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBeNull();
+
+    const missingReadStatus = structuredClone(entries);
+    delete (missingReadStatus[2] as { message: { isError?: boolean } }).message
+      .isError;
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        missingReadStatus,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBeNull();
+
+    const wrongPath = structuredClone(entries);
+    (
+      wrongPath[1] as {
+        message: { content: Array<{ arguments: { path: string } }> };
+      }
+    ).message.content[0]!.arguments.path =
+      "/runtime/other/skills/provider-broker-release-gate/SKILL.md";
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        wrongPath,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBeNull();
+
+    const extraTool: unknown[] = structuredClone(entries);
+    extraTool.splice(3, 0, {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "extra",
+            name: "bash",
+            arguments: { command: "true" },
+          },
+        ],
+      },
+    });
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        extraTool,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBeNull();
+
+    const contradictoryProvider = structuredClone(entries);
+    (
+      contradictoryProvider[6] as { message: { isError?: boolean } }
+    ).message.isError = true;
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        contradictoryProvider,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
     ).toBeNull();
   });
 
@@ -688,18 +866,30 @@ describe("real refresh acceptance producer", () => {
         [{ type: "message", message: { role: "user", content: marker } }],
         marker,
         "/api/safe",
+        "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
       ),
     ).toBeNull();
-    expect(
-      findRefreshAcceptanceTranscriptOutcome(
-        skillTurn(marker, {
+    const reauth = skillTurn(marker, {
           ok: false,
           error: { code: "reauth_required" },
-        }),
+        });
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        reauth,
         marker,
         "/api/safe",
+        "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
       ),
     ).toBe("reauth_required");
+    (reauth[6] as { message: { isError: boolean } }).message.isError = false;
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        reauth,
+        marker,
+        "/api/safe",
+        "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -787,7 +977,33 @@ function skillTurn(marker: string, providerDetails: object) {
       type: "message",
       message: {
         role: "user",
-        content: `<skill name="provider-broker-release-gate">${marker}</skill>`,
+        content: `Use provider-broker-release-gate ${marker}`,
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "skill-read",
+            name: "read",
+            arguments: {
+              path: "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
+            },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "skill-read",
+        toolName: "read",
+        content: "# Provider Broker Release Gate",
+        isError: false,
       },
     },
     {
@@ -844,6 +1060,8 @@ function skillTurn(marker: string, providerDetails: object) {
         toolCallId: "provider",
         toolName: "provider_request",
         details: providerDetails,
+        isError:
+          (providerDetails as { ok?: unknown }).ok === false,
       },
     },
   ];

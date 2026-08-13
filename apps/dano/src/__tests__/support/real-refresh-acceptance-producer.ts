@@ -1,5 +1,6 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { writeFile as writeFileAtomically } from "atomically";
 import type {
   OAuthProviderAdapter,
@@ -35,7 +36,34 @@ export interface RefreshAcceptanceSessionCandidate {
 const SKILL_NAME = "provider-broker-release-gate";
 
 export function refreshAcceptanceControlPage(): string {
-  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>刷新验收浏览器绑定</title><style>body{font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem}form{display:grid;gap:1rem}button{min-height:3rem;padding:0 1.5rem}</style><h1>刷新验收浏览器绑定</h1><p>请在内置浏览器选择目标，在 Chrome 选择 Peer。</p><form method="post"><button name="role" value="target">设为目标浏览器</button><button name="role" value="peer">设为 Peer 浏览器</button></form></html>`;
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>刷新验收浏览器绑定</title><style>body{font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem}form{display:grid;gap:1rem;margin-block:1rem}button{min-height:3rem;padding:0 1.5rem}</style><h1>刷新验收浏览器绑定</h1><p>请在内置浏览器选择目标，在 Chrome 选择 Peer。</p><form method="post"><button name="role" value="target">设为目标浏览器</button><button name="role" value="peer">设为 Peer 浏览器</button></form><h2>记录当前认证状态</h2><p>Skill 执行完成后，在各自浏览器点击对应按钮。</p><form method="post" action="?action=target-current"><button>记录目标认证状态</button></form><form method="post" action="?action=peer-current"><button>记录 Peer 认证状态</button></form></html>`;
+}
+
+export function resolveRefreshCurrentObservation(input: {
+  action: string | null;
+  loginSessionId: string;
+  status: "authenticated" | "reauth_required";
+  explicitTargetSessionId: string | undefined;
+  explicitPeerSessionId: string | undefined;
+}): { role: "target" | "peer"; status: "authenticated" | "reauth_required" } | null {
+  const role =
+    input.action === "target-current"
+      ? "target"
+      : input.action === "peer-current"
+        ? "peer"
+        : null;
+  if (!role) return null;
+  const expected =
+    role === "target"
+      ? input.explicitTargetSessionId
+      : input.explicitPeerSessionId;
+  return expected === input.loginSessionId
+    ? { role, status: input.status }
+    : null;
+}
+
+export function isRefreshCurrentObservationAction(action: string | null): boolean {
+  return action === "target-current" || action === "peer-current";
 }
 
 export type RefreshArmFailureCode =
@@ -688,15 +716,14 @@ export function findRefreshAcceptanceTranscriptOutcome(
   entries: readonly unknown[],
   marker: string,
   expectedPath: string,
+  expectedSkillPath: string,
 ): TranscriptOutcome | null {
   const start = entries.findIndex(entry => {
     const message = messageOf(entry);
     const text = textOf(message?.content);
     return (
       message?.role === "user" &&
-      text.includes(marker) &&
-      (text.includes(`skill name="${SKILL_NAME}"`) ||
-        text.includes(`/skill:${SKILL_NAME}`))
+      text.trim() === `Use ${SKILL_NAME} ${marker}`
     );
   });
   if (start < 0) return null;
@@ -711,37 +738,33 @@ export function findRefreshAcceptanceTranscriptOutcome(
   const calls = turn.flatMap((entry, index) =>
     toolCalls(messageOf(entry)).map(call => ({ call, index })),
   );
+  if (calls.length !== 3) return null;
+  const [skillRead, question, provider] = calls;
   if (
-    calls.some(({ call }) => {
-      if (call.name === "ask_user_question" || call.name === "provider_request") {
-        return false;
-      }
-      if (call.name !== "read") return true;
-      const args = callArguments(call);
-      return (
-        typeof args?.path !== "string" ||
-        !args.path.endsWith(`/skills/${SKILL_NAME}/SKILL.md`)
-      );
-    })
+    skillRead?.call.name !== "read" ||
+    question?.call.name !== "ask_user_question" ||
+    provider?.call.name !== "provider_request"
   ) {
     return null;
   }
 
-  const relevant = calls.filter(
-    ({ call }) =>
-      call.name === "ask_user_question" || call.name === "provider_request",
-  );
+  const readArgs = callArguments(skillRead.call);
+  const readResult = matchingResult(turn, skillRead.call.id, "read");
   if (
-    relevant.length !== 2 ||
-    relevant[0]?.call.name !== "ask_user_question" ||
-    relevant[1]?.call.name !== "provider_request"
+    !readArgs ||
+    Object.keys(readArgs).length !== 1 ||
+    typeof readArgs.path !== "string" ||
+    resolve(readArgs.path) !== resolve(expectedSkillPath) ||
+    !readResult ||
+    readResult.index <= skillRead.index ||
+    readResult.index >= question.index ||
+    readResult.message.isError !== false ||
+    !textOf(readResult.message.content).trim()
   ) {
     return null;
   }
 
-  const question = relevant[0];
   const questionArgs = callArguments(question.call);
-  const provider = relevant[1];
   const providerArgs = callArguments(provider.call);
   if (
     !questionArgs ||
@@ -777,7 +800,7 @@ export function findRefreshAcceptanceTranscriptOutcome(
     !questionResult ||
     questionResult.index <= question.index ||
     questionResult.index >= provider.index ||
-    questionResult.message.isError === true ||
+    questionResult.message.isError !== false ||
     record(questionResult.message.details)?.status !== "answered" ||
     record(questionResult.message.details)?.answer !== "continue" ||
     !providerResult ||
@@ -789,6 +812,7 @@ export function findRefreshAcceptanceTranscriptOutcome(
   const details = record(providerResult.message.details);
   if (
     details?.ok === true &&
+    providerResult.message.isError === false &&
     Number.isInteger(details.status) &&
     Number(details.status) >= 200 &&
     Number(details.status) < 300
@@ -796,7 +820,9 @@ export function findRefreshAcceptanceTranscriptOutcome(
     return "success";
   }
   const error = record(details?.error);
-  return details?.ok === false && error?.code === "reauth_required"
+  return details?.ok === false &&
+    providerResult.message.isError === true &&
+    error?.code === "reauth_required"
     ? "reauth_required"
     : null;
 }

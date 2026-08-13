@@ -16,8 +16,10 @@ import {
   createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
+  isRefreshCurrentObservationAction,
   prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
+  resolveRefreshCurrentObservation,
   selectRefreshAcceptanceSessions,
   refreshAcceptanceControlPage,
 } from "../apps/dano/src/__tests__/support/real-refresh-acceptance-producer.ts";
@@ -25,6 +27,12 @@ import {
 const runtimeRootPath = resolve(required("DANO_RUNTIME_DIR"));
 const sessionsRootPath = resolve(
   process.env.DANO_SESSIONS_ROOT?.trim() || join(runtimeRootPath, ".dano", "sessions"),
+);
+const expectedSkillPath = resolve(
+  process.env.PI_CODING_AGENT_DIR?.trim() || join(runtimeRootPath, ".pi", "agent"),
+  "skills",
+  "provider-broker-release-gate",
+  "SKILL.md",
 );
 const providerApiOrigin = new URL(required("DANO_OAUTH_API_ORIGIN")).origin;
 const providerPath = relativePath(required("DANO_PROVIDER_ACCEPTANCE_PATH"));
@@ -62,11 +70,9 @@ let activeRefreshStage:
   | Parameters<typeof classifyRefreshExecutionFailure>[0]
   | undefined;
 let controller: Awaited<ReturnType<typeof startDanoServer>> | undefined;
-let pendingAuthStatus: "authenticated" | "reauth_required" | undefined;
 let pendingLogout: { status: number; owner: string } | undefined;
 let pendingLogin: { status: number; owner: string } | undefined;
 let pendingAnonymousWorkspace: string | undefined;
-let pendingPeerCurrentOwner: string | undefined;
 type ObservedLoginSession = {
   id: string;
   owner: string;
@@ -166,6 +172,48 @@ const observedAuthentication = {
       }
       if (req.method === "POST") {
         const resolution = await authentication.resolveExisting?.(req.headers);
+        const action = url.searchParams.get("action");
+        const currentObservation =
+          resolution?.loginSessionId &&
+          (resolution.authentication.status === "authenticated" ||
+            resolution.authentication.status === "reauth_required")
+            ? resolveRefreshCurrentObservation({
+                action,
+                loginSessionId: resolution.loginSessionId,
+                status: resolution.authentication.status,
+                explicitTargetSessionId,
+                explicitPeerSessionId,
+              })
+            : null;
+        if (currentObservation) {
+          try {
+            const owner = ownerFingerprint(resolution!.loginSessionId!);
+            if (currentObservation.role === "peer") {
+              if (
+                currentObservation.status !== "authenticated" ||
+                !(await verifyPeerSession(owner))
+              ) {
+                throw new Error("Peer authentication observation failed");
+              }
+            } else {
+              producer.observeAuthCurrent(owner, currentObservation.status);
+              reportPhase();
+            }
+            res.statusCode = 303;
+            res.setHeader("location", "/api/acceptance/refresh");
+            res.end();
+            return true;
+          } catch {
+            res.statusCode = 409;
+            res.end();
+            return true;
+          }
+        }
+        if (isRefreshCurrentObservationAction(action)) {
+          res.statusCode = 409;
+          res.end();
+          return true;
+        }
         const role = url.searchParams.get("role") ?? await readControlRole(req);
         if (
           resolution?.authentication.status !== "authenticated" ||
@@ -187,25 +235,9 @@ const observedAuthentication = {
       }
     }
     const owner = cookieOwner(req.headers.cookie);
-    const body = captureResponse(res);
     const handled = await authentication.handle(req, res, url, lifecycle);
     queueMicrotask(() => {
-      const value = body.json();
-      if (url.pathname === "/api/auth/current" && req.method === "GET") {
-        const status = value?.status;
-        if (
-          owner &&
-          (status === "authenticated" || status === "reauth_required")
-        ) {
-          if (owner === peerSession?.owner && status === "authenticated") {
-            pendingPeerCurrentOwner = owner;
-            void verifyPeerSession(owner);
-          } else {
-            pendingAuthStatus = status;
-            applyPendingAuthStatus(owner);
-          }
-        }
-      } else if (url.pathname === "/api/auth/logout" && req.method === "POST" && owner) {
+      if (url.pathname === "/api/auth/logout" && req.method === "POST" && owner) {
         pendingLogout = { status: res.statusCode, owner };
         applyPendingAction();
       } else if (url.pathname === "/api/auth/login" && req.method === "GET" && owner) {
@@ -427,11 +459,9 @@ async function arm(kind: "success" | "cancel" | "confirm") {
       provider.validateCredential(peerCredential),
     ]);
     refreshMode = kind === "success" ? "normal" : "fail";
-    pendingAuthStatus = undefined;
     pendingLogout = undefined;
     pendingLogin = undefined;
     pendingAnonymousWorkspace = undefined;
-    pendingPeerCurrentOwner = undefined;
     marker = producer.arm(kind);
     producer.observePreflight(
       targetSession.owner,
@@ -487,24 +517,15 @@ async function pollTranscript() {
   const marker = producer.currentMarker();
   if (!marker) return;
   reportPhase();
-  const outcome = findTranscriptOutcome(sessionsRootPath, marker, providerPath);
+  const outcome = findTranscriptOutcome(
+    sessionsRootPath,
+    marker,
+    providerPath,
+    expectedSkillPath,
+  );
   if (!outcome) return;
   try {
     producer.observeTranscript(marker, outcome);
-    if (targetSession) applyPendingAuthStatus(targetSession.owner);
-    applyPendingAction();
-    if (pendingPeerCurrentOwner) {
-      void verifyPeerSession(pendingPeerCurrentOwner);
-    }
-    reportPhase();
-  } catch {}
-}
-
-function applyPendingAuthStatus(owner: string) {
-  if (!pendingAuthStatus) return;
-  try {
-    producer.observeAuthCurrent(owner, pendingAuthStatus);
-    pendingAuthStatus = undefined;
     applyPendingAction();
     reportPhase();
   } catch {}
@@ -565,13 +586,13 @@ function observeLoginSession(
   }
 }
 
-async function verifyPeerSession(owner: string) {
+async function verifyPeerSession(owner: string): Promise<boolean> {
   try {
     if (!peerSession || owner !== peerSession.owner || !provider.validateCredential) {
-      return;
+      return false;
     }
     const credential = await authentication.readProviderCredential(peerSession.id);
-    if (!credential) return;
+    if (!credential) return false;
     await provider.validateCredential(credential);
     producer.observePeerCredential(
       owner,
@@ -580,10 +601,11 @@ async function verifyPeerSession(owner: string) {
       credentialFingerprint(credential),
     );
     producer.observeAuthCurrent(owner, "authenticated");
-    pendingPeerCurrentOwner = undefined;
     reportPhase();
+    return true;
   } catch {
     console.error("[refresh acceptance] peer Login Session verification failed");
+    return false;
   }
 }
 
@@ -598,7 +620,7 @@ function reportPhase() {
   console.log(`[refresh acceptance] ${report}`);
 }
 
-function findTranscriptOutcome(root: string, marker: string, expectedPath: string): "success" | "reauth_required" | null {
+function findTranscriptOutcome(root: string, marker: string, expectedPath: string, skillPath: string): "success" | "reauth_required" | null {
   for (const file of jsonlFiles(root)) {
     const entries = readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).flatMap(line => {
       try { return [JSON.parse(line)]; } catch { return []; }
@@ -607,6 +629,7 @@ function findTranscriptOutcome(root: string, marker: string, expectedPath: strin
       entries,
       marker,
       expectedPath,
+      skillPath,
     );
     if (outcome) return outcome;
   }
@@ -619,15 +642,6 @@ function jsonlFiles(root: string): string[] {
     const target = join(root, entry.name);
     return entry.isDirectory() ? jsonlFiles(target) : entry.isFile() && entry.name.endsWith(".jsonl") ? [target] : [];
   });
-}
-
-function captureResponse(res: ServerResponse) {
-  const chunks: Buffer[] = [];
-  const originalWrite = res.write.bind(res);
-  const originalEnd = res.end.bind(res);
-  res.write = ((chunk: any, ...args: any[]) => { if (chunk) chunks.push(Buffer.from(chunk)); return originalWrite(chunk, ...args); }) as typeof res.write;
-  res.end = ((chunk?: any, ...args: any[]) => { if (chunk) chunks.push(Buffer.from(chunk)); return originalEnd(chunk, ...args); }) as typeof res.end;
-  return { json: () => { try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return null; } } };
 }
 
 function cookieOwner(cookie: string | undefined): string | null {
