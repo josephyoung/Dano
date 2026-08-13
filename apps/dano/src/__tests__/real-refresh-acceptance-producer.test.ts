@@ -73,6 +73,107 @@ describe("real refresh acceptance producer", () => {
     expect(observeProviderResponse).toHaveBeenNthCalledWith(2, 200, false);
   });
 
+  it("does not turn a rejected retry into a generic failure when gate observation rejects it", async () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.test",
+      authorizationEndpoint: "https://provider.test/authorize",
+      tokenEndpoint: "https://provider.test/token",
+      identityEndpoint: "https://provider.test/identity",
+      clientId: "fake-client",
+      clientSecret: "fake-secret",
+      scope: "user.read",
+    });
+    const refreshCredential = vi.fn(async () => ({
+      accessToken: "renewed-access",
+      refreshToken: "rotated-refresh",
+    }));
+    const requireReauthentication = vi.fn(async () => {});
+    const broker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "expired-access",
+        refreshToken: "initial-refresh",
+      }),
+      refreshCredential,
+      requireReauthentication,
+      isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, {
+        observeProviderResponse() {
+          throw new Error("retry was not accepted by the gate");
+        },
+      }),
+      fetch: vi.fn(async () => new Response('{"code":401,"data":null}')) as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    broker.observe("user-a", observed.session);
+    broker.queueAssistantTurn("user-a", "agent-a", "login-a");
+    observed.emit(userMessageEvent());
+    observed.emit({ type: "turn_start" } as AgentSessionEvent);
+
+    await expect(
+      broker.request("user-a", "agent-a", { method: "GET", path: "/safe" }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "reauth_required" } });
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(requireReauthentication).toHaveBeenCalledOnce();
+  });
+
+  it("irreversibly fails the evidence phase after an observation error", async () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 250);
+    observeTwoSessions(producer);
+    const marker = producer.arm("success");
+    producer.observePreflight(
+      "owner-a",
+      "user-a",
+      "owner-b",
+      "user-a",
+      "peer-record",
+      "peer-credential",
+    );
+    producer.observeInvalidAccessPrepared(
+      "owner-a",
+      "credential-before",
+      "credential-prepared",
+      "refresh-before",
+      "refresh-before",
+    );
+    const predicate = createObservedAccessTokenInvalid(
+      { isAccessTokenInvalid: async () => false },
+      producer,
+    );
+    await expect(predicate(new Response("available"))).resolves.toBe(false);
+
+    producer.observeProviderResponse(401, true);
+    producer.observeRefreshStart(
+      "owner-a",
+      "record-before",
+      "credential-prepared",
+    );
+    producer.observeRefreshGrant("owner-a", "credential-after");
+    producer.observeRefreshValidatedUser("owner-a", "user-a");
+    producer.observeRefreshSuccess(
+      "owner-a",
+      "record-after",
+      "credential-after",
+    );
+    producer.observeProviderResponse(200, false);
+    producer.observeTranscript(marker, "success");
+    producer.observeAuthCurrent("owner-a", "authenticated");
+    observePeerAfter(producer);
+
+    expect(producer.phaseStatus()).toEqual({ kind: "success", status: "pending" });
+  });
+
+  it("keeps the provider decision when no evidence phase is armed", async () => {
+    const producer = new RealRefreshAcceptanceProducer(() => 260);
+    const predicate = createObservedAccessTokenInvalid(
+      { isAccessTokenInvalid: async () => true },
+      producer,
+    );
+
+    await expect(predicate(new Response("expired", { status: 401 }))).resolves.toBe(
+      true,
+    );
+  });
+
   it("binds provider validation to the canonical User resolved for both browsers", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 500);
     observeTwoSessions(producer);

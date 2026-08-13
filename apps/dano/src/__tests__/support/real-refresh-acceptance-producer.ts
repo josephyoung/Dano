@@ -13,7 +13,10 @@ const SKILL_NAME = "provider-broker-release-gate";
 
 export function createObservedAccessTokenInvalid(
   provider: Pick<OAuthProviderAdapter, "isAccessTokenInvalid">,
-  observer: Pick<RealRefreshAcceptanceProducer, "observeProviderResponse">,
+  observer: Pick<
+    RealRefreshAcceptanceProducer,
+    "observeProviderResponse"
+  > & Partial<Pick<RealRefreshAcceptanceProducer, "observeEvidenceFailure">>,
 ): (response: Response) => Promise<boolean> {
   const isAccessTokenInvalid = provider.isAccessTokenInvalid;
   if (!isAccessTokenInvalid) {
@@ -21,7 +24,16 @@ export function createObservedAccessTokenInvalid(
   }
   return async response => {
     const invalid = await isAccessTokenInvalid(response);
-    observer.observeProviderResponse(response.status, invalid);
+    try {
+      observer.observeProviderResponse(response.status, invalid);
+    } catch {
+      try {
+        observer.observeEvidenceFailure?.();
+      } catch {
+        // The acceptance observer cannot change the provider decision.
+      }
+      // Evidence must fail closed without changing the Credential Broker result.
+    }
     return invalid;
   };
 }
@@ -99,6 +111,7 @@ interface ActivePhase {
   retryAccepted: boolean;
   peerCredential: boolean;
   peerAuthCurrent: boolean;
+  evidenceFailed: boolean;
   targetUser?: string;
   peerUser?: string;
   peerOwner?: string;
@@ -184,6 +197,7 @@ export class RealRefreshAcceptanceProducer {
       retryAccepted: false,
       peerCredential: false,
       peerAuthCurrent: false,
+      evidenceFailed: false,
     };
     return marker;
   }
@@ -276,6 +290,10 @@ export class RealRefreshAcceptanceProducer {
       throw new Error("Provider retry did not accept the refreshed Credential");
     }
     phase.retryAccepted = true;
+  }
+
+  observeEvidenceFailure() {
+    this.requiredPhase().evidenceFailed = true;
   }
 
   observeRefreshStart(
@@ -491,7 +509,10 @@ export class RealRefreshAcceptanceProducer {
             phase.action &&
             phase.peerCredential &&
             phase.peerAuthCurrent;
-    return { kind: phase.kind, status: passed ? "passed" : "pending" };
+    return {
+      kind: phase.kind,
+      status: passed && !phase.evidenceFailed ? "passed" : "pending",
+    };
   }
 
   currentMarker(): string | undefined {
