@@ -394,6 +394,7 @@ describe("OAuth authentication over HTTP", () => {
 
     await expect(authentication.resolveForClient!({})).resolves.toBeNull();
     await expect(authentication.resolveExisting!({})).resolves.toBeNull();
+    await expect(authentication.resolveAuthSessionState({})).resolves.toBeNull();
 
     const loginCookie = await completeLogin(origin);
     const headers = { cookie: loginCookie };
@@ -403,6 +404,8 @@ describe("OAuth authentication over HTTP", () => {
     const existingClientResolution = await authentication.resolveExisting!(
       headers,
     );
+    const authenticatedSessionState =
+      await authentication.resolveAuthSessionState(headers);
 
     expect(createdClientResolution).toEqual(existingClientResolution);
     expect(createdClientResolution).toMatchObject({
@@ -414,6 +417,11 @@ describe("OAuth authentication over HTTP", () => {
       userContext: {
         user: { username: "已登录用户" },
       },
+    });
+    expect(authenticatedSessionState).toMatchObject({
+      status: "authenticated",
+      loginSessionId: loginCookie.slice("dano_login=".length),
+      userContext: { user: { username: "已登录用户" } },
     });
 
     await authentication.requireReauthentication(
@@ -429,6 +437,12 @@ describe("OAuth authentication over HTTP", () => {
     await expect(
       authentication.resolveExisting!(headers),
     ).rejects.toMatchObject(reauthenticationError);
+    await expect(
+      authentication.resolveAuthSessionState(headers),
+    ).resolves.toEqual({
+      status: "reauth_required",
+      loginSessionId: loginCookie.slice("dano_login=".length),
+    });
   });
 
   it("uses openid-client for the confidential Authorization Code exchange without PKCE", async () => {
@@ -2626,6 +2640,9 @@ describe("OAuth authentication over HTTP", () => {
     );
     await authentication.requireReauthentication(loginSessionId);
     controller.requireReauthentication(loginSessionId);
+    await expect(
+      authentication.resolveAuthSessionState({ cookie: loginCookie }),
+    ).resolves.toEqual({ status: "reauth_required", loginSessionId });
 
     const logout = await fetch(`${origin}/api/auth/logout`, {
       method: "POST",

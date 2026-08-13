@@ -138,6 +138,7 @@ describe("real refresh acceptance producer", () => {
     expect(source).toContain(
       "observedLoginSessions.delete(resolution.loginSessionId)",
     );
+    expect(source).toContain("authentication.resolveAuthSessionState(req.headers)");
     expect(source).toContain('res.setHeader("location", "/")');
     expect(source).toContain("isRefreshCurrentObservationAction(action)");
     expect(source).not.toContain('url.pathname === "/api/auth/current"');

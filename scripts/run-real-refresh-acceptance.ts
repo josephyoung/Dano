@@ -171,23 +171,23 @@ const observedAuthentication = {
         return true;
       }
       if (req.method === "POST") {
-        const resolution = await authentication.resolveExisting?.(req.headers);
         const action = url.searchParams.get("action");
+        const authSessionState = isRefreshCurrentObservationAction(action)
+          ? await authentication.resolveAuthSessionState(req.headers)
+          : null;
         const currentObservation =
-          resolution?.loginSessionId &&
-          (resolution.authentication.status === "authenticated" ||
-            resolution.authentication.status === "reauth_required")
+          authSessionState
             ? resolveRefreshCurrentObservation({
                 action,
-                loginSessionId: resolution.loginSessionId,
-                status: resolution.authentication.status,
+                loginSessionId: authSessionState.loginSessionId,
+                status: authSessionState.status,
                 explicitTargetSessionId,
                 explicitPeerSessionId,
               })
             : null;
         if (currentObservation) {
           try {
-            const owner = ownerFingerprint(resolution!.loginSessionId!);
+            const owner = ownerFingerprint(authSessionState!.loginSessionId);
             if (currentObservation.role === "peer") {
               if (
                 currentObservation.status !== "authenticated" ||
@@ -214,6 +214,7 @@ const observedAuthentication = {
           res.end();
           return true;
         }
+        const resolution = await authentication.resolveExisting?.(req.headers);
         const role = url.searchParams.get("role") ?? await readControlRole(req);
         if (
           resolution?.authentication.status !== "authenticated" ||

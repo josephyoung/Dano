@@ -64,6 +64,15 @@ export interface OAuthAuthenticationOptions {
   readonly maxPendingTransactions?: number;
 }
 
+export type OAuthAuthSessionState =
+  | {
+      readonly status: "authenticated";
+      readonly loginSessionId: string;
+      readonly userContext: AuthenticatedUserContext;
+    }
+  | { readonly status: "reauth_required"; readonly loginSessionId: string }
+  | null;
+
 export interface OAuthAuthentication
   extends AuthenticatedUserContextResolver,
     AuthHttpHandler {
@@ -73,6 +82,9 @@ export interface OAuthAuthentication
   refreshProviderCredential(
     loginSessionId: string,
   ): Promise<ProviderCredential | null>;
+  resolveAuthSessionState(
+    headers: http.IncomingHttpHeaders,
+  ): Promise<OAuthAuthSessionState>;
   requireReauthentication(loginSessionId: string): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -259,15 +271,7 @@ export async function createOAuthAuthentication(
 
   const resolveLoginSession = async (
     headers: http.IncomingHttpHeaders,
-  ): Promise<
-    | {
-        status: "authenticated";
-        loginSessionId: string;
-        userContext: AuthenticatedUserContext;
-      }
-    | { status: "reauth_required"; loginSessionId: string }
-    | null
-  > => {
+  ): Promise<OAuthAuthSessionState> => {
     const sessionId = readCookie(headers.cookie, LOGIN_COOKIE_NAME);
     if (!sessionId) return null;
     const session = await loadSession(sessionId, true);
@@ -401,6 +405,7 @@ export async function createOAuthAuthentication(
         }),
       );
     },
+    resolveAuthSessionState: resolveLoginSession,
     resolveForClient: resolveClientLoginSession,
     resolveExisting: resolveClientLoginSession,
     async handle(
