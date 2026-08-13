@@ -110,7 +110,7 @@ export async function run() {
     });
     const sessionMarkerCount = Array.isArray(ownSessions.data?.sessions)
       ? ownSessions.data.sessions.filter(session =>
-          JSON.stringify(session).includes(config.marker),
+          session.path === sessionPath || session.sessionPath === sessionPath,
         ).length
       : 0;
 
