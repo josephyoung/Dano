@@ -121,13 +121,7 @@ export async function run() {
       uploadId,
       uploadRelativePath,
     };
-    const own = {
-      authenticationStatus: "authenticated",
-      runtimeOwnerFingerprint: await sha256(authentication.user.id),
-      raw,
-      own: undefined,
-    };
-    own.own = {
+    const ownDetails = {
       resourceFingerprints: await resourceFingerprints(raw),
       sessionMarkerCount,
       sessionOpen: ownSessionOpen.success ? "succeeded" : "rejected",
@@ -137,6 +131,12 @@ export async function run() {
       ),
       uploadPreviewSha256: await sha256(ownPreview),
       preference: ownPreference.accentColorPreset,
+    };
+    const own = {
+      authenticationStatus: "authenticated",
+      runtimeOwnerFingerprint: await sha256(authentication.user.id),
+      raw,
+      own: ownDetails,
     };
     await collectorJson("/own", {
       method: "POST",
