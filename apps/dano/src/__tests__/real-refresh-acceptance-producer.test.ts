@@ -10,6 +10,7 @@ import {
 } from "../bridge/credential-broker.js";
 import { createOAuth2ProviderAdapter } from "../bridge/oauth-provider.js";
 import {
+  classifyRefreshArmFailure,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
   prepareInvalidAccessCredential,
@@ -17,6 +18,33 @@ import {
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("classifies arm failures without exposing exception text or identifiers", () => {
+    expect(
+      classifyRefreshArmFailure(
+        new Error(
+          "Two authenticated browser sessions are required abc token-secret",
+        ),
+      ),
+    ).toBe("login_sessions_unavailable");
+    expect(classifyRefreshArmFailure(new Error("Credential refresh-secret"))).toBe(
+      "credentials_unavailable",
+    );
+    expect(classifyRefreshArmFailure(new Error("Provider response token-secret"))).toBe(
+      "provider_validation_failed",
+    );
+    expect(
+      classifyRefreshArmFailure(
+        new Error("The previous refresh acceptance phase is incomplete abc"),
+      ),
+    ).toBe("phase_incomplete");
+    expect(classifyRefreshArmFailure(new Error("stored atomically token-secret"))).toBe(
+      "credential_prepare_failed",
+    );
+    expect(classifyRefreshArmFailure(new Error("anything private"))).toBe(
+      "unexpected_failure",
+    );
+  });
+
   it("refreshes when the real provider adapter reports HTTP 200 code 401", async () => {
     const provider = createOAuth2ProviderAdapter({
       issuer: "https://provider.test",

@@ -11,6 +11,28 @@ type TranscriptOutcome = "success" | "reauth_required";
 
 const SKILL_NAME = "provider-broker-release-gate";
 
+export type RefreshArmFailureCode =
+  | "login_sessions_unavailable"
+  | "credentials_unavailable"
+  | "provider_validation_failed"
+  | "phase_incomplete"
+  | "credential_prepare_failed"
+  | "unexpected_failure";
+
+export function classifyRefreshArmFailure(error: unknown): RefreshArmFailureCode {
+  const message = error instanceof Error ? error.message : "";
+  if (/browser sessions|login session/i.test(message)) {
+    return "login_sessions_unavailable";
+  }
+  if (/previous refresh acceptance phase/i.test(message)) {
+    return "phase_incomplete";
+  }
+  if (/stored atomically/i.test(message)) return "credential_prepare_failed";
+  if (/provider/i.test(message)) return "provider_validation_failed";
+  if (/credential/i.test(message)) return "credentials_unavailable";
+  return "unexpected_failure";
+}
+
 export function createObservedAccessTokenInvalid(
   provider: Pick<OAuthProviderAdapter, "isAccessTokenInvalid">,
   observer: Pick<

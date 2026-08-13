@@ -11,6 +11,7 @@ import type { ProviderCredential } from "../apps/dano/src/bridge/oauth-provider.
 import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
+  classifyRefreshArmFailure,
   createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
   prepareInvalidAccessCredential,
@@ -341,8 +342,11 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     console.log(
       `[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`,
     );
-  } catch {
-    console.error(`[refresh acceptance] ${kind} could not be armed`);
+  } catch (error) {
+    const code = classifyRefreshArmFailure(error);
+    console.error(
+      `[refresh acceptance] ${kind} could not be armed; stage=${code}`,
+    );
   }
 }
 
