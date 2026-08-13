@@ -279,6 +279,19 @@ Optionally check the redacted record's structure. This deliberately prints
 pnpm run test:auth-real-users -- audit /path/to/real-user-evidence.json
 ```
 
+### Anonymous User cleanup live behavior gate
+
+The Anonymous User cleanup harness exercises two distinct Cookie bindings over
+public Dano HTTP/SSE and immediately checks the live runtime for cross-User
+session, transcript, Runtime Workspace, file, upload, and preference isolation;
+idle cleanup; active SSE and Assistant Turn protection; and authenticated User
+retention. Its `PASS live HTTP/SSE/runtime` result proves those live transport
+and runtime behaviors only. The harness cannot distinguish the Codex in-app
+Browser from Chrome over HTTP, and its transport fingerprints prove only that
+the two Cookie bindings differ. Browser-surface provenance must be recorded by
+the external acceptance run that actually operates slot A in the Codex in-app
+Browser and slot B in Chrome; the harness and offline audit do not prove it.
+
 ### Real provider Skill/Broker release gate
 
 Use the test-only `provider-broker-release-gate` Skill to prove that a real Pi

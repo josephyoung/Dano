@@ -40,7 +40,7 @@ describe("real Anonymous User release gate", () => {
     expect(fs.readdirSync(cwd)).toEqual([]);
   }, 15_000);
 
-  it("prepares browser markers without a fillable result checklist or provenance claim", () => {
+  it("prepares live transport markers without a fillable result checklist or browser provenance claim", () => {
     const root = temporaryRoot();
     expect(run("prepare", root).status).toBe(0);
     const evidence = read(path.join(root, "evidence.json"));
@@ -75,8 +75,12 @@ describe("real Anonymous User release gate", () => {
     expect(source).toContain('type: "list_workspace_entries"');
     expect(source).toContain('type: "read_workspace_file"');
     expect(source).toContain("auditRun(runRoot, { quiet: true })");
+    expect(source).toContain("PASS live HTTP/SSE/runtime Anonymous User release gate");
+    expect(source).toContain("Cookie 绑定不同");
+    expect(source).toContain("不证明浏览器类型");
     expect(source).not.toMatch(/page\.evaluate|localStorage|sessionStorage|document\.cookie/);
     expect(source).not.toMatch(/generateKeyPair|privateKey|publicKey|signature/);
+    expect(source).not.toMatch(/PASS live IAB|PASS live Chrome/i);
   });
 
   it("rejects a hand-edited observation ledger", () => {
@@ -92,7 +96,7 @@ describe("real Anonymous User release gate", () => {
     expect(result.stderr).toMatch(/complete live observations|unexpected fields/i);
   });
 
-  it("requires the complete live browser and cleanup timeline", () => {
+  it("requires the complete live HTTP/SSE and cleanup timeline", () => {
     const root = temporaryRoot();
     expect(run("prepare", root).status).toBe(0);
     const evidence = read(path.join(root, "evidence.json"));
@@ -188,7 +192,10 @@ describe("real Anonymous User release gate", () => {
         `${a2.cookie}; ${authCookie}`,
       );
 
-      await waitFor(() => output.includes("[anonymous-gate] PASS"), () => output);
+      await waitFor(
+        () => output.includes("[anonymous-gate] PASS live HTTP/SSE/runtime"),
+        () => output,
+      );
       const verified = run("audit", root);
       expect(verified.status, `${verified.stderr}\n${output}`).toBe(0);
       expect(verified.stdout).toContain("audit is internally consistent");
@@ -203,7 +210,7 @@ describe("real Anonymous User release gate", () => {
         path.join(root, "runtime", "uploads", "records"),
         bRecord.uploadFingerprint,
       );
-      fs.writeFileSync(uploadRecord.path, "tampered after signed browser capture");
+      fs.writeFileSync(uploadRecord.path, "tampered after live runtime capture");
       const tampered = run("audit", root);
       expect(tampered.status).toBe(1);
       expect(tampered.stderr).toContain("retained upload content does not match");

@@ -259,7 +259,7 @@ async function authenticatedRetained(req: http.IncomingMessage, selectedSlot: Sl
   append({ type: "authenticated-retained", ownerFingerprint: sha256(auth.userId), workspaceFingerprint: sha256(auth.workspacePath), uploadFingerprint: sha256(auth.uploadId), sessionFingerprint: sha256(auth.sessionPath), commandHttpStatus: 202, previewHttpStatus: preview.status, previewSha256: sha256(body) });
   auditRun(runRoot, { quiet: true });
   livePassed = true;
-  console.log("[anonymous-gate] PASS live IAB/Chrome Anonymous User release gate");
+  console.log("[anonymous-gate] PASS live HTTP/SSE/runtime Anonymous User release gate");
 }
 
 function authenticate(res: http.ServerResponse, selectedSlot: Slot) {
@@ -381,8 +381,8 @@ async function request(req: http.IncomingMessage, route: string, init: RequestIn
 
 function append(payload: Record<string, unknown>) {
   const sequence = fs.readFileSync(ledgerPath, "utf8").split(/\r?\n/).filter(Boolean).length + 1;
-  const unsigned = { sequence, ...payload, runId: evidence.runId, occurredAt: occurredAt() };
-  fs.appendFileSync(ledgerPath, `${JSON.stringify(unsigned)}\n`, { mode: 0o600 });
+  const record = { sequence, ...payload, runId: evidence.runId, occurredAt: occurredAt() };
+  fs.appendFileSync(ledgerPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
 function render(res: http.ServerResponse, selectedSlot: Slot, message = "") {
@@ -391,7 +391,7 @@ function render(res: http.ServerResponse, selectedSlot: Slot, message = "") {
     : selectedSlot === "a2" ? [["own", "6 捕获 A2"], ["turn-start", "7 启动并断开 held Turn"]]
     : [["authenticate", "建立 authenticated User"], ["own", "11 捕获 authenticated User"], ["authenticated-retained", "12 验证 sweep 不删除 authenticated User"]];
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Anonymous Gate</title><style>body{font:16px system-ui;max-width:720px;margin:40px auto;padding:0 20px}form{margin:12px 0}button{padding:10px 18px;border:1px solid #ddd;border-radius:8px;background:#fff}.ok{background:#ecfdf5;padding:10px}</style><h1>Anonymous Gate · ${selectedSlot}</h1>${message ? `<p class="ok">${escape(message)}</p>` : ""}<p>只使用当前浏览器请求携带的真实匿名绑定和公开 Dano HTTP/SSE；服务端不接受结果字段。</p>${actions.map(([action, label]) => `<form method="post" action="/api/acceptance/anonymous/${action}"><input type="hidden" name="slot" value="${selectedSlot}"><button>${label}</button></form>`).join("")}<p>流水 ${sequence()}/12</p>${livePassed ? "<h2>PASS：live harness 已复查当前 runtime</h2>" : ""}</html>`);
+  res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Anonymous Gate</title><style>body{font:16px system-ui;max-width:720px;margin:40px auto;padding:0 20px}form{margin:12px 0}button{padding:10px 18px;border:1px solid #ddd;border-radius:8px;background:#fff}.ok{background:#ecfdf5;padding:10px}</style><h1>Anonymous Gate · ${selectedSlot}</h1>${message ? `<p class="ok">${escape(message)}</p>` : ""}<p>只使用请求携带的真实匿名 Cookie 绑定和公开 Dano HTTP/SSE；服务端不接受结果字段。transport binding 只证明 A/B Cookie 绑定不同，不证明浏览器类型；IAB/Chrome surface provenance 必须由外部实际浏览器验收记录。</p>${actions.map(([action, label]) => `<form method="post" action="/api/acceptance/anonymous/${action}"><input type="hidden" name="slot" value="${selectedSlot}"><button>${label}</button></form>`).join("")}<p>流水 ${sequence()}/12</p>${livePassed ? "<h2>PASS：live HTTP/SSE/runtime 行为已复查；不包含浏览器类型 provenance</h2>" : ""}</html>`);
   return true;
 }
 
@@ -405,7 +405,7 @@ function sequence() { return fs.readFileSync(ledgerPath, "utf8").split(/\r?\n/).
 function files(root: string): string[] { if (!fs.existsSync(root)) return []; return fs.readdirSync(root, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(path.join(root, entry.name)) : entry.isFile() ? [path.join(root, entry.name)] : []); }
 function readJson(file: string) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function sha256(value: string) { return createHash("sha256").update(value).digest("hex"); }
-function transportBinding(req: http.IncomingMessage) { if (!req.headers.cookie) throw new HttpFailure(409, "current browser binding is missing"); return sha256(req.headers.cookie); }
+function transportBinding(req: http.IncomingMessage) { if (!req.headers.cookie) throw new HttpFailure(409, "current Cookie binding is missing"); return sha256(req.headers.cookie); }
 function escape(value: string) { return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!); }
 function delay(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function listen(server: http.Server, port: number) { return new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); }); }

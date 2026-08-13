@@ -97,7 +97,7 @@ function verifyRelations(evidence, r) {
   const [a, b, crossA, crossB, idle, a2, started, protectedTurn, released, postTurn, authenticated, authRetained] = r;
   own(a, "a", "anonymous", evidence.markers.a);
   own(b, "b", "anonymous", evidence.markers.b);
-  if (a.transportBindingFingerprint === b.transportBindingFingerprint) throw new Error("A and B must use distinct live browser bindings");
+  if (a.transportBindingFingerprint === b.transportBindingFingerprint) throw new Error("A and B must use distinct live Cookie bindings");
   if (a.ownerFingerprint === b.ownerFingerprint) throw new Error("A and B must resolve distinct Anonymous Users");
   cross(crossA, a, b, "a"); cross(crossB, b, a, "b");
   relation(idle.removedOwnerFingerprint, a.ownerFingerprint, "idle removed owner");
