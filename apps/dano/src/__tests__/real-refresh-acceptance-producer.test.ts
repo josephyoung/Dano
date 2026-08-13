@@ -832,6 +832,84 @@ describe("real refresh acceptance producer", () => {
     }
   });
 
+  it("reads only canonical Pi text blocks when matching the Skill invocation", () => {
+    const marker = "refresh-success-1004-1234567890abcdef";
+    const expectedSkillPath =
+      "/runtime/agent/skills/provider-broker-release-gate/SKILL.md";
+    const entries = skillTurn(marker, { ok: true, status: 200 });
+    const user = (entries[0] as { message: { content: unknown } }).message;
+    user.content = [
+      { type: "thinking", thinking: "untrusted invocation text" },
+      {
+        type: "text",
+        text: `Use provider-broker-release-gate ${marker}`,
+        ignored: "must not be concatenated",
+      },
+    ];
+
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        entries,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBe("success");
+
+    for (const content of [
+      [`Use provider-broker-release-gate ${marker}`],
+      [[{ type: "text", text: `Use provider-broker-release-gate ${marker}` }]],
+      [{ type: "thinking", thinking: `Use provider-broker-release-gate ${marker}` }],
+      [{ type: "metadata", text: `Use provider-broker-release-gate ${marker}` }],
+      [{ type: "text", label: `Use provider-broker-release-gate ${marker}` }],
+    ]) {
+      const mutation = skillTurn(marker, { ok: true, status: 200 });
+      (mutation[0] as { message: { content: unknown } }).message.content = content;
+      expect(
+        findRefreshAcceptanceTranscriptOutcome(
+          mutation,
+          marker,
+          "/api/safe",
+          expectedSkillPath,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("accepts only a real string or canonical Pi text blocks for the Skill read result", () => {
+    const marker = "refresh-success-1005-1234567890abcdef";
+    const expectedSkillPath =
+      "/runtime/agent/skills/provider-broker-release-gate/SKILL.md";
+    const stringResult = skillTurn(marker, { ok: true, status: 200 });
+    (stringResult[2] as { message: { content: unknown } }).message.content =
+      "# Provider Broker Release Gate";
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        stringResult,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBe("success");
+
+    for (const content of [
+      ["# Provider Broker Release Gate"],
+      [[{ type: "text", text: "# Provider Broker Release Gate" }]],
+      [{ type: "thinking", thinking: "# Provider Broker Release Gate" }],
+    ]) {
+      const entries = skillTurn(marker, { ok: true, status: 200 });
+      (entries[2] as { message: { content: unknown } }).message.content = content;
+      expect(
+        findRefreshAcceptanceTranscriptOutcome(
+          entries,
+          marker,
+          "/api/safe",
+          expectedSkillPath,
+        ),
+      ).toBeNull();
+    }
+  });
+
   it("allows exactly one successful canonical Skill read before the question", () => {
     const marker = "refresh-success-1001-1234567890abcdef";
     const expectedSkillPath =
@@ -1081,7 +1159,7 @@ function skillTurn(marker: string, providerDetails: object) {
         role: "toolResult",
         toolCallId: "skill-read",
         toolName: "read",
-        content: "# Provider Broker Release Gate",
+        content: [{ type: "text", text: "# Provider Broker Release Gate" }],
         isError: false,
       },
     },

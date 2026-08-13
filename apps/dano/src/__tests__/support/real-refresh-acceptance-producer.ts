@@ -722,7 +722,7 @@ export function findRefreshAcceptanceTranscriptOutcome(
 ): TranscriptOutcome | null {
   const start = entries.findIndex(entry => {
     const message = messageOf(entry);
-    const text = textOf(message?.content);
+    const text = userTextOf(message?.content);
     return (
       message?.role === "user" &&
       text.trim() === `Use ${SKILL_NAME} ${marker}`
@@ -761,7 +761,7 @@ export function findRefreshAcceptanceTranscriptOutcome(
     readResult.index <= skillRead.index ||
     readResult.index >= question.index ||
     readResult.message.isError !== false ||
-    !textOf(readResult.message.content).trim()
+    !toolResultTextOf(readResult.message.content).trim()
   ) {
     return null;
   }
@@ -895,9 +895,24 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function textOf(value: unknown): string {
+function userTextOf(value: unknown): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(textOf).join("\n");
-  const object = record(value);
-  return object ? Object.values(object).map(textOf).join("\n") : "";
+  return piTextBlocksOf(value);
+}
+
+function toolResultTextOf(value: unknown): string {
+  if (typeof value === "string") return value;
+  return piTextBlocksOf(value);
+}
+
+function piTextBlocksOf(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value
+    .map(block => {
+      const object = record(block);
+      return object?.type === "text" && typeof object.text === "string"
+        ? object.text
+        : "";
+    })
+    .join("\n");
 }
