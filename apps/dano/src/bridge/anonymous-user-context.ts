@@ -12,6 +12,7 @@ import {
   type ClientUserResolution,
   type UserContext,
   type UserContextResolver,
+  UserContextError,
 } from "./user-context.js";
 
 const DEFAULT_GUEST_COOKIE_NAME = "dano_guest";
@@ -81,6 +82,31 @@ export function createAnonymousUserContextResolver(
     "anonymous-sessions",
   );
 
+  const resolveAuthenticated = async (
+    headers: IncomingHttpHeaders,
+  ): Promise<AuthenticatedUserContext | null> => {
+    try {
+      return (await options.authenticatedResolver?.resolve(headers)) ?? null;
+    } catch (error) {
+      if (error instanceof UserContextError && error.status === 401) return null;
+      throw error;
+    }
+  };
+
+  const resolveAuthenticatedClient = async (
+    headers: IncomingHttpHeaders,
+    method: "resolveForClient" | "resolveExisting",
+  ): Promise<ClientUserResolution | null> => {
+    try {
+      return (
+        (await options.authenticatedResolver?.[method]?.(headers)) ?? null
+      );
+    } catch (error) {
+      if (error instanceof UserContextError && error.status === 401) return null;
+      throw error;
+    }
+  };
+
   const resolveGuest = async (
     headers: IncomingHttpHeaders,
   ): Promise<UserContext | null> => {
@@ -101,20 +127,22 @@ export function createAnonymousUserContextResolver(
 
   return {
     async resolve(headers) {
-      const authenticated = await options.authenticatedResolver?.resolve(headers);
+      const authenticated = await resolveAuthenticated(headers);
       return authenticated ?? resolveGuest(headers);
     },
 
     async resolveForClient(headers) {
-      const authenticatedResolutionFromResolver =
-        await options.authenticatedResolver?.resolveForClient?.(headers);
+      const authenticatedResolutionFromResolver = await resolveAuthenticatedClient(
+        headers,
+        "resolveForClient",
+      );
       if (
         authenticatedResolutionFromResolver?.authentication.status ===
         "authenticated"
       ) {
         return authenticatedResolutionFromResolver;
       }
-      const authenticated = await options.authenticatedResolver?.resolve(headers);
+      const authenticated = await resolveAuthenticated(headers);
       if (authenticated) return authenticatedResolution(authenticated);
 
       const guest = await resolveGuest(headers);
@@ -145,12 +173,14 @@ export function createAnonymousUserContextResolver(
     },
 
     async resolveExisting(headers) {
-      const authenticatedResolutionFromResolver =
-        await options.authenticatedResolver?.resolveExisting?.(headers);
+      const authenticatedResolutionFromResolver = await resolveAuthenticatedClient(
+        headers,
+        "resolveExisting",
+      );
       if (authenticatedResolutionFromResolver) {
         return authenticatedResolutionFromResolver;
       }
-      const authenticated = await options.authenticatedResolver?.resolve(headers);
+      const authenticated = await resolveAuthenticated(headers);
       if (authenticated) return authenticatedResolution(authenticated);
       const guest = await resolveGuest(headers);
       return guest

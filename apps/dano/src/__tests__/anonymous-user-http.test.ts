@@ -13,6 +13,7 @@ import { createAnonymousUserContextResolver } from "../bridge/anonymous-user-con
 import {
   createJwtUserContextResolver,
   type AuthenticatedUserContextResolver,
+  UserContextError,
 } from "../bridge/user-context.js";
 import { startDanoServer, type DanoServerController } from "../server.js";
 
@@ -646,6 +647,62 @@ describe("Anonymous User over HTTP/Bridge", () => {
     expect(expired.body.defaultWorkspacePath).not.toBe(
       first.body.defaultWorkspacePath,
     );
+  });
+
+  it("falls back to a new Anonymous User when an old authentication Cookie is invalid", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-invalid-auth-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const authenticatedResolver = createJwtUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secret: "different-auth-secret",
+    });
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      authenticatedResolver,
+    );
+    const staleAuthenticationCookie = `dano_auth=${signUser("stale-user")}`;
+
+    const created = await createClient(origin, staleAuthenticationCookie);
+    const anonymousCookie = guestCookie(created.response);
+
+    expect(created.body.authentication).toEqual({ status: "anonymous" });
+    const restored = await createClient(
+      origin,
+      `${staleAuthenticationCookie}; ${anonymousCookie}`,
+    );
+    expect(restored.body.authentication).toEqual({ status: "anonymous" });
+    expect(restored.body.defaultWorkspacePath).toBe(
+      created.body.defaultWorkspacePath,
+    );
+  });
+
+  it("does not hide an authentication resolver service failure", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-anonymous-auth-failure-"),
+    );
+    runtimeRoots.push(runtimeRoot);
+    const authenticatedResolver: AuthenticatedUserContextResolver = {
+      async resolve() {
+        throw new UserContextError(503, "Authentication service unavailable");
+      },
+    };
+    const { origin } = await startAnonymousServer(
+      runtimeRoot,
+      false,
+      authenticatedResolver,
+    );
+
+    const response = await fetch(`${origin}/api/clients`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 
   it("uses production guest Cookie attributes without a Domain attribute", async () => {

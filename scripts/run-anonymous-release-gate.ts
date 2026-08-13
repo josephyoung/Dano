@@ -136,17 +136,13 @@ process.on("SIGINT", () => void stop());
 process.on("SIGTERM", () => void stop());
 
 async function resolveCurrent(req: http.IncomingMessage) {
-  let authenticated;
-  try {
-    authenticated = await authenticatedResolver.resolve(req.headers);
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("JWT sig" + "nature is invalid")) {
-      throw error;
-    }
-  }
-  if (authenticated) return { context: authenticated, status: "authenticated" as const };
-  const anonymous = await anonymousUsers.resolveAnonymous!(req.headers);
-  return anonymous ? { context: anonymous, status: "anonymous" as const } : null;
+  const resolution = await anonymousUsers.resolveExisting!(req.headers);
+  return resolution
+    ? {
+        context: resolution.userContext,
+        status: resolution.authentication.status,
+      }
+    : null;
 }
 
 async function captureOwn(req: http.IncomingMessage, selectedSlot: Slot, resolution: Resolution) {
