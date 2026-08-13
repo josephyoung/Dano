@@ -1,4 +1,4 @@
-import { createHash, createHmac, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -7,26 +7,21 @@ import type { AuthHttpHandler } from "../apps/dano/src/bridge/server.ts";
 import { createJwtUserContextResolver } from "../apps/dano/src/bridge/user-context.ts";
 import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
+import { auditRun } from "./check-anonymous-release-gate.mjs";
 
-const runRoot = path.resolve(process.argv[2] ?? process.env.DANO_ANONYMOUS_GATE_RUN ?? "");
-if (!runRoot) throw new Error("run directory is required");
+const rawRunRoot = process.argv[2] ?? process.env.DANO_ANONYMOUS_GATE_RUN;
+if (typeof rawRunRoot !== "string" || rawRunRoot.trim() === "") throw new Error("run directory is required");
+const runRoot = path.resolve(rawRunRoot);
 const evidencePath = path.join(runRoot, "evidence.json");
 const ledgerPath = path.join(runRoot, "ledger.ndjson");
 const runtimeRoot = path.join(runRoot, "runtime");
 const gatePort = Number.parseInt(process.env.DANO_ANONYMOUS_GATE_PORT ?? "8080", 10);
 if (!Number.isSafeInteger(gatePort) || gatePort < 1 || gatePort > 65_535) throw new Error("invalid gate port");
 const evidence = readJson(evidencePath);
-if (evidence.attestation) throw new Error("prepared run was already started");
-const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-evidence.attestation = {
-  algorithm: "Ed25519",
-  publicKey: publicKey.export({ type: "spki", format: "pem" }),
-  startedAt: new Date().toISOString(),
-};
-fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
 
 let acceptanceNow = Date.now();
-let lastOccurredAt = Date.parse(evidence.attestation.startedAt);
+let lastOccurredAt = Date.parse(evidence.preparedAt);
+let livePassed = false;
 const resources = new Map<string, Resource>();
 const jwtSecret = createHash("sha256").update(`${evidence.runId}:authenticated-fixture`).digest("hex");
 const authenticatedResolver = createJwtUserContextResolver({
@@ -154,6 +149,14 @@ async function captureOwn(req: http.IncomingMessage, selectedSlot: Slot, resolut
   const clientId = await currentClient(req);
   const marker = evidence.markers[selectedSlot];
   const upload = await createUpload(req, clientId, marker, selectedSlot);
+  const prompt = await executeCommand(req, clientId, { id: `own-prompt-${selectedSlot}`, type: "prompt", message: marker });
+  if (prompt.payload?.success !== true) throw new HttpFailure(409, "own transcript prompt failed");
+  const state = await executeCommand(req, clientId, { id: `own-state-${selectedSlot}`, type: "get_state" });
+  const sessionPathValue = state.payload?.data?.sessionFile ?? state.payload?.data?.sessionPath;
+  if (typeof sessionPathValue !== "string") throw new HttpFailure(409, "own session path was not projected");
+  await waitForFile(sessionPathValue, marker);
+  const sessionPath = fs.realpathSync(sessionPathValue);
+  const transcript = fs.readFileSync(sessionPath, "utf8");
   const preview = await request(req, upload.previewUrl);
   const previewBody = Buffer.from(await preview.arrayBuffer()).toString("utf8");
   if (preview.status !== 200 || previewBody !== marker) throw new HttpFailure(409, "own preview did not match marker");
@@ -163,14 +166,17 @@ async function captureOwn(req: http.IncomingMessage, selectedSlot: Slot, resolut
     clientId,
     workspacePath: path.resolve(upload.workspacePath),
     uploadId: upload.id,
+    uploadPath: upload.path,
     previewUrl: upload.previewUrl,
+    sessionPath,
     marker,
   };
   resources.set(selectedSlot, resource);
   append({
     type: "own", slot: selectedSlot, authenticationStatus: resolution.status,
-    markerSha256: sha256(marker), ownerFingerprint: sha256(resource.userId), clientFingerprint: sha256(clientId),
+    markerSha256: sha256(marker), transportBindingFingerprint: transportBinding(req), ownerFingerprint: sha256(resource.userId), clientFingerprint: sha256(clientId),
     workspaceFingerprint: sha256(resource.workspacePath), uploadFingerprint: sha256(resource.uploadId),
+    sessionFingerprint: sha256(resource.sessionPath), transcriptContentSha256: sha256(transcript),
     ownPreviewHttpStatus: preview.status, ownPreviewSha256: sha256(previewBody),
   });
 }
@@ -183,8 +189,12 @@ async function captureCross(req: http.IncomingMessage, selectedSlot: Slot, resol
   const client = await request(req, `/api/clients/${encodeURIComponent(target.clientId)}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "command", payload: { id: `cross-${selectedSlot}`, type: "get_state" } }) });
   const preference = await request(req, `/api/clients/${encodeURIComponent(target.clientId)}/preferences/theme`);
   const preview = await request(req, target.previewUrl);
-  if ([client.status, preference.status, preview.status].some(value => value !== 403)) throw new HttpFailure(409, "cross-User probe was not rejected");
-  append({ type: "cross", slot: selectedSlot, sourceClientFingerprint: sha256(source.clientId), targetClientFingerprint: sha256(target.clientId), targetUploadFingerprint: sha256(target.uploadId), targetClientHttpStatus: client.status, targetPreferenceHttpStatus: preference.status, targetPreviewHttpStatus: preview.status });
+  const session = await executeCommand(req, source.clientId, { id: `cross-session-${selectedSlot}`, type: "switch_session", sessionPath: target.sessionPath });
+  const transcripts = await executeCommand(req, source.clientId, { id: `cross-transcripts-${selectedSlot}`, type: "list_sessions", workspacePath: source.workspacePath });
+  const workspace = await executeCommand(req, source.clientId, { id: `cross-workspace-${selectedSlot}`, type: "list_workspace_entries", workspacePath: target.workspacePath, force: true });
+  const file = await executeCommand(req, source.clientId, { id: `cross-file-${selectedSlot}`, type: "read_workspace_file", workspacePath: target.workspacePath, path: path.relative(target.workspacePath, target.uploadPath) });
+  if ([client.status, preference.status, preview.status].some(value => value !== 403) || session.payload?.success !== false || transcripts.payload?.success !== true || JSON.stringify(transcripts.payload).includes(target.sessionPath) || workspace.payload?.success !== false || file.payload?.success !== false) throw new HttpFailure(409, "cross-User session/transcript/workspace/file probe was not rejected");
+  append({ type: "cross", slot: selectedSlot, sourceClientFingerprint: sha256(source.clientId), targetClientFingerprint: sha256(target.clientId), targetUploadFingerprint: sha256(target.uploadId), targetSessionFingerprint: sha256(target.sessionPath), targetClientHttpStatus: client.status, targetPreferenceHttpStatus: preference.status, targetPreviewHttpStatus: preview.status, targetSessionResult: "rejected", targetTranscriptResult: "absent", targetWorkspaceResult: "rejected", targetFileResult: "rejected" });
 }
 
 async function idleSweep(req: http.IncomingMessage, selectedSlot: Slot, resolution: Resolution) {
@@ -193,10 +203,10 @@ async function idleSweep(req: http.IncomingMessage, selectedSlot: Slot, resoluti
   if (resolution.context.user.id !== b.userId) throw new HttpFailure(403, "observer User mismatch");
   acceptanceNow += 2_000;
   await delay(150);
-  if (exists(a) || !exists(b)) throw new HttpFailure(409, "idle cleanup or active SSE protection did not occur");
+  if (!removed(a) || !exists(b)) throw new HttpFailure(409, "idle cleanup or active SSE protection did not occur");
   const command = await request(req, `/api/clients/${encodeURIComponent(b.clientId)}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "command", payload: { id: "retained-b", type: "get_state" } }) });
   const preview = await request(req, b.previewUrl); const body = await preview.text();
-  append({ type: "idle-sweep", removedOwnerFingerprint: sha256(a.userId), removedWorkspaceFingerprint: sha256(a.workspacePath), removedUploadFingerprint: sha256(a.uploadId), retainedOwnerFingerprint: sha256(b.userId), retainedWorkspaceFingerprint: sha256(b.workspacePath), retainedUploadFingerprint: sha256(b.uploadId), retainedCommandHttpStatus: command.status, retainedPreviewHttpStatus: preview.status, retainedPreviewSha256: sha256(body) });
+  append({ type: "idle-sweep", removedOwnerFingerprint: sha256(a.userId), removedWorkspaceFingerprint: sha256(a.workspacePath), removedUploadFingerprint: sha256(a.uploadId), removedSessionFingerprint: sha256(a.sessionPath), retainedOwnerFingerprint: sha256(b.userId), retainedWorkspaceFingerprint: sha256(b.workspacePath), retainedUploadFingerprint: sha256(b.uploadId), retainedSessionFingerprint: sha256(b.sessionPath), retainedCommandHttpStatus: command.status, retainedPreviewHttpStatus: preview.status, retainedPreviewSha256: sha256(body) });
 }
 
 async function startHeldTurn(req: http.IncomingMessage, selectedSlot: Slot, resolution: Resolution) {
@@ -207,7 +217,7 @@ async function startHeldTurn(req: http.IncomingMessage, selectedSlot: Slot, reso
   await Promise.race([heldObservedPromise, delay(3_000).then(() => { throw new HttpFailure(409, "provider did not observe held Turn"); })]);
   const disconnected = await request(req, `/api/clients/${encodeURIComponent(a2.clientId)}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "command", payload: { id: "no-sse-a2", type: "get_state" } }) });
   if (disconnected.status !== 409 || !heldRequestFingerprint) throw new HttpFailure(409, "a2 did not lose SSE while Turn remained active");
-  append({ type: "turn-started", slot: "a2", ownerFingerprint: sha256(a2.userId), clientFingerprint: sha256(a2.clientId), workspaceFingerprint: sha256(a2.workspacePath), uploadFingerprint: sha256(a2.uploadId), turnMarkerSha256: sha256(evidence.markers.turn), promptHttpStatus: prompt, providerRequestFingerprint: heldRequestFingerprint });
+  append({ type: "turn-started", slot: "a2", ownerFingerprint: sha256(a2.userId), clientFingerprint: sha256(a2.clientId), workspaceFingerprint: sha256(a2.workspacePath), uploadFingerprint: sha256(a2.uploadId), sessionFingerprint: sha256(a2.sessionPath), turnMarkerSha256: sha256(evidence.markers.turn), promptHttpStatus: prompt, providerRequestFingerprint: heldRequestFingerprint });
 }
 
 async function protectHeldTurn(selectedSlot: Slot, resolution: Resolution) {
@@ -217,7 +227,7 @@ async function protectHeldTurn(selectedSlot: Slot, resolution: Resolution) {
   acceptanceNow += 2_000; await delay(150);
   if (!exists(a2) || !exists(b)) throw new HttpFailure(409, "active Turn or SSE User was removed");
   const upload = loadUpload(a2.uploadId);
-  append({ type: "turn-protected", ownerFingerprint: sha256(a2.userId), workspaceFingerprint: sha256(a2.workspacePath), uploadFingerprint: sha256(a2.uploadId), providerRequestFingerprint: heldRequestFingerprint, disconnectedClientHttpStatus: 409, retainedPreviewHttpStatus: 200, retainedPreviewSha256: sha256(fs.readFileSync(upload.path, "utf8")) });
+  append({ type: "turn-protected", ownerFingerprint: sha256(a2.userId), workspaceFingerprint: sha256(a2.workspacePath), uploadFingerprint: sha256(a2.uploadId), sessionFingerprint: sha256(a2.sessionPath), providerRequestFingerprint: heldRequestFingerprint, disconnectedClientHttpStatus: 409, retainedPreviewHttpStatus: 200, retainedPreviewSha256: sha256(fs.readFileSync(upload.path, "utf8")) });
 }
 
 async function releaseHeldTurn(selectedSlot: Slot, resolution: Resolution) {
@@ -234,8 +244,8 @@ async function postTurnSweep(selectedSlot: Slot, resolution: Resolution) {
   const a2 = requiredResource("a2"), b = requiredResource("b");
   if (resolution.context.user.id !== b.userId) throw new HttpFailure(403, "observer mismatch");
   acceptanceNow += 2_000; await delay(150);
-  if (exists(a2) || !exists(b)) throw new HttpFailure(409, "completed Turn User was not cleaned");
-  append({ type: "post-turn-sweep", removedOwnerFingerprint: sha256(a2.userId), removedWorkspaceFingerprint: sha256(a2.workspacePath), removedUploadFingerprint: sha256(a2.uploadId), retainedOwnerFingerprint: sha256(b.userId), retainedWorkspaceFingerprint: sha256(b.workspacePath), retainedUploadFingerprint: sha256(b.uploadId) });
+  if (!removed(a2) || !exists(b)) throw new HttpFailure(409, "completed Turn User was not cleaned");
+  append({ type: "post-turn-sweep", removedOwnerFingerprint: sha256(a2.userId), removedWorkspaceFingerprint: sha256(a2.workspacePath), removedUploadFingerprint: sha256(a2.uploadId), removedSessionFingerprint: sha256(a2.sessionPath), retainedOwnerFingerprint: sha256(b.userId), retainedWorkspaceFingerprint: sha256(b.workspacePath), retainedUploadFingerprint: sha256(b.uploadId), retainedSessionFingerprint: sha256(b.sessionPath) });
 }
 
 async function authenticatedRetained(req: http.IncomingMessage, selectedSlot: Slot, resolution: Resolution) {
@@ -243,9 +253,13 @@ async function authenticatedRetained(req: http.IncomingMessage, selectedSlot: Sl
   const auth = requiredResource("authenticated");
   acceptanceNow += 2_000; await delay(150);
   if (!exists(auth)) throw new HttpFailure(409, "authenticated User was removed by Anonymous sweep");
-  const command = await request(req, `/api/clients/${encodeURIComponent(auth.clientId)}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "command", payload: { id: "auth-retained", type: "get_state" } }) });
+  const command = await executeCommand(req, auth.clientId, { id: "auth-retained", type: "get_state" });
+  if (command.payload?.success !== true) throw new HttpFailure(409, "authenticated command failed");
   const preview = await request(req, auth.previewUrl); const body = await preview.text();
-  append({ type: "authenticated-retained", ownerFingerprint: sha256(auth.userId), workspaceFingerprint: sha256(auth.workspacePath), uploadFingerprint: sha256(auth.uploadId), commandHttpStatus: command.status, previewHttpStatus: preview.status, previewSha256: sha256(body) });
+  append({ type: "authenticated-retained", ownerFingerprint: sha256(auth.userId), workspaceFingerprint: sha256(auth.workspacePath), uploadFingerprint: sha256(auth.uploadId), sessionFingerprint: sha256(auth.sessionPath), commandHttpStatus: 202, previewHttpStatus: preview.status, previewSha256: sha256(body) });
+  auditRun(runRoot, { quiet: true });
+  livePassed = true;
+  console.log("[anonymous-gate] PASS live IAB/Chrome Anonymous User release gate");
 }
 
 function authenticate(res: http.ServerResponse, selectedSlot: Slot) {
@@ -279,8 +293,65 @@ async function startPrompt(req: http.IncomingMessage, clientId: string, marker: 
   return response.status;
 }
 
+async function executeCommand(req: http.IncomingMessage, clientId: string, payload: Record<string, unknown>): Promise<any> {
+  const id = payload.id;
+  if (typeof id !== "string") throw new HttpFailure(500, "acceptance command id is required");
+  const abort = new AbortController();
+  const events = await fetch(`http://127.0.0.1:${gatePort}/api/clients/${encodeURIComponent(clientId)}/events`, { headers: req.headers.cookie ? { Cookie: req.headers.cookie } : {}, signal: abort.signal });
+  if (events.status !== 200 || !events.body) throw new HttpFailure(409, "SSE did not open");
+  const result = waitForResponse(events.body, id);
+  try {
+    const posted = await request(req, `/api/clients/${encodeURIComponent(clientId)}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "command", payload }) });
+    if (posted.status !== 202) throw new HttpFailure(409, `command was not accepted (${posted.status})`);
+    return await result;
+  } finally {
+    abort.abort();
+  }
+}
+
+async function waitForResponse(stream: ReadableStream<Uint8Array>, id: string) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + 5_000;
+  try {
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now();
+      const chunk = await Promise.race([reader.read(), delay(remaining).then(() => ({ done: true, value: undefined }))]);
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+        const data = frame.split(/\r?\n/).filter(line => line.startsWith("data: ")).map(line => line.slice(6)).join("\n");
+        if (data) {
+          const message = JSON.parse(data);
+          if (message.type === "response" && message.payload?.id === id) return message;
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  throw new HttpFailure(409, `timed out waiting for ${id}`);
+}
+
+async function waitForFile(file: string, marker: string) {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file) && fs.readFileSync(file, "utf8").includes(marker)) return;
+    await delay(25);
+  }
+  throw new HttpFailure(409, "session transcript was not persisted");
+}
+
 function exists(resource: Resource) {
-  return fs.existsSync(resource.workspacePath) && Boolean(findAnonymousRecord(resource.userId) || resource.slot === "authenticated") && fs.existsSync(uploadRecordPath(resource.uploadId));
+  return fs.existsSync(resource.workspacePath) && fs.existsSync(resource.sessionPath) && fs.existsSync(resource.uploadPath) && Boolean(findAnonymousRecord(resource.userId) || resource.slot === "authenticated") && fs.existsSync(uploadRecordPath(resource.uploadId));
+}
+
+function removed(resource: Resource) {
+  return !fs.existsSync(resource.workspacePath) && !fs.existsSync(resource.sessionPath) && !fs.existsSync(resource.uploadPath) && !findAnonymousRecord(resource.userId) && !fs.existsSync(uploadRecordPath(resource.uploadId));
 }
 
 function loadUpload(id: string) {
@@ -311,8 +382,7 @@ async function request(req: http.IncomingMessage, route: string, init: RequestIn
 function append(payload: Record<string, unknown>) {
   const sequence = fs.readFileSync(ledgerPath, "utf8").split(/\r?\n/).filter(Boolean).length + 1;
   const unsigned = { sequence, ...payload, runId: evidence.runId, occurredAt: occurredAt() };
-  const signature = sign(null, Buffer.from(JSON.stringify(unsigned)), privateKey).toString("base64url");
-  fs.appendFileSync(ledgerPath, `${JSON.stringify({ ...unsigned, signature })}\n`, { mode: 0o600 });
+  fs.appendFileSync(ledgerPath, `${JSON.stringify(unsigned)}\n`, { mode: 0o600 });
 }
 
 function render(res: http.ServerResponse, selectedSlot: Slot, message = "") {
@@ -321,7 +391,7 @@ function render(res: http.ServerResponse, selectedSlot: Slot, message = "") {
     : selectedSlot === "a2" ? [["own", "6 捕获 A2"], ["turn-start", "7 启动并断开 held Turn"]]
     : [["authenticate", "建立 authenticated User"], ["own", "11 捕获 authenticated User"], ["authenticated-retained", "12 验证 sweep 不删除 authenticated User"]];
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Anonymous Gate</title><style>body{font:16px system-ui;max-width:720px;margin:40px auto;padding:0 20px}form{margin:12px 0}button{padding:10px 18px;border:1px solid #ddd;border-radius:8px;background:#fff}.ok{background:#ecfdf5;padding:10px}</style><h1>Anonymous Gate · ${selectedSlot}</h1>${message ? `<p class="ok">${escape(message)}</p>` : ""}<p>只使用当前浏览器绑定的 Dano User/Client；页面不读取 Cookie 或 Storage。</p>${actions.map(([action, label]) => `<form method="post" action="/api/acceptance/anonymous/${action}"><input type="hidden" name="slot" value="${selectedSlot}"><button>${label}</button></form>`).join("")}<p>流水 ${sequence()}/12</p></html>`);
+  res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Anonymous Gate</title><style>body{font:16px system-ui;max-width:720px;margin:40px auto;padding:0 20px}form{margin:12px 0}button{padding:10px 18px;border:1px solid #ddd;border-radius:8px;background:#fff}.ok{background:#ecfdf5;padding:10px}</style><h1>Anonymous Gate · ${selectedSlot}</h1>${message ? `<p class="ok">${escape(message)}</p>` : ""}<p>只使用当前浏览器请求携带的真实匿名绑定和公开 Dano HTTP/SSE；服务端不接受结果字段。</p>${actions.map(([action, label]) => `<form method="post" action="/api/acceptance/anonymous/${action}"><input type="hidden" name="slot" value="${selectedSlot}"><button>${label}</button></form>`).join("")}<p>流水 ${sequence()}/12</p>${livePassed ? "<h2>PASS：live harness 已复查当前 runtime</h2>" : ""}</html>`);
   return true;
 }
 
@@ -335,11 +405,12 @@ function sequence() { return fs.readFileSync(ledgerPath, "utf8").split(/\r?\n/).
 function files(root: string): string[] { if (!fs.existsSync(root)) return []; return fs.readdirSync(root, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(path.join(root, entry.name)) : entry.isFile() ? [path.join(root, entry.name)] : []); }
 function readJson(file: string) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function sha256(value: string) { return createHash("sha256").update(value).digest("hex"); }
+function transportBinding(req: http.IncomingMessage) { if (!req.headers.cookie) throw new HttpFailure(409, "current browser binding is missing"); return sha256(req.headers.cookie); }
 function escape(value: string) { return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!); }
 function delay(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function listen(server: http.Server, port: number) { return new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); }); }
 
 type Slot = "a" | "b" | "a2" | "authenticated";
 type Resolution = NonNullable<Awaited<ReturnType<typeof resolveCurrent>>>;
-interface Resource { slot: Slot; userId: string; clientId: string; workspacePath: string; uploadId: string; previewUrl: string; marker: string }
+interface Resource { slot: Slot; userId: string; clientId: string; workspacePath: string; uploadId: string; uploadPath: string; previewUrl: string; sessionPath: string; marker: string }
 class HttpFailure extends Error { constructor(readonly status: number, message: string) { super(message); } }

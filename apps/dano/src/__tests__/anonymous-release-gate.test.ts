@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -17,7 +17,30 @@ afterEach(() => {
 });
 
 describe("real Anonymous User release gate", () => {
-  it("prepares browser markers without a fillable result checklist", () => {
+  it("rejects a missing run directory before resolving or writing files", () => {
+    const cwd = temporaryRoot();
+    const checkerResult = spawnSync(process.execPath, [checker, "prepare"], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, DANO_ANONYMOUS_GATE_RUN: "" },
+    });
+    const runnerResult = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        path.join(repositoryRoot, "apps/dano/node_modules/jiti/lib/jiti-register.mjs"),
+        runner,
+      ],
+      { cwd, encoding: "utf8", env: { ...process.env, DANO_ANONYMOUS_GATE_RUN: "" } },
+    );
+
+    expect(checkerResult.status).toBe(1);
+    expect(runnerResult.status).toBe(1);
+    expect(`${checkerResult.stderr}${runnerResult.stderr}`).toMatch(/run directory is required/i);
+    expect(fs.readdirSync(cwd)).toEqual([]);
+  }, 15_000);
+
+  it("prepares browser markers without a fillable result checklist or provenance claim", () => {
     const root = temporaryRoot();
     expect(run("prepare", root).status).toBe(0);
     const evidence = read(path.join(root, "evidence.json"));
@@ -25,13 +48,13 @@ describe("real Anonymous User release gate", () => {
     expect(evidence).toMatchObject({
       schemaVersion: 2,
       capture: {
-        browserContexts: { a: "codex-in-app-browser", b: "chrome" },
         originMode: "single-dano-origin",
         seam: "Dano HTTP/SSE and visible acceptance UI",
       },
       cleanup: { idleTtlMs: 1_000, intervalMs: 50, clockAdvanceMs: 2_000 },
     });
     expect(evidence).not.toHaveProperty("observations");
+    expect(evidence).not.toHaveProperty("attestation");
     expect(JSON.stringify(evidence)).not.toMatch(
       /password|cookie|authorization|access.?token|refresh.?token|https?:\/\//i,
     );
@@ -47,43 +70,32 @@ describe("real Anonymous User release gate", () => {
     expect(source).toContain('text/event-stream');
     expect(source).toContain("/api/uploads");
     expect(source).toContain("/preferences/theme");
+    expect(source).toContain('type: "switch_session"');
+    expect(source).toContain('type: "list_sessions"');
+    expect(source).toContain('type: "list_workspace_entries"');
+    expect(source).toContain('type: "read_workspace_file"');
+    expect(source).toContain("auditRun(runRoot, { quiet: true })");
     expect(source).not.toMatch(/page\.evaluate|localStorage|sessionStorage|document\.cookie/);
+    expect(source).not.toMatch(/generateKeyPair|privateKey|publicKey|signature/);
   });
 
-  it("rejects an unsigned or hand-edited observation ledger", () => {
+  it("rejects a hand-edited observation ledger", () => {
     const root = temporaryRoot();
     expect(run("prepare", root).status).toBe(0);
-    const evidencePath = path.join(root, "evidence.json");
-    const evidence = read(evidencePath);
-    const { publicKey } = generateKeyPairSync("ed25519");
-    evidence.attestation = {
-      algorithm: "Ed25519",
-      publicKey: publicKey.export({ type: "spki", format: "pem" }),
-      startedAt: new Date().toISOString(),
-    };
-    fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     fs.writeFileSync(
       path.join(root, "ledger.ndjson"),
       `${JSON.stringify({ sequence: 1, type: "own", passed: true })}\n`,
     );
 
-    const result = run("verify", root);
+    const result = run("audit", root);
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/complete signed observations|unexpected fields|signature/i);
+    expect(result.stderr).toMatch(/complete live observations|unexpected fields/i);
   });
 
-  it("requires the complete signed browser and cleanup timeline", () => {
+  it("requires the complete live browser and cleanup timeline", () => {
     const root = temporaryRoot();
     expect(run("prepare", root).status).toBe(0);
-    const evidencePath = path.join(root, "evidence.json");
-    const evidence = read(evidencePath);
-    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-    evidence.attestation = {
-      algorithm: "Ed25519",
-      publicKey: publicKey.export({ type: "spki", format: "pem" }),
-      startedAt: new Date().toISOString(),
-    };
-    fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    const evidence = read(path.join(root, "evidence.json"));
     const record = {
       sequence: 1,
       type: "own",
@@ -92,22 +104,24 @@ describe("real Anonymous User release gate", () => {
       slot: "a",
       authenticationStatus: "anonymous",
       markerSha256: "a".repeat(64),
+      transportBindingFingerprint: "f".repeat(64),
       ownerFingerprint: "b".repeat(64),
       clientFingerprint: "c".repeat(64),
       workspaceFingerprint: "d".repeat(64),
       uploadFingerprint: "e".repeat(64),
+      sessionFingerprint: "1".repeat(64),
+      transcriptContentSha256: "2".repeat(64),
       ownPreviewHttpStatus: 200,
       ownPreviewSha256: "a".repeat(64),
     };
-    const signature = sign(null, Buffer.from(JSON.stringify(record)), privateKey).toString("base64url");
     fs.writeFileSync(
       path.join(root, "ledger.ndjson"),
-      `${JSON.stringify({ ...record, signature })}\n`,
+      `${JSON.stringify(record)}\n`,
     );
 
-    const result = run("verify", root);
+    const result = run("audit", root);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("complete signed observations");
+    expect(result.stderr).toContain("complete live observations");
   });
 
   it("produces the complete evidence through public HTTP/SSE boundaries", async () => {
@@ -137,11 +151,11 @@ describe("real Anonymous User release gate", () => {
     try {
       const a = await createClient(origin);
       const b = await createClient(origin);
-      streams.push(await openSse(origin, b.client.eventsUrl, b.cookie));
       await action(origin, "own", "a", a.cookie);
       await action(origin, "own", "b", b.cookie);
       await action(origin, "cross", "a", a.cookie);
       await action(origin, "cross", "b", b.cookie);
+      streams.push(await openSse(origin, b.client.eventsUrl, b.cookie));
       await action(origin, "idle-sweep", "b", b.cookie);
 
       const a2 = await createClient(origin, a.cookie);
@@ -174,9 +188,10 @@ describe("real Anonymous User release gate", () => {
         `${a2.cookie}; ${authCookie}`,
       );
 
-      const verified = run("verify", root);
+      await waitFor(() => output.includes("[anonymous-gate] PASS"), () => output);
+      const verified = run("audit", root);
       expect(verified.status, `${verified.stderr}\n${output}`).toBe(0);
-      expect(verified.stdout).toContain("real Anonymous User release gate passed");
+      expect(verified.stdout).toContain("audit is internally consistent");
 
       const bRecord = fs
         .readFileSync(path.join(root, "ledger.ndjson"), "utf8")
@@ -189,7 +204,7 @@ describe("real Anonymous User release gate", () => {
         bRecord.uploadFingerprint,
       );
       fs.writeFileSync(uploadRecord.path, "tampered after signed browser capture");
-      const tampered = run("verify", root);
+      const tampered = run("audit", root);
       expect(tampered.status).toBe(1);
       expect(tampered.stderr).toContain("retained upload content does not match");
     } finally {
@@ -206,7 +221,7 @@ function temporaryRoot() {
   return root;
 }
 
-function run(command: "prepare" | "verify", root: string) {
+function run(command: "prepare" | "audit", root: string) {
   return spawnSync(process.execPath, [checker, command, root], {
     cwd: repositoryRoot,
     encoding: "utf8",
