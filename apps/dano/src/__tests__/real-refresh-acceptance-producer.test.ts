@@ -730,6 +730,85 @@ describe("real refresh acceptance producer", () => {
     ).toBeNull();
   });
 
+  it("accepts the safely normalized ask_user_question arguments from a real Turn", () => {
+    const marker = "refresh-success-1003-1234567890abcdef";
+    const expectedSkillPath =
+      "/runtime/agent/skills/provider-broker-release-gate/SKILL.md";
+    const entries = skillTurn(marker, { ok: true, status: 200 });
+    const argumentsRecord = (
+      entries[3] as {
+        message: { content: Array<{ arguments: Record<string, unknown> }> };
+      }
+    ).message.content[0]!.arguments;
+    argumentsRecord.options =
+      '  [{"id": "continue", "label": "Continue"}, {"id": "stop", "label": "Stop"}]  ';
+    argumentsRecord.required = "True";
+
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        entries,
+        marker,
+        "/api/safe",
+        expectedSkillPath,
+      ),
+    ).toBe("success");
+
+    for (const required of [true, 1, "1", " yes ", "on", "是", "开启", "启用"]) {
+      const compatible = structuredClone(entries);
+      (
+        compatible[3] as {
+          message: { content: Array<{ arguments: Record<string, unknown> }> };
+        }
+      ).message.content[0]!.arguments.required = required;
+      expect(
+        findRefreshAcceptanceTranscriptOutcome(
+          compatible,
+          marker,
+          "/api/safe",
+          expectedSkillPath,
+        ),
+      ).toBe("success");
+    }
+
+    for (const required of [false, "false", "truthy", 2, null]) {
+      const mutation = structuredClone(entries);
+      (
+        mutation[3] as {
+          message: { content: Array<{ arguments: Record<string, unknown> }> };
+        }
+      ).message.content[0]!.arguments.required = required;
+      expect(
+        findRefreshAcceptanceTranscriptOutcome(
+          mutation,
+          marker,
+          "/api/safe",
+          expectedSkillPath,
+        ),
+      ).toBeNull();
+    }
+
+    for (const options of [
+      '[{"id":"continue","label":"Continue"}',
+      '{"id":"continue","label":"Continue"}',
+      "not-json",
+    ]) {
+      const mutation = structuredClone(entries);
+      (
+        mutation[3] as {
+          message: { content: Array<{ arguments: Record<string, unknown> }> };
+        }
+      ).message.content[0]!.arguments.options = options;
+      expect(
+        findRefreshAcceptanceTranscriptOutcome(
+          mutation,
+          marker,
+          "/api/safe",
+          expectedSkillPath,
+        ),
+      ).toBeNull();
+    }
+  });
+
   it("requires the exact canonical Skill invocation without surrounding text", () => {
     const marker = "refresh-success-1002-1234567890abcdef";
     const expectedSkillPath =

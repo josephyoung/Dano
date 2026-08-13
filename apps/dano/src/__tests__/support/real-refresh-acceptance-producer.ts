@@ -1,7 +1,9 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { writeFile as writeFileAtomically } from "atomically";
+import { normalizeAskUserQuestionCardRequest } from "../../bridge/ask-user-question.js";
 import type {
   OAuthProviderAdapter,
   ProviderCredential,
@@ -766,18 +768,22 @@ export function findRefreshAcceptanceTranscriptOutcome(
 
   const questionArgs = callArguments(question.call);
   const providerArgs = callArguments(provider.call);
+  const questionCard = normalizeAskUserQuestionCardRequest(questionArgs);
   if (
     !questionArgs ||
     Object.keys(questionArgs).length !== 5 ||
-    questionArgs.question !== `Continue provider release gate ${marker}?` ||
-    questionArgs.inputType !== "radio" ||
-    questionArgs.required !== true ||
-    questionArgs.default !== "continue" ||
-    JSON.stringify(questionArgs.options) !==
-      JSON.stringify([
+    !isDeepStrictEqual(questionCard, {
+      batch: false,
+      id: "answer",
+      kind: "single",
+      question: `Continue provider release gate ${marker}?`,
+      options: [
         { id: "continue", label: "Continue" },
         { id: "stop", label: "Stop" },
-      ]) ||
+      ],
+      required: true,
+      default: "continue",
+    }) ||
     !providerArgs ||
     Object.keys(providerArgs).length !== 2 ||
     providerArgs.method !== "GET" ||
