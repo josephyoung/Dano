@@ -1,9 +1,64 @@
-import { randomBytes } from "node:crypto";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { writeFile as writeFileAtomically } from "atomically";
+import type { ProviderCredential } from "../../bridge/oauth-provider.js";
 
 type PhaseKind = "success" | "cancel" | "confirm";
 type TranscriptOutcome = "success" | "reauth_required";
 
 const SKILL_NAME = "provider-broker-release-gate";
+
+export async function prepareInvalidAccessCredential(input: {
+  recordPath: string;
+  loginSessionId: string;
+  credential: ProviderCredential;
+  encryptionKey: { version: string; key: Uint8Array };
+}): Promise<ProviderCredential> {
+  if (!input.credential.refreshToken) {
+    throw new Error("A real refresh Credential is required");
+  }
+  const record = JSON.parse(readFileSync(input.recordPath, "utf8")) as Record<
+    string,
+    unknown
+  > & { status?: string; credential?: unknown };
+  if (record.status !== "active" || !record.credential) {
+    throw new Error("Active encrypted Login Session Credential is required");
+  }
+  const prepared: ProviderCredential = {
+    ...input.credential,
+    accessToken: `dano_refresh_acceptance_invalid_${randomBytes(32).toString("base64url")}`,
+    expiresAt: 0,
+  };
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", input.encryptionKey.key, iv);
+  const sessionKey = createHash("sha256")
+    .update(input.loginSessionId)
+    .digest("hex");
+  cipher.setAAD(
+    Buffer.from(
+      `dano-credential:v1:${input.encryptionKey.version}:${sessionKey}`,
+    ),
+  );
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(prepared), "utf8"),
+    cipher.final(),
+  ]);
+  await writeFileAtomically(
+    input.recordPath,
+    `${JSON.stringify({
+      ...record,
+      credential: {
+        algorithm: "aes-256-gcm",
+        keyVersion: input.encryptionKey.version,
+        iv: iv.toString("base64url"),
+        ciphertext: ciphertext.toString("base64url"),
+        tag: cipher.getAuthTag().toString("base64url"),
+      },
+    })}\n`,
+    { encoding: "utf8", mode: 0o600, fsync: true },
+  );
+  return prepared;
+}
 
 interface ActivePhase {
   kind: PhaseKind;
@@ -19,7 +74,7 @@ interface ActivePhase {
   action: boolean;
   anonymous: boolean;
   preflight: boolean;
-  revoked: boolean;
+  invalidAccessPrepared: boolean;
   refreshGrant: boolean;
   refreshRejected: boolean;
   refreshIdentity: boolean;
@@ -33,6 +88,7 @@ interface ActivePhase {
   peerCredentialBefore?: string;
   recordBefore?: string;
   credentialBefore?: string;
+  credentialPrepared?: string;
 }
 
 export class RealRefreshAcceptanceProducer {
@@ -103,7 +159,7 @@ export class RealRefreshAcceptanceProducer {
       action: false,
       anonymous: false,
       preflight: false,
-      revoked: false,
+      invalidAccessPrepared: false,
       refreshGrant: false,
       refreshRejected: false,
       refreshIdentity: false,
@@ -146,13 +202,35 @@ export class RealRefreshAcceptanceProducer {
     phase.peerCredentialBefore = peerCredential;
   }
 
-  observeRevocation(owner: string) {
+  observeInvalidAccessPrepared(
+    owner: string,
+    credentialBefore: string,
+    credentialPrepared: string,
+    refreshGrantBefore: string,
+    refreshGrantPrepared: string,
+  ) {
     const phase = this.requiredPhase();
     this.sameOwner(owner, phase);
-    if (!phase.preflight || phase.revoked) {
-      throw new Error("Provider revocation is out of order");
+    for (const [value, label] of [
+      [credentialBefore, "Credential before invalid access preparation"],
+      [credentialPrepared, "Prepared Credential"],
+      [refreshGrantBefore, "Refresh grant before preparation"],
+      [refreshGrantPrepared, "Refresh grant after preparation"],
+    ] as const) {
+      requireOpaque(value, label);
     }
-    phase.revoked = true;
+    if (
+      !phase.preflight ||
+      phase.invalidAccessPrepared ||
+      credentialBefore === credentialPrepared ||
+      refreshGrantBefore !== refreshGrantPrepared
+    ) {
+      throw new Error(
+        "Invalid access preparation must change only the access Credential and preserve the real refresh grant",
+      );
+    }
+    phase.invalidAccessPrepared = true;
+    phase.credentialPrepared = credentialPrepared;
   }
 
   observeProviderResponse(status: number, accessTokenInvalid: boolean) {
@@ -161,8 +239,8 @@ export class RealRefreshAcceptanceProducer {
       throw new Error("Provider response status is invalid");
     }
     if (!phase.invalidated) {
-      if (!phase.revoked || !accessTokenInvalid) {
-        throw new Error("A real provider revocation response is required");
+      if (!phase.invalidAccessPrepared || !accessTokenInvalid) {
+        throw new Error("A prepared invalid access Credential and real provider rejection are required");
       }
       phase.invalidated = true;
       return;
@@ -185,7 +263,11 @@ export class RealRefreshAcceptanceProducer {
     this.sameOwner(owner, phase);
     requireOpaque(recordBefore, "Credential record");
     requireOpaque(credentialBefore, "Credential content");
-    if (!phase.invalidated || phase.refreshStarted) {
+    if (
+      !phase.invalidated ||
+      phase.refreshStarted ||
+      credentialBefore !== phase.credentialPrepared
+    ) {
       throw new Error("Refresh start is out of order");
     }
     phase.refreshStarted = true;

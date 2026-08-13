@@ -1,10 +1,80 @@
+import { createDecipheriv, createHash, randomBytes } from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   findRefreshAcceptanceTranscriptOutcome,
+  prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("prepares only an invalid access Credential and never revokes the real refresh grant", () => {
+    const source = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../../../scripts/run-real-refresh-acceptance.ts"),
+      "utf8",
+    );
+
+    expect(source).toContain("prepareInvalidAccessCredential(");
+    expect(source).toContain("refreshGrantFingerprint(targetCredential)");
+    expect(source).toContain("refreshGrantFingerprint(storedPrepared)");
+    expect(source).not.toContain("provider.revokeCredential(targetCredential)");
+    expect(source).not.toContain("observeRevocation(");
+  });
+
+  it("atomically prepares an encrypted invalid access token while preserving the real refresh token", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-refresh-preparation-"));
+    const recordPath = path.join(root, "session.json");
+    const key = randomBytes(32);
+    const loginSessionId = "login-session-a";
+    fs.writeFileSync(
+      recordPath,
+      JSON.stringify({ version: 1, status: "active", credential: { existing: true } }),
+      { mode: 0o600 },
+    );
+    try {
+      const prepared = await prepareInvalidAccessCredential({
+        recordPath,
+        loginSessionId,
+        credential: {
+          accessToken: "real-access-token",
+          refreshToken: "real-refresh-token",
+          tokenType: "Bearer",
+        },
+        encryptionKey: { version: "test-v1", key },
+      });
+      const serialized = fs.readFileSync(recordPath, "utf8");
+      const stored = JSON.parse(serialized).credential;
+      const decipher = createDecipheriv(
+        "aes-256-gcm",
+        key,
+        Buffer.from(stored.iv, "base64url"),
+      );
+      decipher.setAAD(
+        Buffer.from(
+          `dano-credential:v1:test-v1:${hash(loginSessionId)}`,
+        ),
+      );
+      decipher.setAuthTag(Buffer.from(stored.tag, "base64url"));
+      const decrypted = JSON.parse(
+        Buffer.concat([
+          decipher.update(Buffer.from(stored.ciphertext, "base64url")),
+          decipher.final(),
+        ]).toString("utf8"),
+      );
+
+      expect(prepared.accessToken).not.toBe("real-access-token");
+      expect(decrypted).toEqual(prepared);
+      expect(decrypted.refreshToken).toBe("real-refresh-token");
+      expect(serialized).not.toContain("real-access-token");
+      expect(serialized).not.toContain("real-refresh-token");
+      expect(fs.statSync(recordPath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts only machine-observed success rotation on the same Credential owner", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 1_000);
     observeTwoSessions(producer);
@@ -18,12 +88,18 @@ describe("real refresh acceptance producer", () => {
       "peer-record",
       "peer-credential",
     );
-    producer.observeRevocation("owner-a");
+    producer.observeInvalidAccessPrepared(
+      "owner-a",
+      "credential-before",
+      "credential-prepared",
+      "refresh-before",
+      "refresh-before",
+    );
     producer.observeProviderResponse(401, true);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
-      "credential-before",
+      "credential-prepared",
     );
     producer.observeRefreshGrant("owner-a", "credential-after");
     producer.observeRefreshIdentity("owner-a", "identity-a");
@@ -50,11 +126,11 @@ describe("real refresh acceptance producer", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 2_000);
     observeTwoSessions(producer);
     const marker = producer.arm("cancel");
-    observeRevokedPreflight(producer);
+    observeInvalidAccessPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
-      "credential-before",
+      "credential-prepared",
     );
     producer.observeRefreshRejection("owner-a");
     producer.observeRefreshFailure("owner-a");
@@ -73,11 +149,11 @@ describe("real refresh acceptance producer", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 3_000);
     observeTwoSessions(producer);
     const marker = producer.arm("confirm");
-    observeRevokedPreflight(producer);
+    observeInvalidAccessPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
-      "credential-before",
+      "credential-prepared",
     );
     producer.observeRefreshRejection("owner-a");
     producer.observeRefreshFailure("owner-a");
@@ -94,11 +170,11 @@ describe("real refresh acceptance producer", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 4_000);
     observeTwoSessions(producer);
     producer.arm("success");
-    observeRevokedPreflight(producer);
+    observeInvalidAccessPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "same-record",
-      "same-credential",
+      "credential-prepared",
     );
 
     expect(() =>
@@ -114,11 +190,11 @@ describe("real refresh acceptance producer", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 5_000);
     observeTwoSessions(producer);
     producer.arm("success");
-    observeRevokedPreflight(producer);
+    observeInvalidAccessPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
-      "same-credential",
+      "credential-prepared",
     );
 
     expect(() =>
@@ -130,7 +206,7 @@ describe("real refresh acceptance producer", () => {
     ).toThrow(/rotate/i);
   });
 
-  it("rejects a synthetic invalidation without a completed real revocation", () => {
+  it("rejects invalidation unless the encrypted Login Session kept the real refresh grant", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 6_000);
     observeTwoSessions(producer);
     producer.arm("success");
@@ -143,9 +219,18 @@ describe("real refresh acceptance producer", () => {
       "peer-credential",
     );
 
-    expect(() => producer.observeProviderResponse(200, true)).toThrow(
-      /revocation/i,
+    expect(() => producer.observeProviderResponse(401, true)).toThrow(
+      /prepared/i,
     );
+    expect(() =>
+      producer.observeInvalidAccessPrepared(
+        "owner-a",
+        "credential-before",
+        "credential-prepared",
+        "refresh-before",
+        "changed-refresh",
+      ),
+    ).toThrow(/refresh grant/i);
   });
 
   it("requires the peer to be a distinct Login Session and Client of the same canonical User", () => {
@@ -169,11 +254,11 @@ describe("real refresh acceptance producer", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 7_000);
     observeTwoSessions(producer);
     const marker = producer.arm("cancel");
-    observeRevokedPreflight(producer);
+    observeInvalidAccessPreflight(producer);
     producer.observeRefreshStart(
       "owner-a",
       "record-before",
-      "credential-before",
+      "credential-prepared",
     );
     producer.observeRefreshRejection("owner-a");
     producer.observeRefreshFailure("owner-a");
@@ -243,7 +328,11 @@ function observeTwoSessions(producer: RealRefreshAcceptanceProducer) {
   producer.observePeerClient("owner-b", "client-b", "user-a");
 }
 
-function observeRevokedPreflight(producer: RealRefreshAcceptanceProducer) {
+function hash(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function observeInvalidAccessPreflight(producer: RealRefreshAcceptanceProducer) {
   producer.observePreflight(
     "owner-a",
     "identity-a",
@@ -252,7 +341,13 @@ function observeRevokedPreflight(producer: RealRefreshAcceptanceProducer) {
     "peer-record",
     "peer-credential",
   );
-  producer.observeRevocation("owner-a");
+  producer.observeInvalidAccessPrepared(
+    "owner-a",
+    "credential-before",
+    "credential-prepared",
+    "refresh-before",
+    "refresh-before",
+  );
   producer.observeProviderResponse(401, true);
 }
 

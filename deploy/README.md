@@ -429,9 +429,11 @@ flow, and Pi transcript directly. It does not write an evidence JSON file or
 expose an acceptance route. For an HTTP-only controlled test provider, opt in
 only for this process with `DANO_REFRESH_ACCEPTANCE_ALLOW_INSECURE=true`.
 
-Use the Codex in-app Browser for every phase. After login, send the indicated
-signal to the producer process, then invoke `provider-broker-release-gate` with
-the printed marker:
+Create the target Login Session in the Codex in-app Browser and the peer Login
+Session in Chrome by signing the same controlled account into the single Dano
+callback. Keep the peer authenticated throughout every phase. After both live
+Clients are observed, send the indicated signal to the producer process, then
+invoke `provider-broker-release-gate` from the target with the printed marker:
 
 - `SIGUSR2`: real refresh succeeds; call `/api/auth/current` and keep the same
   Login Session.
@@ -442,9 +444,22 @@ the printed marker:
   display the AlertDialog, and click **重新登录**. Keep the producer running
   until it prints `confirm: PASS`.
 
+After each target Skill result, refresh the peer Dano page once so its public
+`/api/auth/current` state is observed. The phase cannot pass unless the peer
+remains authenticated with the same encrypted Login Session Credential.
+
 The failure phases use a random incorrect confidential-client secret only for
 the real refresh request. Neither the secret nor any provider token, address,
 Cookie, raw User ID, response body, or response header is printed or persisted.
+For every phase, the producer atomically replaces only the target Login
+Session's encrypted access token with a one-time invalid value while preserving
+its real refresh token. The configured business API must reject that access
+token before the Broker attempts refresh. This avoids provider revocation,
+which can invalidate the whole grant and make a successful refresh impossible.
+The success phase then requires the real token endpoint grant, identity
+validation, encrypted Credential record rotation, accepted retry, and unchanged
+peer Credential. The failure phases require the real token endpoint to reject
+the incorrect client secret before `reauth_required` and the selected UI path.
 
 ```bash
 cp .env.example .env

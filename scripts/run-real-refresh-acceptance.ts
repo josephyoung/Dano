@@ -15,6 +15,7 @@ import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
   findRefreshAcceptanceTranscriptOutcome,
+  prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
 } from "../apps/dano/src/__tests__/support/real-refresh-acceptance-producer.ts";
 
@@ -293,8 +294,8 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     if (!targetCredential || !peerCredential) {
       throw new Error("Both browser sessions need active Credentials");
     }
-    if (!provider.validateCredential || !provider.revokeCredential) {
-      throw new Error("Provider validation and revocation are required");
+    if (!provider.validateCredential) {
+      throw new Error("Provider validation is required");
     }
     const [targetIdentity, peerIdentity] = await Promise.all([
       provider.validateCredential(targetCredential),
@@ -315,8 +316,37 @@ async function arm(kind: "success" | "cancel" | "confirm") {
       loginCredentialRecordFingerprint(peerSession.id),
       credentialFingerprint(peerCredential),
     );
-    await provider.revokeCredential(targetCredential);
-    producer.observeRevocation(targetSession.owner);
+    const prepared = await prepareInvalidAccessCredential({
+      recordPath: join(
+        runtimeRootPath,
+        "auth",
+        "login-sessions",
+        `${ownerFingerprint(targetSession.id)}.json`,
+      ),
+      loginSessionId: targetSession.id,
+      credential: targetCredential,
+      encryptionKey: {
+        version: required("DANO_OAUTH_CREDENTIAL_KEY_VERSION"),
+        key: credentialKey,
+      },
+    });
+    const storedPrepared = await authentication.readProviderCredential(
+      targetSession.id,
+    );
+    if (
+      !storedPrepared ||
+      storedPrepared.accessToken !== prepared.accessToken ||
+      storedPrepared.refreshToken !== targetCredential.refreshToken
+    ) {
+      throw new Error("Prepared Credential was not stored atomically");
+    }
+    producer.observeInvalidAccessPrepared(
+      targetSession.owner,
+      credentialFingerprint(targetCredential),
+      credentialFingerprint(storedPrepared),
+      refreshGrantFingerprint(targetCredential),
+      refreshGrantFingerprint(storedPrepared),
+    );
     console.log(
       `[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`,
     );
@@ -483,6 +513,10 @@ function loginCredentialRecordFingerprint(id: string): string {
 }
 function ownerFingerprint(value: string) { return fingerprint(value); }
 function credentialFingerprint(value: unknown) { return fingerprint(JSON.stringify(value)); }
+function refreshGrantFingerprint(value: ProviderCredential) {
+  if (!value.refreshToken) throw new Error("Refresh Credential is unavailable");
+  return fingerprint(value.refreshToken);
+}
 function identityFingerprint(value: ExternalIdentity) { return fingerprint(value.userId); }
 function fingerprint(value: string | Buffer) { return createHash("sha256").update(value).digest("hex"); }
 function relativePath(value: string) { const url = new URL(value, "https://invalid.test"); if (!value.startsWith("/") || value.startsWith("//") || url.origin !== "https://invalid.test") throw new Error("Provider path must be relative"); return `${url.pathname}${url.search}`; }
