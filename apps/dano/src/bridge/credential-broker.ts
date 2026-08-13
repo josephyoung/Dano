@@ -346,7 +346,6 @@ export class CredentialBroker {
         return {
           content: [{ type: "text", text: JSON.stringify(response) }],
           details: response,
-          ...(response.ok ? {} : { isError: true }),
         };
       },
     });

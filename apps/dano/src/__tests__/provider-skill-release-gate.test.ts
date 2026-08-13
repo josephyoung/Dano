@@ -372,7 +372,7 @@ function turnEntries(marker: string, outcome: "success" | "authentication_requir
     message({ role: "assistant", content: [{ type: "toolCall", id: questionId, name: "ask_user_question", arguments: { question: `Continue provider release gate ${marker}?`, inputType: "radio", options: [{ id: "continue", label: "Continue" }, { id: "stop", label: "Stop" }], required: true, default: "continue" } }] }, offsets[1]),
     message({ role: "toolResult", toolCallId: questionId, toolName: "ask_user_question", content: [{ type: "text", text: "answered" }], details: { status: "answered", answer: "continue" }, isError: false }, offsets[2]),
     message({ role: "assistant", content: [{ type: "toolCall", id: providerId, name: "provider_request", arguments: { method: "GET", path: gateEnvironment.DANO_PROVIDER_ACCEPTANCE_PATH } }] }, offsets[3]),
-    message({ role: "toolResult", toolCallId: providerId, toolName: "provider_request", content: [{ type: "text", text: JSON.stringify(details) }], details, isError: details.ok === false }, offsets[4]),
+    message({ role: "toolResult", toolCallId: providerId, toolName: "provider_request", content: [{ type: "text", text: JSON.stringify(details) }], details, isError: false }, offsets[4]),
   ];
 }
 

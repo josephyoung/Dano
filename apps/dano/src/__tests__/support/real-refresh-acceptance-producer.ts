@@ -827,7 +827,7 @@ export function findRefreshAcceptanceTranscriptOutcome(
   }
   const error = record(details?.error);
   return details?.ok === false &&
-    providerResult.message.isError === true &&
+    providerResult.message.isError === false &&
     error?.code === "reauth_required"
     ? "reauth_required"
     : null;

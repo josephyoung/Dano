@@ -58,8 +58,8 @@ describe("provider_request executable argument compatibility matrix", () => {
       { sessionManager: { getSessionId: () => "agent-a" } } as never,
     );
 
+    expect(result).not.toHaveProperty("isError");
     expect(result).toMatchObject({
-      isError: true,
       content: [{ type: "text", text: expect.any(String) }],
       details: {
         ok: false,

@@ -1038,7 +1038,18 @@ describe("real refresh acceptance producer", () => {
         "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
       ),
     ).toBe("reauth_required");
-    (reauth[6] as { message: { isError: boolean } }).message.isError = false;
+
+    (reauth[6] as { message: { isError: boolean } }).message.isError = true;
+    expect(
+      findRefreshAcceptanceTranscriptOutcome(
+        reauth,
+        marker,
+        "/api/safe",
+        "/runtime/agent/skills/provider-broker-release-gate/SKILL.md",
+      ),
+    ).toBeNull();
+
+    delete (reauth[6] as { message: { isError?: boolean } }).message.isError;
     expect(
       findRefreshAcceptanceTranscriptOutcome(
         reauth,
@@ -1217,8 +1228,7 @@ function skillTurn(marker: string, providerDetails: object) {
         toolCallId: "provider",
         toolName: "provider_request",
         details: providerDetails,
-        isError:
-          (providerDetails as { ok?: unknown }).ok === false,
+        isError: false,
       },
     },
   ];
