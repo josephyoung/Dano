@@ -107,11 +107,7 @@ export async function run() {
       sessionPath,
       name: config.marker,
     });
-    const ownSessions = await requireRpcSuccess(rpc, {
-      type: "list_sessions",
-      workspacePath,
-      includeActive: true,
-    });
+    const ownSessions = await waitForListedSession(rpc, workspacePath, sessionPath);
     const listedSessionPaths = Array.isArray(ownSessions.data?.sessions)
       ? ownSessions.data.sessions.map(session =>
           typeof session.path === "string"
@@ -126,8 +122,6 @@ export async function run() {
     ).length;
     status.listedSessionCount = listedSessionPaths.length;
     status.sessionWasListed = sessionMarkerCount === 1;
-    status.listedSessionTail = listedSessionPaths.map(path => path.slice(-32));
-    status.currentSessionTail = sessionPath.slice(-32);
 
     const raw = {
       clientId,
@@ -274,6 +268,27 @@ export function previewUrlForClient(value, clientId) {
     url.searchParams.set("clientId", clientId);
   }
   return `${url.pathname}${url.search}`;
+}
+
+async function waitForListedSession(rpc, workspacePath, sessionPath) {
+  const deadline = Date.now() + 15_000;
+  do {
+    const response = await requireRpcSuccess(rpc, {
+      type: "list_sessions",
+      workspacePath,
+      includeActive: true,
+    });
+    if (
+      Array.isArray(response.data?.sessions) &&
+      response.data.sessions.some(
+        session => session.path === sessionPath || session.sessionPath === sessionPath,
+      )
+    ) {
+      return response;
+    }
+    await delay(200);
+  } while (Date.now() < deadline);
+  throw new Error("active Session was not persisted into list_sessions");
 }
 
 async function openRpc(eventsUrl, messagesUrl) {
