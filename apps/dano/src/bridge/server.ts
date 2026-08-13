@@ -24,6 +24,7 @@ import {
   toBrowserUserSummary,
   UserContextError,
   type AuthenticatedUserContext,
+  type ClientUserResolution,
   type UserContext,
   type UserContextResolver,
 } from "./user-context.js";
@@ -315,6 +316,18 @@ export class BridgeServer {
 
   getClients(): BridgeClient[] {
     return Array.from(this.clients.values());
+  }
+
+  getClientUserResolution(clientId: string): ClientUserResolution | undefined {
+    const userContext = this.clientUsers.get(clientId);
+    const authentication = this.clientAuthentication.get(clientId);
+    if (!userContext || !authentication) return undefined;
+    const loginSessionId = this.clientLoginSessions.get(clientId);
+    return {
+      userContext,
+      authentication,
+      ...(loginSessionId ? { loginSessionId } : {}),
+    };
   }
 
   requireReauthentication(loginSessionId: string): void {

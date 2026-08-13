@@ -15,6 +15,7 @@ import {
   classifyRefreshExecutionFailure,
   createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
+  createPostLogoutAnonymousCapture,
   findRefreshAcceptanceTranscriptOutcome,
   isRefreshCurrentObservationAction,
   prepareInvalidAccessCredential,
@@ -73,6 +74,7 @@ let controller: Awaited<ReturnType<typeof startDanoServer>> | undefined;
 let pendingLogout: { status: number; owner: string } | undefined;
 let pendingLogin: { status: number; owner: string } | undefined;
 let pendingAnonymousWorkspace: string | undefined;
+const postLogoutAnonymousCapture = createPostLogoutAnonymousCapture();
 type ObservedLoginSession = {
   id: string;
   owner: string;
@@ -90,11 +92,6 @@ let observedLoginSessionSequence = 0;
 let explicitTargetSessionId: string | undefined;
 let explicitPeerSessionId: string | undefined;
 let lastPhaseReport: string | undefined;
-const pendingClientResolutions: Array<
-  | ({ status: "authenticated" } & ObservedLoginSession)
-  | { status: "anonymous"; workspace: string }
-> = [];
-
 const authentication = await createOAuthAuthentication({
   runtimeRootPath,
   appOrigin,
@@ -140,27 +137,6 @@ const authentication = await createOAuthAuthentication({
 
 const observedAuthentication = {
   ...authentication,
-  async resolveForClient(requestHeaders: IncomingHttpHeaders) {
-    const resolution = await authentication.resolveForClient?.(requestHeaders);
-    if (resolution?.authentication.status === "authenticated" && resolution.loginSessionId) {
-      pendingClientResolutions.push({
-        status: "authenticated",
-        id: resolution.loginSessionId,
-        owner: ownerFingerprint(resolution.loginSessionId),
-        user: fingerprint(resolution.userContext.user.id),
-        workspace: fingerprint(resolution.userContext.folderPath),
-      });
-    } else if (
-      resolution?.authentication.status === "anonymous" &&
-      producer.currentKind() === "cancel"
-    ) {
-      pendingClientResolutions.push({
-        status: "anonymous",
-        workspace: fingerprint(resolution.userContext.folderPath),
-      });
-    }
-    return resolution ?? null;
-  },
   async handle(req: Parameters<typeof authentication.handle>[0], res: ServerResponse, url: URL, lifecycle: Parameters<typeof authentication.handle>[3]) {
     if (url.pathname === "/api/acceptance/refresh") {
       if (req.method === "GET") {
@@ -256,7 +232,6 @@ const anonymousUsers = createAnonymousUserContextResolver({
   authenticatedResolver: observedAuthentication,
   activityWriteIntervalMs: 0,
 });
-
 const broker = new CredentialBroker({
   providerApiOrigin: "https://refresh-acceptance.invalid",
   fetch: async (input, init = {}) => {
@@ -391,12 +366,21 @@ controller = await startDanoServer(
 );
 controller.subscribe(event => {
   if (event.type !== "client_connect") return;
-  const resolution = pendingClientResolutions.shift();
+  const resolution = controller?.getClientUserResolution(event.client.id);
   if (!resolution) return;
-  if (resolution.status === "authenticated") {
-    observeLoginSession(resolution, fingerprint(event.client.id));
-  } else {
-    pendingAnonymousWorkspace = resolution.workspace;
+  if (resolution.authentication.status === "authenticated" && resolution.loginSessionId) {
+    observeLoginSession({
+      id: resolution.loginSessionId,
+      owner: ownerFingerprint(resolution.loginSessionId),
+      user: fingerprint(resolution.userContext.user.id),
+      workspace: fingerprint(resolution.userContext.folderPath),
+    }, fingerprint(event.client.id));
+  } else if (
+    resolution.authentication.status === "anonymous" &&
+    producer.currentKind() === "cancel" &&
+    postLogoutAnonymousCapture.accept()
+  ) {
+    pendingAnonymousWorkspace = fingerprint(resolution.userContext.folderPath);
     applyPendingAction();
   }
 });
@@ -463,6 +447,7 @@ async function arm(kind: "success" | "cancel" | "confirm") {
     pendingLogout = undefined;
     pendingLogin = undefined;
     pendingAnonymousWorkspace = undefined;
+    postLogoutAnonymousCapture.reset();
     marker = producer.arm(kind);
     producer.observePreflight(
       targetSession.owner,
@@ -534,8 +519,11 @@ async function pollTranscript() {
 
 function applyPendingAction() {
   try {
-    if (pendingLogout) {
-      producer.observeLogout(pendingLogout.status, pendingLogout.owner);
+    const logout = pendingLogout;
+    if (logout) {
+      postLogoutAnonymousCapture.observeLogout(() =>
+        producer.observeLogout(logout.status, logout.owner),
+      );
       pendingLogout = undefined;
     }
     if (pendingLogin) {

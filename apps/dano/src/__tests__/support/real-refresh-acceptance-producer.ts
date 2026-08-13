@@ -37,6 +37,22 @@ export interface RefreshAcceptanceSessionCandidate {
 
 const SKILL_NAME = "provider-broker-release-gate";
 
+export function createPostLogoutAnonymousCapture() {
+  let logoutObserved = false;
+  return {
+    reset() {
+      logoutObserved = false;
+    },
+    observeLogout(observe: () => void) {
+      observe();
+      logoutObserved = true;
+    },
+    accept() {
+      return logoutObserved;
+    },
+  };
+}
+
 export function refreshAcceptanceControlPage(): string {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>刷新验收浏览器绑定</title><style>body{font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem}form{display:grid;gap:1rem;margin-block:1rem}button{min-height:3rem;padding:0 1.5rem}</style><h1>刷新验收浏览器绑定</h1><p>请在内置浏览器选择目标，在 Chrome 选择 Peer。</p><form method="post"><button name="role" value="target">设为目标浏览器</button><button name="role" value="peer">设为 Peer 浏览器</button></form><h2>记录当前认证状态</h2><p>Skill 执行完成后，在各自浏览器点击对应按钮。</p><form method="post" action="?action=target-current"><button>记录目标认证状态</button></form><form method="post" action="?action=peer-current"><button>记录 Peer 认证状态</button></form></html>`;
 }

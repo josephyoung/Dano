@@ -316,7 +316,11 @@ describe("BridgeServer HTTP/SSE transport", () => {
     );
 
     expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
+    const created = await response.json() as {
+      client: { id: string };
+      currentUser: { username: string; avatarUrl: string };
+    };
+    expect(created).toMatchObject({
       currentUser: {
         username: "Joseph",
         avatarUrl: "https://example.test/avatar.png",
@@ -329,6 +333,13 @@ describe("BridgeServer HTTP/SSE transport", () => {
     expect(fs.statSync(path.join(runtimeRoot, "users", "user-42")).isDirectory()).toBe(
       true,
     );
+    expect(server.getClientUserResolution(created.client.id)).toMatchObject({
+      userContext: { user: { id: "user-42", username: "Joseph" } },
+      authentication: {
+        status: "authenticated",
+        user: { username: "Joseph" },
+      },
+    });
   });
 
   it("does not turn a client-reported identity into a User Context", async () => {

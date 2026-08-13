@@ -14,6 +14,7 @@ import {
   classifyRefreshExecutionFailure,
   createRefreshArmSingleFlight,
   createObservedAccessTokenInvalid,
+  createPostLogoutAnonymousCapture,
   findRefreshAcceptanceTranscriptOutcome,
   isRefreshCurrentObservationAction,
   prepareInvalidAccessCredential,
@@ -24,6 +25,24 @@ import {
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("accepts only Anonymous User resolutions observed after a successful logout", () => {
+    const capture = createPostLogoutAnonymousCapture();
+
+    expect(capture.accept()).toBe(false);
+    expect(() =>
+      capture.observeLogout(() => {
+        throw new Error("logout was rejected");
+      }),
+    ).toThrow(/rejected/i);
+    expect(capture.accept()).toBe(false);
+
+    capture.observeLogout(() => undefined);
+    expect(capture.accept()).toBe(true);
+
+    capture.reset();
+    expect(capture.accept()).toBe(false);
+  });
+
   it("reports only stable refresh execution stages", () => {
     expect(classifyRefreshExecutionFailure("credential_read")).toBe(
       "credential_read_failed",
@@ -139,6 +158,8 @@ describe("real refresh acceptance producer", () => {
       "observedLoginSessions.delete(resolution.loginSessionId)",
     );
     expect(source).toContain("authentication.resolveAuthSessionState(req.headers)");
+    expect(source).toContain("controller?.getClientUserResolution(event.client.id)");
+    expect(source).not.toContain("pendingClientResolutions");
     expect(source).toContain('res.setHeader("location", "/")');
     expect(source).toContain("isRefreshCurrentObservationAction(action)");
     expect(source).not.toContain('url.pathname === "/api/auth/current"');

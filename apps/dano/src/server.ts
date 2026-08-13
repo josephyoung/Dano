@@ -6,7 +6,10 @@ import {
   type RpcConnectionHandlerFactory,
 } from "./bridge/server.js";
 import { DetachedSessionRegistry } from "./bridge/session-registry.js";
-import type { UserContextResolver } from "./bridge/user-context.js";
+import type {
+  ClientUserResolution,
+  UserContextResolver,
+} from "./bridge/user-context.js";
 import { UserRuntimeRegistry } from "./bridge/user-runtime-registry.js";
 import type {
   BridgeClient,
@@ -44,6 +47,7 @@ export interface DanoServerController {
   getState(): BridgeState;
   getBridgeUrl(): string | undefined;
   getClients(): BridgeClient[];
+  getClientUserResolution(clientId: string): ClientUserResolution | undefined;
   requireReauthentication(loginSessionId: string): void;
   stop(): Promise<void>;
   subscribe(handler: (event: BridgeEvent) => void): () => void;
@@ -233,6 +237,10 @@ export async function startDanoServer(
 
     getClients() {
       return server.getClients();
+    },
+
+    getClientUserResolution(clientId) {
+      return server.getClientUserResolution(clientId);
     },
 
     requireReauthentication(loginSessionId) {
