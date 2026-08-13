@@ -448,7 +448,9 @@ function validateCrossCapture(value, peerRaw) {
     "cross capture",
   );
   validateResourceFingerprints(value.targetFingerprints, peerRaw);
-  requireEqual(value.forgedClientHttpStatus, 403, "cross.forgedClientHttpStatus");
+  if (![403, 404].includes(value.forgedClientHttpStatus)) {
+    throw new Error("cross.forgedClientHttpStatus must fail closed");
+  }
   for (const field of [
     "sessionList",
     "sessionOpen",
@@ -637,7 +639,9 @@ function verifySanitizedOwn(value, preference, path, errors) {
 
 function verifySanitizedCross(value, path, errors) {
   verifySanitizedFingerprints(value?.targetFingerprints, `${path}.targetFingerprints`, errors);
-  collectEqual(value?.forgedClientHttpStatus, 403, `${path}.forgedClientHttpStatus`, errors);
+  if (![403, 404].includes(value?.forgedClientHttpStatus)) {
+    errors.push(`${path}.forgedClientHttpStatus must fail closed`);
+  }
   for (const field of [
     "sessionList",
     "sessionOpen",
