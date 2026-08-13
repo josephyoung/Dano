@@ -417,13 +417,13 @@ export class CredentialBroker {
     if (!credential) return AUTHENTICATION_REQUIRED;
 
     const send = (requestCredential: ProviderCredential) => {
-      try {
-        this.options.observeRequestStage?.("request_sent");
-      } catch {}
       const headers = requestHeaders(request.headers, requestCredential);
       if (body !== undefined && typeof request.body !== "string") {
         headers["content-type"] ??= "application/json";
       }
+      try {
+        this.options.observeRequestStage?.("request_sent");
+      } catch {}
       return this.providerFetch(target!, {
         method,
         headers,
@@ -629,9 +629,14 @@ function requestHeaders(
     }
     headers[normalizedName] = value;
   }
-  const scheme = credential.tokenType?.trim() || "Bearer";
-  headers.authorization = `${scheme} ${credential.accessToken}`;
+  headers.authorization = `${providerAuthorizationScheme(credential.tokenType)} ${credential.accessToken}`;
   return headers;
+}
+
+function providerAuthorizationScheme(tokenType: string | undefined): "Bearer" {
+  const normalized = tokenType?.trim();
+  if (!normalized || normalized.toLowerCase() === "bearer") return "Bearer";
+  throw new Error("Unsupported Provider Credential token type");
 }
 
 function normalizeArgumentHeaders(input: unknown): Record<string, string> {

@@ -153,6 +153,77 @@ describe("Credential Broker", () => {
     );
   });
 
+  it.each([
+    [undefined, "Bearer access-a"],
+    ["Bearer", "Bearer access-a"],
+    ["bearer", "Bearer access-a"],
+    ["BEARER", "Bearer access-a"],
+    [" BeArEr ", "Bearer access-a"],
+  ])(
+    "normalizes the supported Provider Credential token type %j",
+    async (tokenType, expectedAuthorization) => {
+      const seenAuthorization: string[] = [];
+      const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
+        seenAuthorization.push(
+          new Headers(init?.headers).get("authorization") ?? "",
+        );
+        return new Response("ok");
+      });
+      const credentialBroker = new CredentialBroker({
+        providerApiOrigin: "https://provider.test",
+        readCredential: async () => ({ accessToken: "access-a", tokenType }),
+        fetch: providerFetch as typeof fetch,
+      });
+      const observed = observableSession("agent-a");
+      credentialBroker.observe(TEST_SCOPE, observed.session);
+      credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+      observed.emit(userMessageEvent("run skill"));
+      observed.emit(turnStartEvent());
+
+      await expect(
+        credentialBroker.request(TEST_SCOPE, "agent-a", {
+          method: "GET",
+          path: "/business/items",
+        }),
+      ).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(seenAuthorization).toEqual([expectedAuthorization]);
+    },
+  );
+
+  it("fails closed before sending an unsupported Provider Credential token type", async () => {
+    const providerFetch = vi.fn(async () => new Response("unexpected"));
+    const observeRequestStage = vi.fn();
+    const credentialBroker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "access-a",
+        tokenType: "Basic",
+      }),
+      observeRequestStage,
+      fetch: providerFetch as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    credentialBroker.observe(TEST_SCOPE, observed.session);
+    credentialBroker.queueAssistantTurn(TEST_SCOPE, "agent-a", "login_a");
+    observed.emit(userMessageEvent("run skill"));
+    observed.emit(turnStartEvent());
+
+    await expect(
+      credentialBroker.request(TEST_SCOPE, "agent-a", {
+        method: "GET",
+        path: "/business/items",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "provider_request_failed",
+        message: "The provider request failed.",
+      },
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(observeRequestStage).not.toHaveBeenCalledWith("request_sent");
+  });
+
   it("binds each initiating Login Session when Pi starts the Turn before its user message", async () => {
     const seenAuthorization: string[] = [];
     const credentialBroker = broker({
@@ -483,6 +554,7 @@ describe("Credential Broker", () => {
     const refreshCredential = vi.fn(async () => ({
       accessToken: "renewed-access",
       refreshToken: "rotated-refresh",
+      tokenType: "bearer",
     }));
     const seenAuthorization: string[] = [];
     const providerFetch = vi.fn(async (_url: URL, init?: RequestInit) => {
