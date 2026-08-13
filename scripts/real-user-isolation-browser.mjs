@@ -102,6 +102,11 @@ export async function run() {
       message: config.marker,
     });
     await transcriptMarker;
+    await requireRpcSuccess(rpc, {
+      type: "set_session_name",
+      sessionPath,
+      name: config.marker,
+    });
     const ownSessions = await requireRpcSuccess(rpc, {
       type: "list_sessions",
       workspacePath,
