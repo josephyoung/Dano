@@ -2,14 +2,77 @@ import { createDecipheriv, createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 import {
+  CredentialBroker,
+  type CredentialSession,
+} from "../bridge/credential-broker.js";
+import { createOAuth2ProviderAdapter } from "../bridge/oauth-provider.js";
+import {
+  createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
   prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
 } from "./support/real-refresh-acceptance-producer.js";
 
 describe("real refresh acceptance producer", () => {
+  it("refreshes when the real provider adapter reports HTTP 200 code 401", async () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.test",
+      authorizationEndpoint: "https://provider.test/authorize",
+      tokenEndpoint: "https://provider.test/token",
+      identityEndpoint: "https://provider.test/identity",
+      clientId: "fake-client",
+      clientSecret: "fake-secret",
+      scope: "user.read",
+    });
+    const observeProviderResponse = vi.fn();
+    const refreshCredential = vi.fn(async () => ({
+      accessToken: "renewed-access",
+      refreshToken: "rotated-refresh",
+    }));
+    const seenAuthorization: string[] = [];
+    const broker = new CredentialBroker({
+      providerApiOrigin: "https://provider.test",
+      readCredential: async () => ({
+        accessToken: "expired-access",
+        refreshToken: "initial-refresh",
+      }),
+      refreshCredential,
+      isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, {
+        observeProviderResponse,
+      }),
+      fetch: vi.fn(async (_input, init) => {
+        const authorization =
+          new Headers(init?.headers).get("authorization") ?? "";
+        seenAuthorization.push(authorization);
+        return authorization === "Bearer expired-access"
+          ? new Response('{"code":401,"data":null}')
+          : new Response('{"code":0,"data":{"ok":true}}');
+      }) as typeof fetch,
+    });
+    const observed = observableSession("agent-a");
+    broker.observe("user-a", observed.session);
+    broker.queueAssistantTurn("user-a", "agent-a", "login-a");
+    observed.emit(userMessageEvent());
+    observed.emit({ type: "turn_start" } as AgentSessionEvent);
+
+    await expect(
+      broker.request("user-a", "agent-a", { method: "GET", path: "/safe" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      body: '{"code":0,"data":{"ok":true}}',
+    });
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(seenAuthorization).toEqual([
+      "Bearer expired-access",
+      "Bearer renewed-access",
+    ]);
+    expect(observeProviderResponse).toHaveBeenNthCalledWith(1, 200, true);
+    expect(observeProviderResponse).toHaveBeenNthCalledWith(2, 200, false);
+  });
+
   it("binds provider validation to the canonical User resolved for both browsers", () => {
     const producer = new RealRefreshAcceptanceProducer(() => 500);
     observeTwoSessions(producer);
@@ -357,6 +420,30 @@ function observeTwoSessions(producer: RealRefreshAcceptanceProducer) {
 
 function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function observableSession(sessionId: string) {
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
+  const session: CredentialSession = {
+    sessionId,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  return {
+    session,
+    emit(event: AgentSessionEvent) {
+      for (const listener of listeners) listener(event);
+    },
+  };
+}
+
+function userMessageEvent(): AgentSessionEvent {
+  return {
+    type: "message_start",
+    message: { role: "user", content: "run skill", timestamp: 1 },
+  } as AgentSessionEvent;
 }
 
 function observeInvalidAccessPreflight(producer: RealRefreshAcceptanceProducer) {

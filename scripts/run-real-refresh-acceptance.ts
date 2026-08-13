@@ -11,6 +11,7 @@ import type { ProviderCredential } from "../apps/dano/src/bridge/oauth-provider.
 import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
 import { startDanoServer } from "../apps/dano/src/server.ts";
 import {
+  createObservedAccessTokenInvalid,
   findRefreshAcceptanceTranscriptOutcome,
   prepareInvalidAccessCredential,
   RealRefreshAcceptanceProducer,
@@ -218,14 +219,7 @@ const broker = new CredentialBroker({
       activeRefreshOwner = undefined;
     }
   },
-  isAccessTokenInvalid: async response => {
-    if (!provider.isAccessTokenInvalid) {
-      throw new Error("Provider invalid-token detection is unavailable");
-    }
-    const invalid = await provider.isAccessTokenInvalid(response);
-    producer.observeProviderResponse(response.status, invalid);
-    return invalid;
-  },
+  isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, producer),
   requireReauthentication: async id => {
     await authentication.requireReauthentication(id);
     producer.observeReauthentication(ownerFingerprint(id));

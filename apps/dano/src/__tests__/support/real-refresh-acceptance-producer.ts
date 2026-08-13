@@ -1,12 +1,30 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { writeFile as writeFileAtomically } from "atomically";
-import type { ProviderCredential } from "../../bridge/oauth-provider.js";
+import type {
+  OAuthProviderAdapter,
+  ProviderCredential,
+} from "../../bridge/oauth-provider.js";
 
 type PhaseKind = "success" | "cancel" | "confirm";
 type TranscriptOutcome = "success" | "reauth_required";
 
 const SKILL_NAME = "provider-broker-release-gate";
+
+export function createObservedAccessTokenInvalid(
+  provider: Pick<OAuthProviderAdapter, "isAccessTokenInvalid">,
+  observer: Pick<RealRefreshAcceptanceProducer, "observeProviderResponse">,
+): (response: Response) => Promise<boolean> {
+  const isAccessTokenInvalid = provider.isAccessTokenInvalid;
+  if (!isAccessTokenInvalid) {
+    throw new Error("Provider invalid-token detection is unavailable");
+  }
+  return async response => {
+    const invalid = await isAccessTokenInvalid(response);
+    observer.observeProviderResponse(response.status, invalid);
+    return invalid;
+  };
+}
 
 export async function prepareInvalidAccessCredential(input: {
   recordPath: string;
