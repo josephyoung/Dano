@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { once } from "node:events";
 import {
   fauxAssistantMessage,
@@ -132,7 +133,58 @@ describe("real provider Skill release gate", () => {
       "provider-broker-release-gate",
       "/preferences/theme",
     ]) expect(source).toContain(seam);
+    expect(source.match(/type: "switch_session"/g)).toHaveLength(1);
     expect(source).not.toMatch(/client.?secret|access.?token|refresh.?token|cookie/i);
+  });
+
+  it("keeps the held question observable and waits for the settled transcript outcome", async () => {
+    const imported = await import(
+      `${pathToFileURL(browserProducer).href}?unit=${Date.now()}`
+    ) as {
+      createGateObserver: () => {
+        observe(value: unknown): void;
+        waitForQuestion(marker: string): Promise<{ id: string }>;
+        waitForOutcome(marker: string, expected: string): Promise<true>;
+      };
+    };
+    const observer = imported.createGateObserver();
+    const marker = "persistent-viewer-marker";
+    observer.observe(transcriptEvent("transcript_upsert", {
+      role: "assistant",
+      content: [{
+        type: "toolCall",
+        id: "held-question",
+        name: "ask_user_question",
+        arguments: { question: `Continue provider release gate ${marker}?` },
+      }],
+    }));
+    for (let index = 0; index < 250; index += 1) {
+      observer.observe({ type: "event", payload: { type: "session_stats", index } });
+    }
+    await expect(observer.waitForQuestion(marker)).resolves.toMatchObject({
+      id: "held-question",
+    });
+
+    const unsettled = observer.waitForOutcome(marker, "success");
+    let settled = false;
+    void unsettled.then(() => { settled = true; });
+    observer.observe(transcriptEvent("transcript_upsert", {
+      role: "toolResult",
+      toolCallId: "provider-call",
+      toolName: "provider_request",
+      details: { ok: true, status: 200 },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+
+    observer.observe({
+      type: "event",
+      payload: {
+        type: "transcript_snapshot",
+        messages: turnMessages(marker, "success"),
+      },
+    });
+    await expect(unsettled).resolves.toBe(true);
   });
 
   it("emits live HTTP/SSE/Pi collector PASS without claiming browser surface provenance", async () => {
@@ -161,6 +213,26 @@ describe("real provider Skill release gate", () => {
     expect(fs.existsSync(fixture.evidencePath)).toBe(false);
   });
 
+  it("rejects different real runner models before writing a live audit record", async () => {
+    const fixture = await completeCapture({
+      sameUser: true,
+      differentModel: true,
+      expectFailure: true,
+    });
+    expect(fixture.output()).not.toContain("COLLECTOR PASS:");
+    expect(fixture.error()).toContain("same selected Pi model");
+    expect(fs.existsSync(fixture.evidencePath)).toBe(false);
+  });
+
+  it("does not let A logout before B's persistent viewer observed the held question", async () => {
+    const fixture = await completeCapture({
+      sameUser: true,
+      probeEarlyLogout: true,
+    });
+    expect(fixture.earlyLogoutStatus).toBe(400);
+    expect(fixture.output()).toContain("LIVE HTTP/SSE/Pi COLLECTOR PASS:");
+  });
+
   it("refuses prepare and offline verify instead of reconstructing a live collector PASS", () => {
     const root = temporaryRoot();
     const evidencePath = path.join(root, "evidence.json");
@@ -175,6 +247,8 @@ describe("real provider Skill release gate", () => {
 
 async function completeCapture(options: {
   sameUser: boolean;
+  differentModel?: boolean;
+  probeEarlyLogout?: boolean;
   expectFailure?: boolean;
 }) {
   const root = temporaryRoot();
@@ -189,6 +263,10 @@ async function completeCapture(options: {
     userId: "same-user",
     sessionPath: transcriptPath,
     preference: config.sharedPreference,
+    model: {
+      provider: "real-provider",
+      id: options.differentModel ? "different-model" : "real-model",
+    },
   });
   await post(capture.urls.b, "/ready", {
     status: "authenticated",
@@ -196,8 +274,16 @@ async function completeCapture(options: {
     userId: options.sameUser ? "same-user" : "different-user",
     sessionPath: transcriptPath,
     preference: config.sharedPreference,
+    model: { provider: "real-provider", id: "real-model" },
   });
   await post(capture.urls.a, "/a-held", {});
+  const earlyLogoutStatus = options.probeEarlyLogout
+    ? await postStatus(capture.urls.a, "/a-logout", {
+        logoutHttpStatus: 200,
+        oldClientHttpStatus: 404,
+      })
+    : undefined;
+  await post(capture.urls.b, "/b-observed-held", {});
   await post(capture.urls.a, "/a-logout", {
     logoutHttpStatus: 200,
     oldClientHttpStatus: 404,
@@ -206,7 +292,19 @@ async function completeCapture(options: {
   const result = await capture.exit;
   if (options.expectFailure) expect(result.code).not.toBe(0);
   else expect(result.code).toBe(0);
-  return { ...capture, evidencePath, transcriptPath };
+  return { ...capture, evidencePath, transcriptPath, earlyLogoutStatus };
+}
+
+function transcriptEvent(type: string, message: unknown) {
+  return { type: "event", payload: { type, message } };
+}
+
+function turnMessages(
+  marker: string,
+  outcome: "success" | "authentication_required",
+) {
+  return turnEntries(marker, outcome, [0, 1, 2, 3, 4], Date.now())
+    .map(entry => entry.message);
 }
 
 async function startCapture(evidencePath: string) {
@@ -293,6 +391,14 @@ async function post(url: URL, route: string, body: unknown) {
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(202);
+}
+
+async function postStatus(url: URL, route: string, body: unknown) {
+  return (await fetch(`${url.origin}${route}${url.search}`, {
+    method: "POST",
+    headers: { Origin: "http://localhost:5173", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })).status;
 }
 
 function temporaryRoot() {

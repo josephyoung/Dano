@@ -300,7 +300,10 @@ read-only provider path whose response is safe for an acceptance transcript;
 the path stays in runtime configuration and is not part of Dano core.
 
 Install the Skill into the disposable Agent Config Directory used by the test
-runtime:
+runtime **before starting Dano**. Start the backend with the same
+`PI_CODING_AGENT_DIR` and provider-path environment; that directory must also
+contain the real model configuration and credential used by the acceptance
+runner:
 
 ```bash
 PI_CODING_AGENT_DIR=/path/to/test-agent-config \
@@ -309,7 +312,9 @@ node scripts/check-provider-skill-release-gate.mjs install
 ```
 
 Start the live collector after installing the Skill and starting the test Dano
-runtime. It prints one run-specific module URL for Login Session A in the Codex
+runtime. The producer reads the selected model through public `get_state`; both
+browser slots must report the same non-empty provider/model selection. It
+prints one run-specific module URL for Login Session A in the Codex
 in-app Browser and one for Login Session B in Chrome:
 
 ```bash
@@ -322,8 +327,12 @@ Use the single configured Dano callback and one running Dano origin for both
 Login Sessions. Create Login Session A in the Codex in-app Browser and Login
 Session B in Chrome by signing the same test account into each browser context;
 do not add a second callback address or start a second Dano frontend. Open the
-same Agent Session from both. Session B remains a viewer so the real Pi runtime
-stays alive when session A disconnects. Invoke the Skill from A with a unique
+same Agent Session from both. The B producer calls `switch_session` once and
+then remains continuously subscribed as a viewer; do not reload or switch B
+again while A's question is pending. This keeps the real Pi runtime and its
+open `ask_user_question` alive when A disconnects. The collector does not let A
+logout until B's persistent viewer has observed that held question. Invoke the
+Skill from A with a unique
 `gate-a-before` marker. The Skill asks one controlled `ask_user_question`
 single-choice question; answer `continue` from A and confirm its subsequent
 `provider_request` succeeds.
@@ -339,7 +348,10 @@ accounts are recorded in
 `apps/dano/src/__tests__/fixtures/real-oauth-acceptance.json`.
 
 Import each printed module in its matching authenticated browser and call
-`run()`. The modules use only public Dano HTTP/SSE commands and the browser's
+`run()` without awaiting it in the console so both slots can run concurrently,
+for example `void import("<SLOT_A-or-SLOT_B>").then(module => module.run())`.
+Start A first; after it has created the shared Agent Session, start B. The
+modules use only public Dano HTTP/SSE commands and the browser's
 HttpOnly Login Session implicitly; they never read or forward Cookies. The
 operation contract assigns A to the Codex in-app Browser and B to Chrome, with
 both on the same Dano callback without recording its address. The collector
@@ -357,6 +369,9 @@ external actual-browser acceptance record for that provenance:
 - Session fingerprints are SHA-256 hashes of the `sessionPath` returned through
   the Bridge. B must successfully `switch_session` to A's path; record only the
   hash, never the path.
+- The public `get_state` response must contain a selected Pi provider/model in
+  both slots, and both selections must match. Model credentials and model
+  configuration are not copied into the audit record.
 - Record `aBeforeBrowser` as `codex-in-app-browser`; record both
   `aAfterBrowser` and `bAfterBrowser` as `chrome`. These are expected operation
   labels, not collector-observed browser provenance. The external acceptance
@@ -369,8 +384,9 @@ external actual-browser acceptance record for that provenance:
   return 404, and B must remain `authenticated` before its post-logout Skill
   Turn succeeds.
 
-The collector retains raw Client and Session mappings only in memory, reads the
-live Pi transcript itself, and emits `LIVE HTTP/SSE/Pi COLLECTOR PASS` only
+The collector retains raw Client, Session, and selected-model mappings only in
+memory, reads the live Pi transcript itself, and emits
+`LIVE HTTP/SSE/Pi COLLECTOR PASS` only
 after all three ordered phases pass. This proves the behavior and resource
 relationships, while browser-surface provenance remains part of the external
 IAB/Chrome acceptance record. The written JSON is a redacted audit record and cannot reconstruct
@@ -385,8 +401,10 @@ pnpm run test:auth-real-provider-skill -- audit \
   /path/to/provider-skill-evidence.json
 ```
 
-The verifier requires the Skill's exact canonical `ask_user_question` call and
-its answered `continue` result before each `provider_request`, so the held A
+The producer waits for each Turn's settled transcript snapshot instead of
+advancing on an intermediate tool-result event. The verifier requires the
+Skill's exact canonical `ask_user_question` call and its answered `continue`
+result before each `provider_request`, so the held A
 Turn is portable and reproducible through Dano's public HTTP/SSE command seam,
 without a hidden acceptance endpoint, shell sandbox, copied credential, or
 direct Broker call. Remove the test Skill after acceptance:

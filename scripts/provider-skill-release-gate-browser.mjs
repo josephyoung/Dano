@@ -40,6 +40,7 @@ export async function run() {
         workspacePath: created.defaultWorkspacePath,
       });
       const sessionPath = requiredString(createdSession.data?.sessionPath, "sessionPath");
+      const model = await readSelectedModel(rpc);
       await runSkillTurn(rpc, config.markers.aBefore, "success");
       await setSharedPreference(clientId, config.sharedPreference);
       await collectorJson("/ready", {
@@ -51,6 +52,7 @@ export async function run() {
           userId: authentication.user.id,
           sessionPath,
           preference: config.sharedPreference,
+          model,
         }),
       }, 202);
       await waitState(value => value.bothReady);
@@ -62,6 +64,7 @@ export async function run() {
       });
       await rpc.waitForQuestion(config.markers.aAfter);
       await collectorJson("/a-held", { method: "POST", body: "{}" }, 202);
+      await waitState(value => value.bObservedHeld);
 
       status.phase = "a-logout";
       const logoutHttpStatus = await danoStatus("/api/auth/logout", {
@@ -84,6 +87,7 @@ export async function run() {
         type: "switch_session",
         sessionPath: peer.sessionPath,
       });
+      const model = await readSelectedModel(rpc);
       const preference = await readPreference(clientId);
       await collectorJson("/ready", {
         method: "POST",
@@ -94,18 +98,15 @@ export async function run() {
           userId: authentication.user.id,
           sessionPath: requiredString(switched.data?.sessionPath, "sessionPath"),
           preference,
+          model,
         }),
       }, 202);
       await waitState(value => value.aHeld);
+      const heldQuestion = await rpc.waitForQuestion(config.markers.aAfter);
+      await collectorJson("/b-observed-held", { method: "POST", body: "{}" }, 202);
       await waitState(value => value.aLoggedOut);
 
       status.phase = "answer-held-a";
-      const held = await requireRpcSuccess(rpc, {
-        type: "switch_session",
-        sessionPath: peer.sessionPath,
-      });
-      const heldQuestion = findQuestion(held, config.markers.aAfter);
-      if (!heldQuestion) throw new Error("Held A question was not restored to B");
       await requireRpcSuccess(rpc, {
         type: "answer_question",
         toolCallId: heldQuestion.id,
@@ -165,8 +166,7 @@ async function runSkillTurn(rpc, marker, expected) {
 
 async function openRpc(eventsUrl, messagesUrl) {
   const pending = new Map();
-  const observed = [];
-  const waiters = new Set();
+  const observer = createGateObserver();
   const eventSource = new EventSource(requiredString(eventsUrl, "eventsUrl"));
   eventSource.onmessage = event => {
     let message;
@@ -175,9 +175,7 @@ async function openRpc(eventsUrl, messagesUrl) {
     } catch {
       return;
     }
-    observed.push(message);
-    if (observed.length > 200) observed.shift();
-    for (const waiter of [...waiters]) waiter();
+    observer.observe(message);
     if (message.type !== "response" || typeof message.payload?.id !== "string") return;
     const resolve = pending.get(message.payload.id);
     if (!resolve) return;
@@ -195,40 +193,10 @@ async function openRpc(eventsUrl, messagesUrl) {
       reject(new Error("SSE connection failed"));
     };
   });
-  const waitFor = (predicate, label) => new Promise((resolve, reject) => {
-    const inspect = () => {
-      for (const message of observed) {
-        const result = predicate(message);
-        if (!result) continue;
-        clearTimeout(timeout);
-        waiters.delete(inspect);
-        resolve(result);
-        return true;
-      }
-      return false;
-    };
-    const timeout = setTimeout(() => {
-      waiters.delete(inspect);
-      reject(new Error(`${label} timed out`));
-    }, 60_000);
-    if (!inspect()) waiters.add(inspect);
-  });
   return {
     eventSource,
-    waitForQuestion: marker => waitFor(
-      message => findQuestion(message, marker),
-      `question ${marker}`,
-    ),
-    waitForOutcome: (marker, expected) => waitFor(message => {
-      const text = JSON.stringify(message);
-      if (!text.includes(marker) || !text.includes("provider_request")) return null;
-      if (expected === "authentication_required") {
-        return text.includes("authentication_required") ? true : null;
-      }
-      return /\"ok\"\s*:\s*true/.test(text) && /\"status\"\s*:\s*2\d\d/.test(text)
-        ? true
-        : null;
-    }, `provider outcome ${marker}`),
+    waitForQuestion: observer.waitForQuestion,
+    waitForOutcome: observer.waitForOutcome,
     async command(command) {
       const id = crypto.randomUUID();
       const result = new Promise((resolve, reject) => {
@@ -253,20 +221,123 @@ async function openRpc(eventsUrl, messagesUrl) {
   };
 }
 
-function findQuestion(value, marker) {
-  if (!value || typeof value !== "object") return null;
-  if (
-    value.name === "ask_user_question" &&
-    typeof value.id === "string" &&
-    String(value.arguments?.question ?? value.args?.question ?? "").includes(marker)
-  ) {
-    return { id: value.id, revision: value.revision };
+export function createGateObserver({ timeoutMs = 180_000 } = {}) {
+  const questions = new Map();
+  const settledSnapshots = [];
+  const waiters = new Set();
+
+  const notify = () => {
+    for (const waiter of [...waiters]) waiter();
+  };
+  const observe = value => {
+    collectQuestions(value, questions);
+    const snapshot = transcriptSnapshot(value);
+    if (snapshot) settledSnapshots.push(snapshot);
+    notify();
+  };
+  const waitFor = (inspect, label) => new Promise((resolve, reject) => {
+    const check = () => {
+      const result = inspect();
+      if (!result) return false;
+      clearTimeout(timeout);
+      waiters.delete(check);
+      resolve(result);
+      return true;
+    };
+    const timeout = setTimeout(() => {
+      waiters.delete(check);
+      reject(new Error(`${label} timed out`));
+    }, timeoutMs);
+    if (!check()) waiters.add(check);
+  });
+
+  return {
+    observe,
+    waitForQuestion: marker => waitFor(
+      () => [...questions.values()].find(question => question.marker.includes(marker))?.question,
+      `question ${marker}`,
+    ),
+    waitForOutcome: (marker, expected) => waitFor(
+      () => settledSnapshots.some(snapshot => transcriptOutcome(snapshot, marker) === expected)
+        ? true
+        : null,
+      `settled provider outcome ${marker}`,
+    ),
+  };
+}
+
+function collectQuestions(value, questions) {
+  if (!value || typeof value !== "object") return;
+  if (value.name === "ask_user_question" && typeof value.id === "string") {
+    const marker = String(value.arguments?.question ?? value.args?.question ?? "");
+    questions.set(value.id, {
+      marker,
+      question: { id: value.id, revision: value.revision },
+    });
   }
   for (const child of Array.isArray(value) ? value : Object.values(value)) {
-    const found = findQuestion(child, marker);
-    if (found) return found;
+    collectQuestions(child, questions);
   }
-  return null;
+}
+
+function transcriptSnapshot(value) {
+  const payload = value?.type === "event" ? value.payload : value;
+  return payload?.type === "transcript_snapshot" && Array.isArray(payload.messages)
+    ? payload.messages
+    : null;
+}
+
+function transcriptOutcome(messages, marker) {
+  const start = messages.findIndex(message =>
+    message?.role === "user" && textOf(message.content).includes(marker),
+  );
+  if (start < 0) return null;
+  const nextUserOffset = messages.slice(start + 1)
+    .findIndex(message => message?.role === "user");
+  const turn = messages.slice(
+    start + 1,
+    nextUserOffset < 0 ? messages.length : start + 1 + nextUserOffset,
+  );
+  const providerCall = turn.flatMap(message => Array.isArray(message?.content)
+    ? message.content
+    : [])
+    .find(block => block?.type === "toolCall" && block.name === "provider_request");
+  if (typeof providerCall?.id !== "string") return null;
+  const result = turn.find(message =>
+    message?.role === "toolResult" &&
+    message.toolCallId === providerCall.id &&
+    message.toolName === "provider_request",
+  );
+  const details = result?.details ?? parseJsonObject(textOf(result?.content));
+  if (details?.ok === true && Number.isInteger(details.status) && details.status >= 200 && details.status < 300) {
+    return "success";
+  }
+  return details?.ok === false && details.error?.code === "authentication_required"
+    ? "authentication_required"
+    : null;
+}
+
+function textOf(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(textOf).join("\n");
+  if (value && typeof value === "object") return Object.values(value).map(textOf).join("\n");
+  return "";
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readSelectedModel(rpc) {
+  const state = await requireRpcSuccess(rpc, { type: "get_state" });
+  const provider = requiredString(state.data?.model?.provider, "model.provider");
+  const id = requiredString(state.data?.model?.id, "model.id");
+  return { provider, id };
 }
 
 async function setSharedPreference(clientId, accentColorPreset) {

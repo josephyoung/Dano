@@ -132,6 +132,7 @@ async function captureGate(evidencePath) {
     },
     raw: { a: null, b: null },
     aHeld: false,
+    bObservedHeld: false,
     aLogout: null,
     bComplete: false,
   };
@@ -202,8 +203,18 @@ async function captureGate(evidencePath) {
         json(response, 202, { status: "held" }, options.origin);
         return;
       }
+      if (request.method === "POST" && url.pathname === "/b-observed-held") {
+        if (slot !== "b" || !run.aHeld || !run.raw.b) {
+          throw new Error("B held observation requires its persistent shared-session viewer");
+        }
+        run.bObservedHeld = true;
+        json(response, 202, { status: "observed" }, options.origin);
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/a-logout") {
-        if (slot !== "a" || !run.aHeld) throw new Error("A is not held");
+        if (slot !== "a" || !run.aHeld || !run.bObservedHeld) {
+          throw new Error("A cannot logout before B observes the held question");
+        }
         run.aLogout = validateLogout(await requestJson(request));
         json(response, 202, { status: "logged-out" }, options.origin);
         return;
@@ -212,6 +223,7 @@ async function captureGate(evidencePath) {
         json(response, 200, {
           bothReady: Boolean(run.raw.a && run.raw.b),
           aHeld: run.aHeld,
+          bObservedHeld: run.bObservedHeld,
           aLoggedOut: Boolean(run.aLogout),
         }, options.origin);
         return;
@@ -309,7 +321,16 @@ function validateSkillReady(value, slot) {
     }
   }
   if (value.status !== "authenticated") throw new Error(`${slot} must be authenticated`);
-  return { ...value };
+  if (
+    !record(value.model) ||
+    typeof value.model.provider !== "string" ||
+    !value.model.provider ||
+    typeof value.model.id !== "string" ||
+    !value.model.id
+  ) {
+    throw new Error(`ready.model must identify slot ${slot}'s selected Pi model`);
+  }
+  return { ...value, model: { provider: value.model.provider, id: value.model.id } };
 }
 
 function validateLogout(value) {
@@ -326,9 +347,14 @@ function validateLogout(value) {
 function finalizeSkillCapture(evidencePath, evidence, run) {
   const a = run.raw.a;
   const b = run.raw.b;
-  if (!a || !b || !run.aLogout || !run.bComplete) throw new Error("capture incomplete");
+  if (!a || !b || !run.bObservedHeld || !run.aLogout || !run.bComplete) {
+    throw new Error("capture incomplete");
+  }
   if (a.userId !== b.userId) throw new Error("A and B are not the same canonical User");
   if (a.clientId === b.clientId) throw new Error("A and B reused one Browser Client");
+  if (a.model.provider !== b.model.provider || a.model.id !== b.model.id) {
+    throw new Error("A and B did not use the same selected Pi model");
+  }
   if (resolve(a.sessionPath) !== resolve(b.sessionPath)) {
     throw new Error("A and B did not share one Agent Session");
   }
