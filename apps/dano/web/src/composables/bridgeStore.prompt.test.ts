@@ -3,6 +3,7 @@
 import type {
   BridgeAuthenticationState,
   BridgeUserSummary,
+  RpcCommand,
 } from "@dano/types/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -44,6 +45,19 @@ class FakeEventSource extends EventTarget {
 
 const eventSources: FakeEventSource[] = [];
 
+async function startBridge(fetchImpl: typeof fetch) {
+  vi.stubGlobal("fetch", fetchImpl);
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+  const { initBridge } = await import("./bridgeStore.svelte");
+  const bridge = initBridge();
+  await vi.waitFor(() => expect(eventSources).toHaveLength(1));
+  eventSources[0]!.open();
+  await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
+  return bridge;
+}
+
 async function connectBridge(
   promptResponse: Promise<Response> | (() => Promise<Response>),
   onPromptRequest?: (init: RequestInit | undefined) => void,
@@ -74,16 +88,156 @@ async function connectBridge(
     }
     return new Response(null, { status: 202 });
   });
-  vi.stubGlobal("fetch", fetchImpl);
-  vi.stubGlobal("EventSource", FakeEventSource);
-  vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+  return startBridge(fetchImpl);
+}
 
-  const { initBridge } = await import("./bridgeStore.svelte");
-  const bridge = initBridge();
-  await vi.waitFor(() => expect(eventSources).toHaveLength(1));
-  eventSources[0]!.open();
-  await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
-  return bridge;
+interface InitialSessionFixture {
+  id: string;
+  name: string;
+  path: string;
+  updatedAt: string;
+  content: string;
+}
+
+async function connectWithDefaultWorkspaceSessions(
+  sessions: InitialSessionFixture[],
+) {
+  const workspacePath = "/users/current/workspaces/default";
+  const newSessionPath = "/users/current/sessions/new.jsonl";
+  const commands: RpcCommand[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/auth/current") {
+      return new Response(
+        JSON.stringify({
+          status: "authenticated",
+          user: { id: "user-alice", username: "Alice" },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+    if (url === "/api/clients") {
+      return new Response(
+        JSON.stringify({
+          client: { id: "client-1" },
+          eventsUrl: "/events",
+          messagesUrl: "/messages",
+          defaultWorkspacePath: workspacePath,
+          authentication: {
+            status: "authenticated",
+            user: { id: "user-alice", username: "Alice" },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url === "/messages") {
+      const envelope = JSON.parse(String(init?.body)) as {
+        payload: RpcCommand & { id: string };
+      };
+      const command = envelope.payload;
+      commands.push(command);
+      const selectedSession =
+        command.type === "switch_session"
+          ? sessions.find(session => session.path === command.sessionPath)
+          : undefined;
+      const dataByCommand: Record<string, unknown> = {
+        list_workspaces: {
+          workspaces: [
+            { id: workspacePath, name: "default", path: workspacePath },
+          ],
+        },
+        get_available_models: { models: [] },
+        get_commands: { commands: [] },
+        register_workspace: {
+          workspaceId: workspacePath,
+          workspaceName: "default",
+          workspacePath,
+          created: false,
+          cancelled: false,
+        },
+        new_session: {
+          transcript: {
+            messages: [],
+            sessionPath: newSessionPath,
+            hasOlder: false,
+            hasNewer: false,
+          },
+          treeEntries: [],
+          sessionId: "new-session",
+          sessionName: "New session",
+          sessionPath: newSessionPath,
+          workspacePath,
+          cancelled: false,
+        },
+        list_sessions: {
+          sessions: sessions.slice(
+            0,
+            command.type === "list_sessions" ? command.limit : undefined,
+          ).map(({ content: _, ...session }) => ({
+            ...session,
+            workspacePath,
+          })),
+          workspacePath,
+          merge: "replace",
+        },
+        switch_session: selectedSession
+          ? {
+              transcript: {
+                messages: [
+                  {
+                    id: selectedSession.id,
+                    role: "user",
+                    content: selectedSession.content,
+                  },
+                ],
+                sessionPath: selectedSession.path,
+                hasOlder: false,
+                hasNewer: false,
+              },
+              treeEntries: [],
+              sessionId: selectedSession.id,
+              sessionName: selectedSession.name,
+              sessionPath: selectedSession.path,
+              workspacePath,
+            }
+          : undefined,
+        get_state: selectedSession
+          ? {
+              sessionId: selectedSession.id,
+              sessionName: selectedSession.name,
+              sessionFile: selectedSession.path,
+              workspacePath,
+              isStreaming: false,
+              isCompacting: false,
+              autoCompactionEnabled: false,
+              messageCount: 1,
+              pendingMessageCount: 0,
+            }
+          : undefined,
+      };
+      queueMicrotask(() => {
+        eventSources[0]?.send({
+          type: "response",
+          payload: {
+            id: command.id,
+            type: "response",
+            command: command.type,
+            success: true,
+            data: dataByCommand[command.type],
+          },
+        });
+      });
+      return new Response(null, { status: 202 });
+    }
+    return new Response(null, { status: 404 });
+  });
+  window.sessionStorage.clear();
+  const bridge = await startBridge(fetchImpl);
+  return { bridge, commands, newSessionPath };
 }
 
 describe("Bridge prompt acceptance", () => {
@@ -381,6 +535,62 @@ describe("Bridge prompt acceptance", () => {
 
     expect(assign).toHaveBeenCalledWith(
       "/api/auth/login?returnTo=%2Fchat%3Fsession%3Done%23latest",
+    );
+    bridge.disconnect();
+  });
+
+  it("restores the latest existing default workspace session after a page return", async () => {
+    const latestSessionPath = "/users/current/sessions/transferred.jsonl";
+    const { bridge, commands } = await connectWithDefaultWorkspaceSessions([
+      {
+        id: "transferred-session",
+        name: "Transferred conversation",
+        path: latestSessionPath,
+        updatedAt: "2026-08-13T01:00:00.000Z",
+        content: "Conversation from before login",
+      },
+      {
+        id: "older-session",
+        name: "Older conversation",
+        path: "/users/current/sessions/older.jsonl",
+        updatedAt: "2026-08-12T01:00:00.000Z",
+        content: "Older conversation",
+      },
+    ]);
+
+    await vi.waitFor(() =>
+      expect(bridge.activeSessionPath).toBe(latestSessionPath),
+    );
+    expect(bridge.transcript).toEqual([
+      expect.objectContaining({ content: "Conversation from before login" }),
+    ]);
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "list_sessions", limit: 1 }),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        type: "switch_session",
+        sessionPath: latestSessionPath,
+      }),
+    );
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ type: "new_session" }),
+    );
+    bridge.disconnect();
+  });
+
+  it("creates the default workspace session only when no session exists", async () => {
+    const { bridge, commands, newSessionPath } =
+      await connectWithDefaultWorkspaceSessions([]);
+
+    await vi.waitFor(() =>
+      expect(bridge.activeSessionPath).toBe(newSessionPath),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "list_sessions", limit: 1 }),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "new_session" }),
     );
     bridge.disconnect();
   });
