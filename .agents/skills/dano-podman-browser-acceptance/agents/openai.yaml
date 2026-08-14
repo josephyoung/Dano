@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dano Podman Browser Acceptance"
+  short_description: "在本机安全部署 Dano Podman 并完成真实浏览器验收"
+  default_prompt: "Use $dano-podman-browser-acceptance to deploy Dano locally with Podman and complete real browser acceptance."
