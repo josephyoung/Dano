@@ -7,7 +7,6 @@ const {
   createAgentSessionFromServicesMock,
   createAgentSessionRuntimeMock,
   createAgentSessionServicesMock,
-  createCurlToolMock,
   createEditToolDefinitionMock,
   createReadToolDefinitionMock,
   createWriteToolDefinitionMock,
@@ -15,7 +14,6 @@ const {
   createAgentSessionFromServicesMock: vi.fn(),
   createAgentSessionRuntimeMock: vi.fn(),
   createAgentSessionServicesMock: vi.fn(),
-  createCurlToolMock: vi.fn(),
   createEditToolDefinitionMock: vi.fn(),
   createReadToolDefinitionMock: vi.fn(),
   createWriteToolDefinitionMock: vi.fn(),
@@ -37,10 +35,6 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   };
 });
 
-vi.mock("../curl-tool.js", () => ({
-  createCurlTool: createCurlToolMock,
-}));
-
 import { createDetachedAgentSessionRuntime } from "../detached-session.js";
 import { danoVersionTool } from "../dano-version-tool.js";
 import { detectWorkspaceEnvironments } from "../workspace-environment.js";
@@ -53,7 +47,6 @@ describe("detached-session", () => {
     createAgentSessionFromServicesMock.mockReset();
     createAgentSessionRuntimeMock.mockReset();
     createAgentSessionServicesMock.mockReset();
-    createCurlToolMock.mockReset();
     createEditToolDefinitionMock.mockReset();
     createReadToolDefinitionMock.mockReset();
     createWriteToolDefinitionMock.mockReset();
@@ -120,7 +113,7 @@ describe("detached-session", () => {
     ]);
   });
 
-  it("builds custom tools for detached sessions", async () => {
+  it("builds detached sessions without an unsandboxed curl tool", async () => {
     vi.useFakeTimers();
     const applyOverrides = vi.fn();
     const services = {
@@ -131,10 +124,15 @@ describe("detached-session", () => {
       },
     };
     const readToolDefinition = { name: "read" };
-    const curlToolDefinition = { name: "curl" };
     const editToolDefinition = { name: "edit" };
     const writeToolDefinition = { name: "write" };
     const configuredAskUserQuestionTool = { name: "configured-question" };
+    const providerRequestTool = { name: "provider_request" };
+    const releaseCredentialBinding = vi.fn();
+    const credentialBroker = {
+      createTool: vi.fn().mockReturnValue(providerRequestTool),
+      observe: vi.fn().mockReturnValue(releaseCredentialBinding),
+    };
     let sessionEventHandler: ((event: any) => void) | undefined;
     const sessionResult = {
       session: {
@@ -150,7 +148,6 @@ describe("detached-session", () => {
 
     createAgentSessionServicesMock.mockResolvedValue(services);
     createReadToolDefinitionMock.mockReturnValue(readToolDefinition);
-    createCurlToolMock.mockReturnValue(curlToolDefinition);
     createEditToolDefinitionMock.mockReturnValue(editToolDefinition);
     createWriteToolDefinitionMock.mockReturnValue(writeToolDefinition);
     createAgentSessionFromServicesMock.mockResolvedValue(sessionResult);
@@ -167,7 +164,11 @@ describe("detached-session", () => {
     const result = await createDetachedAgentSessionRuntime(
       tmpDir,
       sessionManager as never,
-      { askUserQuestionTool: configuredAskUserQuestionTool as never },
+      {
+        askUserQuestionTool: configuredAskUserQuestionTool as never,
+        credentialBroker: credentialBroker as never,
+        credentialBrokerScope: "user-a",
+      },
     );
 
     expect(createAgentSessionServicesMock).toHaveBeenCalledWith({
@@ -183,7 +184,6 @@ describe("detached-session", () => {
     expect(createReadToolDefinitionMock).toHaveBeenCalledWith(tmpDir, {
       autoResizeImages: false,
     });
-    expect(createCurlToolMock).toHaveBeenCalledWith(tmpDir);
     expect(createEditToolDefinitionMock).toHaveBeenCalledWith(tmpDir);
     expect(createWriteToolDefinitionMock).toHaveBeenCalledWith(tmpDir);
     expect(createAgentSessionFromServicesMock).toHaveBeenCalledWith({
@@ -193,13 +193,21 @@ describe("detached-session", () => {
       noTools: "builtin",
       customTools: [
         readToolDefinition,
-        curlToolDefinition,
         editToolDefinition,
         writeToolDefinition,
         danoVersionTool,
         configuredAskUserQuestionTool,
+        providerRequestTool,
       ],
     });
+    expect(
+      createAgentSessionFromServicesMock.mock.calls[0]?.[0].customTools,
+    ).not.toContainEqual(expect.objectContaining({ name: "curl" }));
+    expect(credentialBroker.createTool).toHaveBeenCalledWith("user-a");
+    expect(credentialBroker.observe).toHaveBeenCalledWith(
+      "user-a",
+      sessionResult.session,
+    );
     expect(result.runtime.session).toBe(sessionResult.session);
     expect(result.disposeDanoLlmResilience).toEqual(expect.any(Function));
 
@@ -242,6 +250,7 @@ describe("detached-session", () => {
     });
 
     result.disposeDanoLlmResilience();
+    expect(releaseCredentialBinding).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(sessionResult.session.abort).not.toHaveBeenCalled();
   });

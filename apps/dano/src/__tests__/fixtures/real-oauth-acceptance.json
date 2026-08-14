@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "releaseGate": {
+    "browserContexts": {
+      "a": "codex-in-app-browser",
+      "b": "chrome"
+    },
+    "callbackMode": "single-shared-dano-callback",
+    "publicSeam": "Dano HTTP/SSE/UI"
+  },
+  "accounts": [
+    {
+      "slot": "a",
+      "username": "dano424a",
+      "password": "Dano424Test!",
+      "preference": "blue"
+    },
+    {
+      "slot": "b",
+      "username": "dano424b",
+      "password": "Dano424Test!",
+      "preference": "purple"
+    }
+  ]
+}

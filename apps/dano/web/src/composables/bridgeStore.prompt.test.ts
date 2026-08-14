@@ -1,6 +1,10 @@
 /** @vitest-environment happy-dom */
 
-import type { BridgeUserSummary } from "@dano/types/protocol";
+import type {
+  BridgeAuthenticationState,
+  BridgeUserSummary,
+  RpcCommand,
+} from "@dano/types/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function deferred<T>() {
@@ -41,10 +45,24 @@ class FakeEventSource extends EventTarget {
 
 const eventSources: FakeEventSource[] = [];
 
+async function startBridge(fetchImpl: typeof fetch) {
+  vi.stubGlobal("fetch", fetchImpl);
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+  const { initBridge } = await import("./bridgeStore.svelte");
+  const bridge = initBridge();
+  await vi.waitFor(() => expect(eventSources).toHaveLength(1));
+  eventSources[0]!.open();
+  await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
+  return bridge;
+}
+
 async function connectBridge(
   promptResponse: Promise<Response> | (() => Promise<Response>),
   onPromptRequest?: (init: RequestInit | undefined) => void,
   currentUser?: BridgeUserSummary,
+  authentication?: BridgeAuthenticationState,
 ) {
   const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
     if (String(input) === "/api/clients") {
@@ -54,6 +72,7 @@ async function connectBridge(
           eventsUrl: "/events",
           messagesUrl: "/messages",
           ...(currentUser ? { currentUser } : {}),
+          ...(authentication ? { authentication } : {}),
         }),
         { status: 201, headers: { "content-type": "application/json" } },
       );
@@ -69,16 +88,156 @@ async function connectBridge(
     }
     return new Response(null, { status: 202 });
   });
-  vi.stubGlobal("fetch", fetchImpl);
-  vi.stubGlobal("EventSource", FakeEventSource);
-  vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+  return startBridge(fetchImpl);
+}
 
-  const { initBridge } = await import("./bridgeStore.svelte");
-  const bridge = initBridge();
-  await vi.waitFor(() => expect(eventSources).toHaveLength(1));
-  eventSources[0]!.open();
-  await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
-  return bridge;
+interface InitialSessionFixture {
+  id: string;
+  name: string;
+  path: string;
+  updatedAt: string;
+  content: string;
+}
+
+async function connectWithDefaultWorkspaceSessions(
+  sessions: InitialSessionFixture[],
+) {
+  const workspacePath = "/users/current/workspaces/default";
+  const newSessionPath = "/users/current/sessions/new.jsonl";
+  const commands: RpcCommand[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/auth/current") {
+      return new Response(
+        JSON.stringify({
+          status: "authenticated",
+          user: { id: "user-alice", username: "Alice" },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+    if (url === "/api/clients") {
+      return new Response(
+        JSON.stringify({
+          client: { id: "client-1" },
+          eventsUrl: "/events",
+          messagesUrl: "/messages",
+          defaultWorkspacePath: workspacePath,
+          authentication: {
+            status: "authenticated",
+            user: { id: "user-alice", username: "Alice" },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url === "/messages") {
+      const envelope = JSON.parse(String(init?.body)) as {
+        payload: RpcCommand & { id: string };
+      };
+      const command = envelope.payload;
+      commands.push(command);
+      const selectedSession =
+        command.type === "switch_session"
+          ? sessions.find(session => session.path === command.sessionPath)
+          : undefined;
+      const dataByCommand: Record<string, unknown> = {
+        list_workspaces: {
+          workspaces: [
+            { id: workspacePath, name: "default", path: workspacePath },
+          ],
+        },
+        get_available_models: { models: [] },
+        get_commands: { commands: [] },
+        register_workspace: {
+          workspaceId: workspacePath,
+          workspaceName: "default",
+          workspacePath,
+          created: false,
+          cancelled: false,
+        },
+        new_session: {
+          transcript: {
+            messages: [],
+            sessionPath: newSessionPath,
+            hasOlder: false,
+            hasNewer: false,
+          },
+          treeEntries: [],
+          sessionId: "new-session",
+          sessionName: "New session",
+          sessionPath: newSessionPath,
+          workspacePath,
+          cancelled: false,
+        },
+        list_sessions: {
+          sessions: sessions.slice(
+            0,
+            command.type === "list_sessions" ? command.limit : undefined,
+          ).map(({ content: _, ...session }) => ({
+            ...session,
+            workspacePath,
+          })),
+          workspacePath,
+          merge: "replace",
+        },
+        switch_session: selectedSession
+          ? {
+              transcript: {
+                messages: [
+                  {
+                    id: selectedSession.id,
+                    role: "user",
+                    content: selectedSession.content,
+                  },
+                ],
+                sessionPath: selectedSession.path,
+                hasOlder: false,
+                hasNewer: false,
+              },
+              treeEntries: [],
+              sessionId: selectedSession.id,
+              sessionName: selectedSession.name,
+              sessionPath: selectedSession.path,
+              workspacePath,
+            }
+          : undefined,
+        get_state: selectedSession
+          ? {
+              sessionId: selectedSession.id,
+              sessionName: selectedSession.name,
+              sessionFile: selectedSession.path,
+              workspacePath,
+              isStreaming: false,
+              isCompacting: false,
+              autoCompactionEnabled: false,
+              messageCount: 1,
+              pendingMessageCount: 0,
+            }
+          : undefined,
+      };
+      queueMicrotask(() => {
+        eventSources[0]?.send({
+          type: "response",
+          payload: {
+            id: command.id,
+            type: "response",
+            command: command.type,
+            success: true,
+            data: dataByCommand[command.type],
+          },
+        });
+      });
+      return new Response(null, { status: 202 });
+    }
+    return new Response(null, { status: 404 });
+  });
+  window.sessionStorage.clear();
+  const bridge = await startBridge(fetchImpl);
+  return { bridge, commands, newSessionPath };
 }
 
 describe("Bridge prompt acceptance", () => {
@@ -89,20 +248,401 @@ describe("Bridge prompt acceptance", () => {
     eventSources.length = 0;
   });
 
+  it("projects checking before the server resolves authentication", async () => {
+    const current = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async input => {
+        if (String(input) === "/api/auth/current") return current.promise;
+        return new Response(null, { status: 503 });
+      }),
+    );
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+
+    expect(bridge.authentication).toEqual({ status: "checking" });
+    current.resolve(
+      new Response(JSON.stringify({ status: "anonymous" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    bridge.disconnect();
+  });
+
+  it("does not accept the Web-only checking state from auth current", async () => {
+    const clientResponse = deferred<Response>();
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        return new Response(
+          JSON.stringify({
+            status: "checking",
+            loginError: { code: "provider_login_failed" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(input) === "/api/clients") return clientResponse.promise;
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge, parseBridgeAuthenticationState } = await import(
+      "./bridgeStore.svelte"
+    );
+    expect(
+      parseBridgeAuthenticationState({ status: "checking" }),
+    ).toBeUndefined();
+    const bridge = initBridge();
+    await vi.waitFor(() =>
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "/api/clients",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+
+    expect(bridge.authentication).toEqual({ status: "checking" });
+    expect(bridge.notifications).toEqual([]);
+    clientResponse.resolve(new Response(null, { status: 503 }));
+    bridge.disconnect();
+  });
+
+  it("does not accept the Web-only checking state from client creation", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        return new Response(JSON.stringify({ status: "anonymous" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (String(input) === "/api/clients") {
+        return new Response(
+          JSON.stringify({
+            client: { id: "client-1" },
+            eventsUrl: "/events",
+            messagesUrl: "/messages",
+            authentication: { status: "checking" },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+    await vi.waitFor(() => expect(eventSources).toHaveLength(1));
+    eventSources[0]!.open();
+    await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
+
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    bridge.disconnect();
+  });
+
   it("exposes the server-projected User summary to the application", async () => {
     const bridge = await connectBridge(
       Promise.resolve(new Response(null, { status: 202 })),
       undefined,
       {
+        id: "user-alice",
         username: "Alice",
         avatarUrl: "https://example.test/alice.png",
       },
     );
 
     expect(bridge.currentUser).toEqual({
+      id: "user-alice",
       username: "Alice",
       avatarUrl: "https://example.test/alice.png",
     });
+    bridge.disconnect();
+  });
+
+  it("exposes Anonymous as a normal server-projected authentication state", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    expect(bridge.currentUser).toBeUndefined();
+    bridge.disconnect();
+  });
+
+  it("shows a recoverable login failure from one-time auth current state", async () => {
+    let currentReads = 0;
+    const clientResponse = deferred<Response>();
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        currentReads += 1;
+        return new Response(
+          JSON.stringify({
+            status: "anonymous",
+            loginError: { code: "provider_identity_invalid" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(input) === "/api/clients") {
+        return clientResponse.promise;
+      }
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+    window.history.replaceState({}, "", "/chat");
+    const assign = vi
+      .spyOn(window.location, "assign")
+      .mockImplementation(() => undefined);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+    await vi.waitFor(() =>
+      expect(bridge.authentication).toEqual({
+        status: "anonymous",
+        loginError: { code: "provider_identity_invalid" },
+      }),
+    );
+    expect(bridge.notifications.at(-1)).toMatchObject({
+      message: "登录失败，请重试",
+      notifyType: "error",
+    });
+    clientResponse.resolve(
+      new Response(
+        JSON.stringify({
+          client: { id: "client-1" },
+          eventsUrl: "/events",
+          messagesUrl: "/messages",
+          authentication: { status: "anonymous" },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await vi.waitFor(() => expect(eventSources).toHaveLength(1));
+    eventSources[0]!.open();
+    await vi.waitFor(() => expect(bridge.connectionStatus).toBe("connected"));
+
+    expect(currentReads).toBe(1);
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    expect(bridge.notifications.at(-1)).toMatchObject({
+      message: "登录失败，请重试",
+      notifyType: "error",
+    });
+    bridge.login();
+    expect(assign).toHaveBeenCalledWith(
+      "/api/auth/login?returnTo=%2Fchat",
+    );
+    bridge.disconnect();
+  });
+
+  it("restores reauthentication from auth current without creating a Bridge Client", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (String(input) === "/api/auth/current") {
+        return new Response(JSON.stringify({ status: "reauth_required" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(navigator, "sendBeacon").mockReturnValue(true);
+
+    const { initBridge } = await import("./bridgeStore.svelte");
+    const bridge = initBridge();
+
+    await vi.waitFor(() =>
+      expect(bridge.authentication).toEqual({ status: "reauth_required" }),
+    );
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      "/api/clients",
+      expect.anything(),
+    );
+    expect(eventSources).toHaveLength(0);
+    bridge.disconnect();
+  });
+
+  it("applies a server-projected reauthentication state from SSE without reconnecting", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      { id: "user-alice", username: "Alice" },
+      {
+        status: "authenticated",
+        user: { id: "user-alice", username: "Alice" },
+      },
+    );
+
+    eventSources[0]!.send({
+      type: "authentication",
+      payload: { status: "reauth_required" },
+    });
+    await vi.waitFor(() =>
+      expect(bridge.authentication).toEqual({ status: "reauth_required" }),
+    );
+    eventSources[0]!.close();
+    eventSources[0]!.dispatchEvent(new Event("error"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(bridge.currentUser).toBeUndefined();
+    expect(eventSources).toHaveLength(1);
+    bridge.disconnect();
+  });
+
+  it("ignores the Web-only checking state when it arrives over SSE", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+
+    eventSources[0]!.send({
+      type: "authentication",
+      payload: { status: "checking" },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(bridge.authentication).toEqual({ status: "anonymous" });
+    bridge.disconnect();
+  });
+
+  it("starts login with the current same-origin Dano return path", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+    window.history.replaceState({}, "", "/chat?session=one#latest");
+    const assign = vi
+      .spyOn(window.location, "assign")
+      .mockImplementation(() => undefined);
+
+    bridge.login();
+
+    expect(assign).toHaveBeenCalledWith(
+      "/api/auth/login?returnTo=%2Fchat%3Fsession%3Done%23latest",
+    );
+    bridge.disconnect();
+  });
+
+  it("restores the latest existing default workspace session after a page return", async () => {
+    const latestSessionPath = "/users/current/sessions/transferred.jsonl";
+    const { bridge, commands } = await connectWithDefaultWorkspaceSessions([
+      {
+        id: "transferred-session",
+        name: "Transferred conversation",
+        path: latestSessionPath,
+        updatedAt: "2026-08-13T01:00:00.000Z",
+        content: "Conversation from before login",
+      },
+      {
+        id: "older-session",
+        name: "Older conversation",
+        path: "/users/current/sessions/older.jsonl",
+        updatedAt: "2026-08-12T01:00:00.000Z",
+        content: "Older conversation",
+      },
+    ]);
+
+    await vi.waitFor(() =>
+      expect(bridge.activeSessionPath).toBe(latestSessionPath),
+    );
+    expect(bridge.transcript).toEqual([
+      expect.objectContaining({ content: "Conversation from before login" }),
+    ]);
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "list_sessions", limit: 1 }),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        type: "switch_session",
+        sessionPath: latestSessionPath,
+      }),
+    );
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ type: "new_session" }),
+    );
+    bridge.disconnect();
+  });
+
+  it("creates the default workspace session only when no session exists", async () => {
+    const { bridge, commands, newSessionPath } =
+      await connectWithDefaultWorkspaceSessions([]);
+
+    await vi.waitFor(() =>
+      expect(bridge.activeSessionPath).toBe(newSessionPath),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "list_sessions", limit: 1 }),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "new_session" }),
+    );
+    bridge.disconnect();
+  });
+
+  it("posts same-origin logout and reloads into a fresh Anonymous User", async () => {
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      { id: "user-alice", username: "Alice" },
+      {
+        status: "authenticated",
+        user: { id: "user-alice", username: "Alice" },
+      },
+    );
+    const logoutFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ status: "anonymous" })));
+    vi.stubGlobal("fetch", logoutFetch);
+    const reload = vi
+      .spyOn(window.location, "reload")
+      .mockImplementation(() => undefined);
+
+    await bridge.logout();
+
+    expect(logoutFetch).toHaveBeenCalledWith("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    expect(reload).toHaveBeenCalledOnce();
+    bridge.disconnect();
+  });
+
+  it("serializes first-client bootstrap across tabs before creating a guest", async () => {
+    const request = vi.fn(
+      async (_name: string, callback: () => Promise<Response>) => callback(),
+    );
+    vi.stubGlobal("navigator", {
+      locks: { request },
+      sendBeacon: () => true,
+    });
+
+    const bridge = await connectBridge(
+      Promise.resolve(new Response(null, { status: 202 })),
+      undefined,
+      undefined,
+      { status: "anonymous" },
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "dano-anonymous-user-bootstrap",
+      expect.any(Function),
+    );
     bridge.disconnect();
   });
 

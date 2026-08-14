@@ -9,9 +9,12 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve, sep } from "node:path";
+import { isIP } from "node:net";
+import {
+  checkServerIdentity,
+  connect as connectTls,
+} from "node:tls";
 import { fileURLToPath } from "node:url";
-import { createDanoBackend } from "./backend.js";
-import type { DanoBackend } from "./backend.js";
 import {
   resolveProductName,
   syncSystemPrompt,
@@ -20,7 +23,13 @@ import {
   loadDanoConfig,
   type DanoConfig,
 } from "./bridge/dano-config.js";
-import { DetachedSessionRegistry } from "./bridge/session-registry.js";
+import { createAnonymousUserContextResolver } from "./bridge/anonymous-user-context.js";
+import { CredentialBroker } from "./bridge/credential-broker.js";
+import { createOAuthAuthentication } from "./bridge/oauth-authentication.js";
+import {
+  createOAuth2ProviderAdapter,
+  type OAuth2ProviderAdapterOptions,
+} from "./bridge/oauth-provider.js";
 import { createJwtUserContextResolver } from "./bridge/user-context.js";
 import type { BridgeConfig, UploadConfig } from "./bridge/types.js";
 import { createDanoDevReloadController } from "./dev-reload.js";
@@ -37,6 +46,11 @@ const DEFAULT_DANO_UPLOAD_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_REFERENCED_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_ORPHANED_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_DANO_UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_DANO_ANONYMOUS_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_DANO_ANONYMOUS_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_DANO_LOGIN_SESSION_IDLE_TTL_MS = 8 * 60 * 60 * 1000;
+const DEFAULT_DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_RUNTIME_SETTINGS_FILES = [
   "SYSTEM.md",
   "settings.json",
@@ -75,15 +89,44 @@ export interface DanoServerOptions {
   productName: string;
   emptyState: BridgeEmptyStateConfig;
   upload: UploadConfig;
+  anonymousUserCleanup: {
+    idleTtlMs: number;
+    intervalMs: number;
+  };
+  guestCookieSecure: boolean;
   staticDir?: string;
   help: boolean;
+  validateConfig: boolean;
   userAuthentication?: {
     secret: string;
     issuer?: string;
     audience?: string;
     cookieName?: string;
   };
+  oauthAuthentication?: {
+    appOrigin: string;
+    redirectUri: string;
+    providerApiOrigin: string;
+    provider: Omit<
+      OAuth2ProviderAdapterOptions,
+      "allowInsecureRequests" | "timeoutMs"
+    >;
+    credentialEncryptionKey: {
+      version: string;
+      key: Uint8Array;
+    };
+    session: {
+      idleTtlMs: number;
+      absoluteTtlMs: number;
+      cleanupIntervalMs: number;
+    };
+  };
 }
+
+type OAuthAuthenticationConfig = NonNullable<
+  DanoServerOptions["oauthAuthentication"]
+>;
+export type OAuthProviderTlsProbe = (endpoint: URL) => Promise<void>;
 
 function printHelp(): void {
   console.log(`Dano server
@@ -95,9 +138,10 @@ Options:
   --host <host>              Host to bind (default: ${DEFAULT_DANO_HOST})
   --port <number>            Port to bind (default: ${DEFAULT_DANO_PORT})
   --default-workspace <path> Deprecated; new sessions use DANO_RUNTIME_DIR/workspaces/ws_<random>
-  --sessions-root <path>     Directory for session jsonl files (env: DANO_SESSIONS_ROOT, default: <default-workspace>/${DEFAULT_DANO_SESSIONS_DIR})
+  --sessions-root <path>     Base directory for per-User session roots (env: DANO_SESSIONS_ROOT, default: DANO_RUNTIME_DIR/${DEFAULT_DANO_SESSIONS_DIR})
   --empty-state-text <text>  Empty transcript text (env: DANO_EMPTY_STATE_TEXT, default: ${DEFAULT_EMPTY_STATE.content})
   --empty-state-html <html>  Empty transcript HTML (env: DANO_EMPTY_STATE_HTML)
+  --validate-config          Validate production configuration without listening
   --help                     Show this help
 `);
 }
@@ -117,6 +161,23 @@ function parsePositiveInteger(
 ): number {
   const parsed = parseInteger(value, fallback);
   return parsed > 0 ? parsed : fallback;
+}
+
+function parseConfiguredPositiveInteger(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: number,
+): number {
+  const configured = env[name]?.trim();
+  if (!configured) return fallback;
+  if (!/^\d+$/.test(configured)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function readHost(env: Record<string, string | undefined>): string {
@@ -150,11 +211,12 @@ function readAgentConfigDir(
 
 function readSessionsRootPath(
   env: Record<string, string | undefined>,
-): string | undefined {
+  runtimeRootPath: string,
+): string {
   return (
     env.DANO_SESSIONS_ROOT?.trim() ||
     env.PI_WEB_SESSIONS_ROOT?.trim() ||
-    undefined
+    join(runtimeRootPath, DEFAULT_DANO_SESSIONS_DIR)
   );
 }
 
@@ -187,6 +249,295 @@ function readUserAuthentication(
     audience: optional(env.DANO_AUTH_JWT_AUDIENCE),
     cookieName: optional(env.DANO_AUTH_COOKIE_NAME),
   };
+}
+
+function readOAuthAuthentication(
+  env: Record<string, string | undefined>,
+): DanoServerOptions["oauthAuthentication"] {
+  const production = env.NODE_ENV === "production";
+  const names = [
+    "DANO_OAUTH_ISSUER",
+    "DANO_OAUTH_AUTHORIZATION_ENDPOINT",
+    "DANO_OAUTH_TOKEN_ENDPOINT",
+    "DANO_OAUTH_IDENTITY_ENDPOINT",
+    "DANO_OAUTH_API_ORIGIN",
+    "DANO_OAUTH_CLIENT_ID",
+    "DANO_OAUTH_CLIENT_SECRET",
+    "DANO_OAUTH_SCOPE",
+    "DANO_OAUTH_REDIRECT_URI",
+    "DANO_OAUTH_CREDENTIAL_KEY",
+    "DANO_OAUTH_CREDENTIAL_KEY_VERSION",
+  ] as const;
+  const values = Object.fromEntries(
+    names.map(name => [name, env[name]?.trim() || undefined]),
+  ) as Record<(typeof names)[number], string | undefined>;
+  if (names.every(name => values[name] === undefined)) {
+    if (production) throw new Error("OAuth configuration is required in production");
+    return undefined;
+  }
+  if (names.some(name => values[name] === undefined)) {
+    throw new Error("OAuth configuration is incomplete");
+  }
+  const redirectUri = new URL(values.DANO_OAUTH_REDIRECT_URI!);
+  const revocation = readOAuthRevocation(env, values.DANO_OAUTH_TOKEN_ENDPOINT!);
+  if (
+    redirectUri.pathname !== "/api/auth/callback" ||
+    redirectUri.search ||
+    redirectUri.hash ||
+    redirectUri.username ||
+    redirectUri.password
+  ) {
+    throw new Error("OAuth redirect URI must use /api/auth/callback");
+  }
+  const providerUrls = [
+    ["issuer", new URL(values.DANO_OAUTH_ISSUER!)],
+    ["authorization endpoint", new URL(values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!)],
+    ["token endpoint", new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!)],
+    ["identity endpoint", new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!)],
+    ["API origin", new URL(values.DANO_OAUTH_API_ORIGIN!)],
+    ...(revocation?.endpoint
+      ? [["revocation endpoint", new URL(revocation.endpoint)] as const]
+      : []),
+  ] as const;
+  for (const [name, url] of providerUrls) {
+    if (url.username || url.password || url.hash) {
+      throw new Error(`OAuth ${name} is not trusted`);
+    }
+    if (url.protocol !== "https:") {
+      throw new Error(`OAuth ${name} must use HTTPS`);
+    }
+  }
+  const localHttpCallback =
+    !production &&
+    redirectUri.protocol === "http:" &&
+    (redirectUri.hostname === "localhost" ||
+      redirectUri.hostname === "127.0.0.1" ||
+      redirectUri.hostname === "[::1]");
+  if (redirectUri.protocol !== "https:" && !localHttpCallback) {
+    throw new Error("OAuth redirect URI must use trusted HTTPS");
+  }
+  const providerApiUrl = providerUrls[4][1];
+  if (providerApiUrl.pathname !== "/" || providerApiUrl.search) {
+    throw new Error("OAuth API origin must not include a path or query");
+  }
+  const encodedKey = values.DANO_OAUTH_CREDENTIAL_KEY!;
+  if (!/^[A-Za-z0-9_-]+$/.test(encodedKey)) {
+    throw new Error("OAuth credential key must be base64url");
+  }
+  const key = Buffer.from(encodedKey, "base64url");
+  if (key.byteLength !== 32) {
+    throw new Error("OAuth credential key must decode to 32 bytes");
+  }
+  const session = {
+    idleTtlMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_LOGIN_SESSION_IDLE_TTL_MS",
+      DEFAULT_DANO_LOGIN_SESSION_IDLE_TTL_MS,
+    ),
+    absoluteTtlMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS",
+      DEFAULT_DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS,
+    ),
+    cleanupIntervalMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS",
+      DEFAULT_DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS,
+    ),
+  };
+  if (session.absoluteTtlMs <= session.idleTtlMs) {
+    throw new Error(
+      "OAuth Login Session absolute TTL must be greater than idle TTL",
+    );
+  }
+  const requestHeaders = readOAuthProviderHeaders(
+    env.DANO_OAUTH_PROVIDER_HEADERS_JSON,
+  );
+  const sendStateToTokenEndpoint = readOptionalBoolean(
+    env.DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT,
+    "DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT",
+  );
+  return {
+    appOrigin: redirectUri.origin,
+    redirectUri: redirectUri.href,
+    providerApiOrigin: providerApiUrl.origin,
+    provider: {
+      issuer: new URL(values.DANO_OAUTH_ISSUER!).href,
+      authorizationEndpoint: new URL(
+        values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!,
+      ).href,
+      tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
+      identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
+      ...(revocation ? { revocation } : {}),
+      clientId: values.DANO_OAUTH_CLIENT_ID!,
+      clientSecret: values.DANO_OAUTH_CLIENT_SECRET!,
+      scope: values.DANO_OAUTH_SCOPE!,
+      ...(requestHeaders ? { requestHeaders } : {}),
+      ...(sendStateToTokenEndpoint !== undefined
+        ? { sendStateToTokenEndpoint }
+        : {}),
+    },
+    credentialEncryptionKey: {
+      version: values.DANO_OAUTH_CREDENTIAL_KEY_VERSION!,
+      key,
+    },
+    session,
+  };
+}
+
+function readOAuthRevocation(
+  env: Record<string, string | undefined>,
+  tokenEndpoint: string,
+): OAuth2ProviderAdapterOptions["revocation"] {
+  const transport = env.DANO_OAUTH_REVOCATION_TRANSPORT?.trim();
+  const endpoint = env.DANO_OAUTH_REVOCATION_ENDPOINT?.trim();
+  if (!transport) {
+    if (endpoint) {
+      throw new Error(
+        "OAuth revocation transport is required when its endpoint is configured",
+      );
+    }
+    return undefined;
+  }
+  if (transport === "rfc7009") {
+    if (!endpoint) {
+      throw new Error("OAuth RFC 7009 revocation endpoint is required");
+    }
+    return { transport, endpoint: new URL(endpoint).href };
+  }
+  if (transport === "delete-query-basic") {
+    return {
+      transport,
+      endpoint: new URL(endpoint || tokenEndpoint).href,
+    };
+  }
+  throw new Error("OAuth revocation transport is unsupported");
+}
+
+function readOAuthProviderHeaders(
+  value: string | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (!value?.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("OAuth provider headers must be a JSON object");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("OAuth provider headers must be a JSON object");
+  }
+  const entries = Object.entries(parsed);
+  if (
+    entries.some(
+      ([name, headerValue]) =>
+        !name.trim() || typeof headerValue !== "string" || !headerValue.trim(),
+    )
+  ) {
+    throw new Error("OAuth provider headers must contain string values");
+  }
+  const headers = new Headers(
+    entries.map(([name, headerValue]) => [name, (headerValue as string).trim()]),
+  );
+  return Object.fromEntries(headers.entries());
+}
+
+function readOptionalBoolean(
+  value: string | undefined,
+  name: string,
+): boolean | undefined {
+  if (!value?.trim()) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true") return true;
+  if (normalized === "0" || normalized === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function assertProductionAuthenticationEnvironment(
+  env: Record<string, string | undefined>,
+): void {
+  if (env.NODE_ENV !== "production") return;
+  const legacyNames = [
+    "DANO_AUTH_JWT_SECRET",
+    "DANO_AUTH_JWT_ISSUER",
+    "DANO_AUTH_JWT_AUDIENCE",
+    "DANO_AUTH_COOKIE_NAME",
+    "DANO_DEMO_JWT",
+    "DANO_DEMO_COOKIE_EXPIRES",
+  ];
+  if (legacyNames.some(name => env[name]?.trim())) {
+    throw new Error("Demo authentication is not allowed in production");
+  }
+  const tlsOverride = env.NODE_TLS_REJECT_UNAUTHORIZED?.trim();
+  if (tlsOverride && tlsOverride !== "1") {
+    throw new Error("TLS certificate verification cannot be disabled in production");
+  }
+}
+
+export async function validateOAuthProviderTls(
+  config: OAuthAuthenticationConfig,
+  probe: OAuthProviderTlsProbe = probeOAuthProviderTls,
+): Promise<void> {
+  const endpoints = [
+    config.provider.issuer,
+    config.provider.authorizationEndpoint,
+    config.provider.tokenEndpoint,
+    config.provider.identityEndpoint,
+    config.providerApiOrigin,
+    ...(config.provider.revocation?.endpoint
+      ? [config.provider.revocation.endpoint]
+      : []),
+  ];
+  const origins = [
+    ...new Map(endpoints.map(value => {
+      const url = new URL(value);
+      return [url.origin, new URL(url.origin)] as const;
+    })).values(),
+  ];
+  try {
+    await Promise.all(origins.map(origin => probe(origin)));
+  } catch {
+    throw new Error("OAuth provider TLS validation failed");
+  }
+}
+
+function probeOAuthProviderTls(endpoint: URL): Promise<void> {
+  return new Promise((resolveProbe, rejectProbe) => {
+    const hostname = endpoint.hostname.replace(/^\[|\]$/g, "");
+    let settled = false;
+    const socket = connectTls({
+      host: hostname,
+      port: endpoint.port ? Number(endpoint.port) : 443,
+      rejectUnauthorized: true,
+      ...(isIP(hostname) === 0 ? { servername: hostname } : {}),
+      checkServerIdentity: (_servername, certificate) =>
+        checkServerIdentity(hostname, certificate),
+    });
+    const fail = (): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      rejectProbe(new Error("TLS validation failed"));
+    };
+    socket.setTimeout(10_000, fail);
+    socket.once("error", fail);
+    socket.once("secureConnect", () => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveProbe();
+    });
+  });
+}
+
+function readGuestCookieSecure(
+  env: Record<string, string | undefined>,
+): boolean {
+  if (env.NODE_ENV === "production") return true;
+  const configured = env.DANO_GUEST_COOKIE_SECURE?.trim().toLowerCase();
+  if (configured === "true") return true;
+  if (configured === "false") return false;
+  return false;
 }
 
 function readUploadConfig(
@@ -323,19 +674,35 @@ export function parseDanoServerOptions(
   env: Record<string, string | undefined> = process.env,
   danoConfig: DanoConfig = loadDanoConfig({ cwd: process.cwd(), env }),
 ): DanoServerOptions {
+  assertProductionAuthenticationEnvironment(env);
   let host = readHost(env);
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
-  let sessionsRootPath = readSessionsRootPath(env);
+  let sessionsRootPath = readSessionsRootPath(env, runtimeRootPath);
   const productName = resolveProductName(
     env.DANO_PRODUCT_NAME,
     danoConfig.productName,
   );
   let emptyState = readEmptyStateConfig(env);
   const upload = readUploadConfig(env, runtimeRootPath);
+  const anonymousUserCleanup = {
+    idleTtlMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_ANONYMOUS_IDLE_TTL_MS",
+      DEFAULT_DANO_ANONYMOUS_IDLE_TTL_MS,
+    ),
+    intervalMs: parseConfiguredPositiveInteger(
+      env,
+      "DANO_ANONYMOUS_CLEANUP_INTERVAL_MS",
+      DEFAULT_DANO_ANONYMOUS_CLEANUP_INTERVAL_MS,
+    ),
+  };
   const userAuthentication = readUserAuthentication(env);
+  const oauthAuthentication = readOAuthAuthentication(env);
+  const guestCookieSecure = readGuestCookieSecure(env);
   const staticDirOverride = env.DANO_STATIC_DIR?.trim();
   let help = false;
+  let validateConfig = false;
 
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
@@ -347,6 +714,9 @@ export function parseDanoServerOptions(
       case "--help":
       case "-h":
         help = true;
+        continue;
+      case "--validate-config":
+        validateConfig = true;
         continue;
       case "--host": {
         const next = argv[index + 1];
@@ -421,28 +791,23 @@ export function parseDanoServerOptions(
       cwd,
       readAgentConfigDir(env, resolvedRuntimeRootPath),
     ),
-    sessionsRootPath: resolve(
-      cwd,
-      sessionsRootPath ??
-        join(resolvedDefaultWorkspacePath, DEFAULT_DANO_SESSIONS_DIR),
-    ),
+    sessionsRootPath: resolve(cwd, sessionsRootPath),
     productName,
     emptyState,
     upload: {
       ...upload,
       uploadDir: resolve(cwd, upload.uploadDir),
     },
+    anonymousUserCleanup,
+    guestCookieSecure,
     staticDir: staticDirOverride
       ? resolve(cwd, staticDirOverride)
       : resolveDefaultStaticDir(fileURLToPath(import.meta.url)),
     help,
+    validateConfig,
     userAuthentication,
+    oauthAuthentication,
   };
-}
-
-function ensureDefaultWorkspace(path: string): string {
-  mkdirSync(path, { recursive: true });
-  return path;
 }
 
 export async function initializeDanoAgentSettings(
@@ -539,42 +904,93 @@ function migrateHeimdallRuntimeSettings(path: string): void {
   writeFileSync(path, `${JSON.stringify(root, null, 2)}\n`);
 }
 
-function workspaceSessionDirName(workspacePath: string): string {
-  return `--${workspacePath.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
-function workspaceSessionDirPath(
-  sessionsRootPath: string,
-  workspacePath: string,
-): string {
-  return join(sessionsRootPath, workspaceSessionDirName(workspacePath));
-}
-
 async function runDanoServer(
   runtime: DanoRuntime,
   config: BridgeConfig,
   options: DanoServerOptions,
   entryFile: string,
-  backend: DanoBackend,
-  sessionRegistry: DetachedSessionRegistry,
+  danoConfig: DanoConfig,
 ): Promise<boolean> {
   let resolveStopped: (() => void) | undefined;
   const stopped = new Promise<void>(resolve => {
     resolveStopped = resolve;
   });
 
-  const bridgeController = await runtime.startDanoServer(config, {
-    cwd: options.cwd,
-    backend,
-    sessionRegistry,
-    userContextResolver: options.userAuthentication
-      ? createJwtUserContextResolver({
-          runtimeRootPath: options.runtimeRootPath,
-          ...options.userAuthentication,
-        })
-      : undefined,
-    onShutdown: () => resolveStopped?.(),
+  const oauthProvider = options.oauthAuthentication
+    ? createOAuth2ProviderAdapter(options.oauthAuthentication.provider)
+    : undefined;
+  const oauthAuthentication = options.oauthAuthentication && oauthProvider
+    ? await createOAuthAuthentication({
+        runtimeRootPath: options.runtimeRootPath,
+        appOrigin: options.oauthAuthentication.appOrigin,
+        redirectUri: options.oauthAuthentication.redirectUri,
+        provider: oauthProvider,
+        credentialEncryptionKey:
+          options.oauthAuthentication.credentialEncryptionKey,
+        sessionIdleTtlMs: options.oauthAuthentication.session.idleTtlMs,
+        sessionAbsoluteTtlMs:
+          options.oauthAuthentication.session.absoluteTtlMs,
+        sessionGcIntervalMs:
+          options.oauthAuthentication.session.cleanupIntervalMs,
+      })
+    : undefined;
+  const jwtAuthentication = options.userAuthentication
+    ? createJwtUserContextResolver({
+        runtimeRootPath: options.runtimeRootPath,
+        ...options.userAuthentication,
+      })
+    : undefined;
+  const anonymousUsers = createAnonymousUserContextResolver({
+    runtimeRootPath: options.runtimeRootPath,
+    secureCookie: options.guestCookieSecure,
+    authenticatedResolver: oauthAuthentication ?? jwtAuthentication,
+    activityWriteIntervalMs: Math.max(
+      1,
+      Math.min(
+        60 * 1000,
+        Math.floor(options.anonymousUserCleanup.idleTtlMs / 2),
+      ),
+    ),
   });
+  let bridgeController:
+    | Awaited<ReturnType<DanoRuntime["startDanoServer"]>>
+    | undefined;
+  const credentialBroker =
+    oauthAuthentication && options.oauthAuthentication
+      ? new CredentialBroker({
+          providerApiOrigin: options.oauthAuthentication.providerApiOrigin,
+          readCredential: loginSessionId =>
+            oauthAuthentication.readProviderCredential(loginSessionId),
+          refreshCredential: loginSessionId =>
+            oauthAuthentication.refreshProviderCredential(loginSessionId),
+          isAccessTokenInvalid: response =>
+            oauthProvider?.isAccessTokenInvalid?.(response) ??
+            response.status === 401,
+          requireReauthentication: async loginSessionId => {
+            try {
+              await oauthAuthentication.requireReauthentication(loginSessionId);
+            } finally {
+              bridgeController?.requireReauthentication(loginSessionId);
+            }
+          },
+        })
+      : undefined;
+  try {
+    bridgeController = await runtime.startDanoServer(config, {
+      cwd: options.cwd,
+      sessionsRootPath: options.sessionsRootPath,
+      danoConfig,
+      userContextResolver: anonymousUsers,
+      anonymousUsers,
+      anonymousUserCleanup: options.anonymousUserCleanup,
+      authHttpHandler: oauthAuthentication,
+      credentialBroker,
+      onShutdown: () => resolveStopped?.(),
+    });
+  } catch (error) {
+    await oauthAuthentication?.dispose();
+    throw error;
+  }
 
   const bridgeUrl = bridgeController.getBridgeUrl();
   if (!bridgeUrl) {
@@ -588,8 +1004,12 @@ async function runDanoServer(
   if (options.staticDir) {
     console.log(`[dano] Static Dir: ${options.staticDir}`);
   }
-  console.log(`[dano] Default Workspace: ${config.defaultWorkspacePath}`);
-  console.log(`[dano] Sessions Root: ${options.sessionsRootPath}`);
+  if (config.defaultWorkspacePath) {
+    console.log(`[dano] Default Workspace: ${config.defaultWorkspacePath}`);
+  } else {
+    console.log("[dano] Runtime Workspace: isolated per User");
+  }
+  console.log("[dano] Session Registry: isolated per User");
 
   const requestStop = async (): Promise<void> => {
     await bridgeController.stop().catch(error => {
@@ -613,6 +1033,7 @@ async function runDanoServer(
   } finally {
     process.off("SIGTERM", onSigterm);
     devReload?.dispose();
+    await oauthAuthentication?.dispose();
   }
 
   return devReload?.reloadRequested() ?? false;
@@ -639,12 +1060,19 @@ async function runDanoMain(): Promise<number> {
     printHelp();
     return 0;
   }
+  if (process.env.NODE_ENV === "production" && options.oauthAuthentication) {
+    await validateOAuthProviderTls(options.oauthAuthentication);
+  }
+  if (options.validateConfig) {
+    console.log("[dano] Production configuration is valid.");
+    return 0;
+  }
 
   const thisFile = fileURLToPath(import.meta.url);
   const packageInfo = readDanoPackageInfo(options.cwd);
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
-  const defaultWorkspacePath = ensureDefaultWorkspace(options.defaultWorkspacePath);
+  const defaultWorkspacePath = undefined;
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
@@ -653,75 +1081,46 @@ async function runDanoMain(): Promise<number> {
     options.cwd,
     options.productName,
   );
-  mkdirSync(options.sessionsRootPath, { recursive: true });
-  process.env.DANO_SESSIONS_ROOT = options.sessionsRootPath;
-  process.env.PI_WEB_SESSIONS_ROOT = options.sessionsRootPath;
-  const defaultSessionDir = workspaceSessionDirPath(
-    options.sessionsRootPath,
-    defaultWorkspacePath,
-  );
-  const backend = await createDanoBackend({
-    cwd: defaultWorkspacePath,
-    sessionDir: defaultSessionDir,
-    danoConfig,
-  });
-  const sessionRegistry =
-    backend.sessionRegistry ??
-    new DetachedSessionRegistry(
-      backend.context.state.cwd,
-      backend.context.askUserQuestion.tool,
-      {
-        modelRuntime: backend.session.modelRuntime,
-        settingsManager: backend.session.settingsManager,
-      },
+  while (true) {
+    const runtime = await loadDanoRuntime(thisFile);
+    const config: BridgeConfig = {
+      ...runtime.DEFAULT_BRIDGE_CONFIG,
+      host: options.host,
+      port: options.port,
+      defaultWorkspacePath,
+      productName: options.productName,
+      emptyState: options.emptyState,
+      upload: options.upload,
+      quickActions: danoConfig.quickActions ?? [],
+      slashCommandsAndMentionsEnabled:
+        danoConfig.slashCommandsAndMentionsEnabled ?? false,
+      transcriptProcessSummaryEnabled:
+        danoConfig.transcriptProcessSummaryEnabled ?? false,
+      staticDir: options.staticDir,
+    };
+
+    const reloadRequested = await runDanoServer(
+      runtime,
+      config,
+      options,
+      thisFile,
+      danoConfig,
     );
-  const ownsSessionRegistry = !backend.sessionRegistry;
 
-  try {
-    while (true) {
-      const runtime = await loadDanoRuntime(thisFile);
-      const config: BridgeConfig = {
-        ...runtime.DEFAULT_BRIDGE_CONFIG,
-        host: options.host,
-        port: options.port,
-        defaultWorkspacePath,
-        productName: options.productName,
-        emptyState: options.emptyState,
-        upload: options.upload,
-        quickActions: danoConfig.quickActions ?? [],
-        slashCommandsAndMentionsEnabled:
-          danoConfig.slashCommandsAndMentionsEnabled ?? false,
-        transcriptProcessSummaryEnabled:
-          danoConfig.transcriptProcessSummaryEnabled ?? false,
-        staticDir: options.staticDir,
-      };
-
-      const reloadRequested = await runDanoServer(
-        runtime,
-        config,
-        options,
-        thisFile,
-        backend,
-        sessionRegistry,
-      );
-
-      if (!reloadRequested) {
-        return 0;
-      }
-
-      console.log("[dano] Dano server runtime reloaded.");
+    if (!reloadRequested) {
+      return 0;
     }
-  } finally {
-    if (ownsSessionRegistry) {
-      await sessionRegistry.dispose();
-    }
-    await backend.dispose();
+
+    console.log("[dano] Dano server runtime reloaded.");
   }
 }
 
 const invokedPath = process.argv[1];
 const thisFile = fileURLToPath(import.meta.url);
-if (invokedPath && realpathSync(resolve(invokedPath)) === realpathSync(resolve(thisFile))) {
+if (
+  invokedPath &&
+  realpathSync(resolve(invokedPath)) === realpathSync(resolve(thisFile))
+) {
   runDanoMain().then(
     code => {
       process.exitCode = code;

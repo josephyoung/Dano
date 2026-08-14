@@ -271,9 +271,7 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
-      path.resolve(cwd) === path.resolve(this.fallbackCwd)
-        ? this.newSessionRuntimeOptions
-        : {},
+      this.runtimeOptionsFor(cwd),
       event => {
         this.emit(event);
       },
@@ -323,7 +321,7 @@ export class DetachedSessionRegistry {
       runtime.session.sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
-      {},
+      this.runtimeOptionsFor(runtime.cwd),
       event => {
         this.emit(event);
       },
@@ -346,7 +344,7 @@ export class DetachedSessionRegistry {
       sessionManager,
       this.fallbackCwd,
       this.askUserQuestionTool,
-      {},
+      this.runtimeOptionsFor(sessionManager.getCwd() || this.fallbackCwd),
       event => {
         this.emit(event);
       },
@@ -417,7 +415,12 @@ export class DetachedSessionRegistry {
     const created = await createDetachedAgentSessionRuntime(
       sourceManager.getCwd() || this.fallbackCwd,
       sourceManager,
-      { askUserQuestionTool: this.askUserQuestionTool },
+      {
+        askUserQuestionTool: this.askUserQuestionTool,
+        credentialBroker: this.newSessionRuntimeOptions.credentialBroker,
+        credentialBrokerScope:
+          this.newSessionRuntimeOptions.credentialBrokerScope,
+      },
     );
     const handle = new DetachedSessionHandle(
       sessionPath,
@@ -495,5 +498,21 @@ export class DetachedSessionRegistry {
     for (const listener of this.listeners) {
       listener(event);
     }
+  }
+
+  private runtimeOptionsFor(
+    cwd: string | undefined,
+  ): CreateDetachedAgentSessionOptions {
+    const effectiveCwd = cwd?.trim() || this.fallbackCwd;
+    if (path.resolve(effectiveCwd) === path.resolve(this.fallbackCwd)) {
+      return this.newSessionRuntimeOptions;
+    }
+    return this.newSessionRuntimeOptions.credentialBroker
+      ? {
+          credentialBroker: this.newSessionRuntimeOptions.credentialBroker,
+          credentialBrokerScope:
+            this.newSessionRuntimeOptions.credentialBrokerScope,
+        }
+      : {};
   }
 }

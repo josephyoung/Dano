@@ -15,13 +15,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { BridgeEventBus } from "./bridge-event-bus.js";
 import { getLanIps, isTailscaleIp } from "./network.js";
-import { UploadRegistry } from "./upload-registry.js";
+import {
+  UploadRegistry,
+  type StoredUpload,
+  type UploadAccess,
+} from "./upload-registry.js";
 import {
   toBrowserUserSummary,
   UserContextError,
   type AuthenticatedUserContext,
+  type ClientUserResolution,
+  type UserContext,
   type UserContextResolver,
 } from "./user-context.js";
+import type { BridgeAuthenticationState } from "../../types/protocol.js";
+import type { UserRuntimeRegistry } from "./user-runtime-registry.js";
+import { AnonymousUserCleanup } from "./anonymous-user-cleanup.js";
+import type { AnonymousUserContextResolver } from "./anonymous-user-context.js";
 import {
   parseThemeColorPreference,
   readThemeColorPreference,
@@ -49,24 +59,50 @@ class HttpError extends Error {
 }
 
 export interface RpcConnectionHandler {
-  handleClientMessage(message: ClientMessage): void;
+  readonly defaultWorkspacePath?: string;
+  handleClientMessage(message: ClientMessage): void | Promise<void>;
   currentGitCwd?(): string;
+  currentSessionId?(): string;
+  isBusy?(): boolean;
   dispose(): void;
 }
 
 export interface RpcConnectionContext {
   client: BridgeClient;
-  user?: AuthenticatedUserContext;
+  user?: UserContext;
+  loginSessionId?: string;
   config: BridgeConfig;
   eventBus: BridgeEventBus;
   uploadRegistry: UploadRegistry;
+  beginUserOperation: () => () => void;
   emitEvent: (event: BridgeEvent) => void;
   send: (message: ServerMessage) => void;
 }
 
 export type RpcConnectionHandlerFactory = (
   ctx: RpcConnectionContext,
-) => RpcConnectionHandler;
+) => RpcConnectionHandler | Promise<RpcConnectionHandler>;
+
+export interface AuthHttpHandler {
+  handle(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+    lifecycle: AuthHttpLifecycle,
+  ): Promise<boolean>;
+}
+
+export interface AuthHttpLifecycle {
+  resolveAnonymousUser(
+    headers: http.IncomingHttpHeaders,
+  ): Promise<UserContext | null>;
+  transferAnonymousUser(
+    headers: http.IncomingHttpHeaders,
+    expectedUserId: string,
+    target: AuthenticatedUserContext,
+  ): Promise<void>;
+  disconnectLoginSession(loginSessionId: string): void;
+}
 
 let clientSeqCounter = 0;
 
@@ -83,10 +119,15 @@ export class BridgeServer {
   private httpServer: http.Server | undefined;
   private handlers = new Map<string, RpcConnectionHandler>();
   private clients = new Map<string, BridgeClient>();
-  private clientUsers = new Map<string, AuthenticatedUserContext>();
+  private clientUsers = new Map<string, UserContext>();
+  private clientAuthentication = new Map<string, BridgeAuthenticationState>();
+  private clientLoginSessions = new Map<string, string>();
+  private activeUserOperations = new Map<string, number>();
+  private transferringUserIds = new Set<string>();
   private sseStreams = new Map<string, Set<() => void>>();
   private uploadRegistry: UploadRegistry;
   private cleanupInterval: ReturnType<typeof setInterval> | undefined;
+  private readonly anonymousUserCleanup?: AnonymousUserCleanup;
   private readonly serverInstanceId = randomUUID();
   private readonly serverStartTime = new Date().toISOString();
 
@@ -100,12 +141,29 @@ export class BridgeServer {
     eventBus: BridgeEventBus,
     emitEvent: (event: BridgeEvent) => void,
     private readonly userContextResolver?: UserContextResolver,
+    private readonly authHttpHandler?: AuthHttpHandler,
+    private readonly userRuntimeRegistry?: UserRuntimeRegistry,
+    private readonly anonymousUsers?: AnonymousUserContextResolver,
+    anonymousUserCleanup?: { idleTtlMs: number; intervalMs: number },
   ) {
     this.config = config;
     this.handlerFactory = handlerFactory;
     this.eventBus = eventBus;
     this.emitEvent = emitEvent;
-    this.uploadRegistry = new UploadRegistry(config.upload);
+    this.uploadRegistry = new UploadRegistry({
+      ...config.upload,
+      requireOwnership: Boolean(userContextResolver),
+    });
+    if (anonymousUsers && anonymousUserCleanup) {
+      this.anonymousUserCleanup = new AnonymousUserCleanup(anonymousUsers, {
+        ...anonymousUserCleanup,
+        beginCleanup: userId => this.beginAnonymousUserCleanup(userId),
+        cleanupUser: userContext => this.cleanupAnonymousUser(userContext),
+        onError: error => {
+          console.warn("Dano Anonymous User cleanup failed:", error);
+        },
+      });
+    }
   }
 
   async start(): Promise<{ host: string; port: number }> {
@@ -148,6 +206,7 @@ export class BridgeServer {
     }
 
     this.startUploadCleanupInterval();
+    await this.anonymousUserCleanup?.start();
     this.host = this.config.host;
     this.port = boundPort;
     this.isRunning = true;
@@ -217,6 +276,8 @@ export class BridgeServer {
     this.handlers.clear();
     this.clients.clear();
     this.clientUsers.clear();
+    this.clientAuthentication.clear();
+    this.clientLoginSessions.clear();
 
     if (this.httpServer) {
       await new Promise<void>((resolve, reject) => {
@@ -234,6 +295,7 @@ export class BridgeServer {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = undefined;
     }
+    this.anonymousUserCleanup?.dispose();
     await this.uploadRegistry.dispose();
 
     this.emitEvent({ type: "server_stop" });
@@ -256,6 +318,31 @@ export class BridgeServer {
     return Array.from(this.clients.values());
   }
 
+  getClientUserResolution(clientId: string): ClientUserResolution | undefined {
+    const userContext = this.clientUsers.get(clientId);
+    const authentication = this.clientAuthentication.get(clientId);
+    if (!userContext || !authentication) return undefined;
+    const loginSessionId = this.clientLoginSessions.get(clientId);
+    return {
+      userContext,
+      authentication,
+      ...(loginSessionId ? { loginSessionId } : {}),
+    };
+  }
+
+  requireReauthentication(loginSessionId: string): void {
+    for (const [clientId, boundSessionId] of [
+      ...this.clientLoginSessions,
+    ]) {
+      if (boundSessionId !== loginSessionId) continue;
+      this.eventBus.sendToClient(clientId, {
+        type: "authentication",
+        payload: { status: "reauth_required" },
+      });
+      this.disconnectClient(clientId);
+    }
+  }
+
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -263,6 +350,20 @@ export class BridgeServer {
     try {
       const url = new URL(req.url || "/", `http://${req.headers.host}`);
       const pathname = url.pathname;
+
+      if (
+        await this.authHttpHandler?.handle(req, res, url, {
+          resolveAnonymousUser: headers =>
+            this.userContextResolver?.resolveAnonymous?.(headers) ??
+            Promise.resolve(null),
+          transferAnonymousUser: (headers, expectedUserId, target) =>
+            this.transferAnonymousUser(headers, expectedUserId, target),
+          disconnectLoginSession: loginSessionId =>
+            this.disconnectLoginSession(loginSessionId),
+        })
+      ) {
+        return;
+      }
 
       if (req.method === "GET" && pathname === "/api/health") {
         writeJson(res, 200, { status: "ok" });
@@ -278,7 +379,9 @@ export class BridgeServer {
       await this.authenticateProtectedRequest(req, url);
 
       if (req.method === "POST" && pathname === "/api/uploads") {
-        await this.handleUploadRequest(req, res, url);
+        await this.withUserWrite(url.searchParams.get("clientId"), () =>
+          this.handleUploadRequest(req, res, url),
+        );
         return;
       }
 
@@ -299,6 +402,7 @@ export class BridgeServer {
         await this.handleUploadPreview(
           res,
           decodeURIComponent(uploadPreviewMatch[1]),
+          url,
         );
         return;
       }
@@ -357,11 +461,13 @@ export class BridgeServer {
         if (!preference) {
           throw new HttpError(400, "Accent Color Preset is invalid");
         }
-        try {
-          await saveThemeColorPreference(userContext, preference);
-        } catch {
-          throw new HttpError(500, "Theme Color preference could not be saved");
-        }
+        await this.withUserWrite(clientId, async () => {
+          try {
+            await saveThemeColorPreference(userContext, preference);
+          } catch {
+            throw new HttpError(500, "Theme Color preference could not be saved");
+          }
+        });
         writeJson(res, 200, preference);
         return;
       }
@@ -500,9 +606,12 @@ export class BridgeServer {
       mimeType,
       path: storagePath.filePath,
       relativePath: storagePath.relativePath,
-      previewUrl: `/api/uploads/${encodeURIComponent(storagePath.id)}/preview`,
+      previewUrl: uploadPreviewUrl(
+        storagePath.id,
+        this.clientUsers.has(ownerClientId) ? ownerClientId : undefined,
+      ),
     };
-    this.uploadRegistry.register(ref, { ownerClientId });
+    this.uploadRegistry.register(ref, this.getClientUploadAccess(ownerClientId));
     writeJson(res, 201, ref);
   }
 
@@ -537,9 +646,12 @@ export class BridgeServer {
       mimeType,
       path: filePath,
       relativePath,
-      previewUrl: `/api/uploads/${encodeURIComponent(id)}/preview`,
+      previewUrl: uploadPreviewUrl(
+        id,
+        this.clientUsers.has(ownerClientId) ? ownerClientId : undefined,
+      ),
     };
-    this.uploadRegistry.register(ref, { ownerClientId });
+    this.uploadRegistry.register(ref, this.getClientUploadAccess(ownerClientId));
     writeJson(res, 200, ref);
   }
 
@@ -555,10 +667,24 @@ export class BridgeServer {
   private async handleUploadPreview(
     res: http.ServerResponse,
     id: string,
+    url: URL,
   ): Promise<void> {
-    const ref = this.uploadRegistry.touch(id);
+    const stored = this.uploadRegistry.peek(id);
+    const clientId = url.searchParams.get("clientId");
+    if (stored?.ownerUserId && !clientId) {
+      writeJson(res, 403, { error: "Upload requires its bound Client" });
+      return;
+    }
+    const ref = this.uploadRegistry.touch(
+      id,
+      clientId ? this.getClientUploadAccess(clientId) : undefined,
+    );
     if (!ref) {
-      writeJson(res, 404, { error: "Upload was not found" });
+      writeJson(res, stored ? 403 : 404, {
+        error: stored
+          ? "Upload does not belong to this Client"
+          : "Upload was not found",
+      });
       return;
     }
 
@@ -637,7 +763,16 @@ export class BridgeServer {
       writeJson(res, 403, { error: "Upload does not belong to this client" });
       return;
     }
-    const upload = this.uploadRegistry.touch(id);
+    const access = this.getClientUploadAccess(clientId);
+    const stored = this.uploadRegistry.peek(id);
+    if (
+      stored?.ownerClientId !== clientId &&
+      stored?.ownerClientId &&
+      !this.clients.has(stored.ownerClientId)
+    ) {
+      this.uploadRegistry.resolve(stored, access);
+    }
+    const upload = this.uploadRegistry.touch(id, access);
     if (!upload) {
       writeJson(res, 404, { error: "Upload was not found" });
       return;
@@ -650,7 +785,7 @@ export class BridgeServer {
       writeJson(res, 409, { error: "Upload is currently being read" });
       return;
     }
-    this.uploadRegistry.markOrphaned(id);
+    this.uploadRegistry.markOrphaned(id, access);
     writeJson(res, 202, { status: "orphaned" });
   }
 
@@ -658,57 +793,111 @@ export class BridgeServer {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    const user = await this.userContextResolver?.resolve(req.headers);
+    const resolution = this.userContextResolver?.resolveForClient
+      ? await this.userContextResolver.resolveForClient(req.headers)
+      : undefined;
+    const user =
+      resolution?.userContext ??
+      (await this.userContextResolver?.resolve(req.headers));
     if (this.userContextResolver && !user) {
       throw new UserContextError(401, "Authenticated User is required");
     }
-    clientSeqCounter++;
-    const client: BridgeClient = {
-      id: generateClientId(),
-      seq: clientSeqCounter,
-      connectedAt: new Date().toISOString(),
-    };
+    const finishActivity = user
+      ? this.beginUserOperationForUser(user.user.id)
+      : () => {};
+    try {
+      if (user && !("username" in user.user)) {
+        const touched = await this.anonymousUsers?.touchAnonymousUser(
+          user.user.id,
+        );
+        if (this.anonymousUsers && !touched) {
+          throw new UserContextError(401, "Anonymous User is no longer valid");
+        }
+      }
+      clientSeqCounter++;
+      const client: BridgeClient = {
+        id: generateClientId(),
+        seq: clientSeqCounter,
+        connectedAt: new Date().toISOString(),
+      };
 
-    this.clients.set(client.id, client);
-    if (user) this.clientUsers.set(client.id, user);
-    this.eventBus.registerClient(client);
+      this.clients.set(client.id, client);
+      if (user) this.clientUsers.set(client.id, user);
+      const authentication =
+        resolution?.authentication ??
+        (user ? browserAuthentication(user) : undefined);
+      if (authentication) {
+        this.clientAuthentication.set(client.id, authentication);
+      }
+      if (resolution?.loginSessionId) {
+        this.clientLoginSessions.set(client.id, resolution.loginSessionId);
+      }
+      const unregisterClient = this.eventBus.registerClient(client);
+      let handler: RpcConnectionHandler;
+      try {
+        handler = await this.handlerFactory({
+          client,
+          user: user ?? undefined,
+          loginSessionId: resolution?.loginSessionId,
+          config: this.config,
+          eventBus: this.eventBus,
+          uploadRegistry: this.uploadRegistry,
+          beginUserOperation: () =>
+            user ? this.beginUserOperationForUser(user.user.id) : () => {},
+          emitEvent: this.emitEvent,
+          send: message => {
+            this.eventBus.sendToClient(client.id, message);
+          },
+        });
+      } catch (error) {
+        unregisterClient();
+        this.clientUsers.delete(client.id);
+        this.clientAuthentication.delete(client.id);
+        this.clientLoginSessions.delete(client.id);
+        this.clients.delete(client.id);
+        throw error;
+      }
+      this.handlers.set(client.id, handler);
 
-    const handler = this.handlerFactory({
-      client,
-      user: user ?? undefined,
-      config: this.config,
-      eventBus: this.eventBus,
-      uploadRegistry: this.uploadRegistry,
-      emitEvent: this.emitEvent,
-      send: message => {
-        this.eventBus.sendToClient(client.id, message);
-      },
-    });
-    this.handlers.set(client.id, handler);
+      this.emitEvent({
+        type: "client_connect",
+        client,
+      });
 
-    this.emitEvent({
-      type: "client_connect",
-      client,
-    });
-
-    writeJson(res, 201, {
-      client,
-      ...(user ? { currentUser: toBrowserUserSummary(user.user) } : {}),
-      eventsUrl: `/api/clients/${encodeURIComponent(client.id)}/events`,
-      messagesUrl: `/api/clients/${encodeURIComponent(client.id)}/messages`,
-      defaultWorkspacePath: this.config.defaultWorkspacePath,
-    });
+      if (resolution?.setCookie) {
+        res.setHeader("Set-Cookie", resolution.setCookie);
+      }
+      writeJson(res, 201, {
+        client,
+        ...(authentication ? { authentication } : {}),
+        ...(authentication?.status === "authenticated"
+          ? { currentUser: authentication.user }
+          : {}),
+        eventsUrl: `/api/clients/${encodeURIComponent(client.id)}/events`,
+        messagesUrl: `/api/clients/${encodeURIComponent(client.id)}/messages`,
+        defaultWorkspacePath:
+          handler.defaultWorkspacePath ?? this.config.defaultWorkspacePath,
+      });
+    } finally {
+      finishActivity();
+    }
   }
 
   private async handleCurrentUser(
     res: http.ServerResponse,
     clientId: string,
   ): Promise<void> {
-    const boundUser = this.clientUsers.get(clientId);
-    if (!boundUser) {
+    const authentication = this.clientAuthentication.get(clientId);
+    if (!authentication) {
       throw new UserContextError(401, "Authenticated User is required");
     }
-    writeJson(res, 200, toBrowserUserSummary(boundUser.user));
+    writeJson(
+      res,
+      200,
+      authentication.status === "authenticated"
+        ? authentication.user
+        : authentication,
+    );
   }
 
   private async authenticateProtectedRequest(
@@ -723,7 +912,22 @@ export class BridgeServer {
 
     if (!clientId && previewMatch?.[1]) {
       const upload = this.uploadRegistry.peek(decodeURIComponent(previewMatch[1]));
-      clientId = upload?.ownerClientId;
+      const requestedClientId = url.searchParams.get("clientId") ?? undefined;
+      if (
+        upload?.ownerUserId &&
+        (!requestedClientId || !this.clients.has(requestedClientId))
+      ) {
+        clientId =
+          requestedClientId &&
+          upload.previousClientIds.includes(requestedClientId) &&
+          upload.ownerClientId &&
+          this.clients.has(upload.ownerClientId)
+            ? upload.ownerClientId
+            : await this.recoverUploadClient(req, upload);
+        if (clientId) url.searchParams.set("clientId", clientId);
+      } else {
+        clientId = requestedClientId ?? upload?.ownerClientId;
+      }
     }
 
     if (
@@ -741,23 +945,89 @@ export class BridgeServer {
   private async authenticateBoundClientRequest(
     req: http.IncomingMessage,
     clientId: string,
-  ): Promise<AuthenticatedUserContext | undefined> {
+  ): Promise<UserContext | undefined> {
     if (!this.clients.has(clientId)) {
       throw new HttpError(404, "Client was not found");
     }
     const boundUser = this.clientUsers.get(clientId);
     if (!boundUser) return undefined;
+    if (this.transferringUserIds.has(boundUser.user.id)) {
+      throw new HttpError(409, "User runtime ownership is changing");
+    }
     if (!this.userContextResolver) {
       throw new UserContextError(503, "User authentication is unavailable");
     }
-    const requestUser = await this.userContextResolver.resolve(req.headers);
+    const resolution = this.userContextResolver.resolveExisting
+      ? await this.userContextResolver.resolveExisting(req.headers)
+      : null;
+    const requestUser =
+      resolution?.userContext ??
+      (await this.userContextResolver.resolve(req.headers));
     if (!requestUser) {
       throw new UserContextError(401, "Authenticated User is required");
     }
     if (requestUser.user.id !== boundUser.user.id) {
       throw new UserContextError(403, "Client belongs to another User");
     }
+    const boundLoginSessionId = this.clientLoginSessions.get(clientId);
+    if (
+      boundLoginSessionId &&
+      resolution?.loginSessionId !== boundLoginSessionId
+    ) {
+      throw new UserContextError(401, "Dano Login Session is no longer valid");
+    }
+    if (!("username" in boundUser.user)) {
+      const touched = await this.anonymousUsers?.touchAnonymousUser(
+        boundUser.user.id,
+      );
+      if (this.anonymousUsers && !touched) {
+        throw new UserContextError(401, "Anonymous User is no longer valid");
+      }
+    }
     return boundUser;
+  }
+
+  private getClientUploadAccess(clientId: string): UploadAccess {
+    return {
+      ownerUserId: this.clientUsers.get(clientId)?.user.id,
+      ownerClientId: clientId,
+      workspacePath: this.getClientWorkspacePath(clientId),
+      sessionId: this.handlers.get(clientId)?.currentSessionId?.(),
+    };
+  }
+
+  private async recoverUploadClient(
+    req: http.IncomingMessage,
+    upload: StoredUpload,
+  ): Promise<string | undefined> {
+    if (
+      !upload ||
+      !upload.ownerUserId ||
+      !upload.sessionId ||
+      (upload.ownerClientId && this.clients.has(upload.ownerClientId)) ||
+      !this.userContextResolver
+    ) {
+      return undefined;
+    }
+    const requestUser = await this.userContextResolver.resolve(req.headers);
+    if (!requestUser) {
+      throw new UserContextError(401, "Authenticated User is required");
+    }
+    if (requestUser.user.id !== upload.ownerUserId) {
+      throw new UserContextError(403, "Upload belongs to another User");
+    }
+
+    for (const [clientId, clientUser] of this.clientUsers) {
+      if (clientUser.user.id !== upload.ownerUserId) continue;
+      let access: UploadAccess;
+      try {
+        access = this.getClientUploadAccess(clientId);
+      } catch {
+        continue;
+      }
+      if (this.uploadRegistry.resolve(upload, access)) return clientId;
+    }
+    return undefined;
   }
 
   private openEventStream(
@@ -840,7 +1110,22 @@ export class BridgeServer {
       return;
     }
 
-    handler.handleClientMessage(body);
+    const finishOperation = this.beginUserOperation(clientId);
+    try {
+      const completion = handler.handleClientMessage(body);
+      if (completion) {
+        void completion
+          .catch(error => {
+            console.error("Bridge client command failed:", error);
+          })
+          .finally(finishOperation);
+      } else {
+        finishOperation();
+      }
+    } catch (error) {
+      finishOperation();
+      throw error;
+    }
     writeJson(res, 202, { status: "accepted" });
   }
 
@@ -854,6 +1139,8 @@ export class BridgeServer {
     this.handlers.delete(clientId);
     this.clients.delete(clientId);
     this.clientUsers.delete(clientId);
+    this.clientAuthentication.delete(clientId);
+    this.clientLoginSessions.delete(clientId);
     this.eventBus.unregisterClient(clientId);
     this.closeSseStreams(clientId);
   }
@@ -882,6 +1169,167 @@ export class BridgeServer {
     for (const close of [...streams]) {
       close();
     }
+  }
+
+  private async transferAnonymousUser(
+    headers: http.IncomingHttpHeaders,
+    expectedUserId: string,
+    target: AuthenticatedUserContext,
+  ): Promise<void> {
+    if (!this.userRuntimeRegistry || !this.userContextResolver?.resolveAnonymous) {
+      throw new UserContextError(503, "User data transfer is unavailable");
+    }
+    const source = await this.userContextResolver.resolveAnonymous(headers);
+    if (!source || source.user.id !== expectedUserId) {
+      throw new UserContextError(401, "Anonymous User binding is no longer valid");
+    }
+    const finishTransfer = this.beginExclusiveUserMutation([
+      source.user.id,
+      target.user.id,
+    ]);
+    if (!finishTransfer) {
+      throw new HttpError(409, "User runtime ownership is changing");
+    }
+    try {
+      await this.userRuntimeRegistry.transferOwnership(source, target, {
+        assertIdle: () => {
+          for (const [clientId, user] of this.clientUsers) {
+            if (
+              (user.user.id === source.user.id ||
+                user.user.id === target.user.id) &&
+              this.handlers.get(clientId)?.isBusy?.()
+            ) {
+              throw new HttpError(409, "User runtime is busy");
+            }
+          }
+          if (
+            (this.activeUserOperations.get(source.user.id) ?? 0) > 0 ||
+            (this.activeUserOperations.get(target.user.id) ?? 0) > 0
+          ) {
+            throw new HttpError(409, "User runtime is being written");
+          }
+        },
+        commitOwnership: async paths => {
+          const rollbackUploads = this.uploadRegistry.transferOwnership(
+            paths.sourceUserId,
+            paths.targetUserId,
+            paths.mapUserPath,
+          );
+          try {
+            const revoked = await this.userContextResolver!.revokeAnonymous?.(
+              headers,
+              expectedUserId,
+            );
+            if (!revoked) {
+              throw new UserContextError(
+                401,
+                "Anonymous User binding could not be revoked",
+              );
+            }
+          } catch (error) {
+            rollbackUploads();
+            throw error;
+          }
+        },
+      });
+      for (const [clientId, user] of [...this.clientUsers]) {
+        if (user.user.id === source.user.id) this.disconnectClient(clientId);
+      }
+      await this.userRuntimeRegistry
+        .retireUser(source)
+        .then(() =>
+          this.userContextResolver?.completeAnonymousUserCleanup?.(
+            source.user.id,
+          ),
+        )
+        .catch(error => {
+          console.warn("Transferred Anonymous User cleanup failed:", error);
+        });
+    } finally {
+      finishTransfer();
+    }
+  }
+
+  private disconnectLoginSession(loginSessionId: string): void {
+    for (const [clientId, boundSessionId] of [...this.clientLoginSessions]) {
+      if (boundSessionId === loginSessionId) this.disconnectClient(clientId);
+    }
+  }
+
+  private async withUserWrite<T>(
+    clientId: string | null,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!clientId) return operation();
+    const finishOperation = this.beginUserOperation(clientId);
+    try {
+      return await operation();
+    } finally {
+      finishOperation();
+    }
+  }
+
+  private beginUserOperation(clientId: string): () => void {
+    const userId = this.clientUsers.get(clientId)?.user.id;
+    if (!userId) return () => {};
+    return this.beginUserOperationForUser(userId);
+  }
+
+  private beginUserOperationForUser(userId: string): () => void {
+    if (this.transferringUserIds.has(userId)) {
+      throw new HttpError(409, "User runtime ownership is changing");
+    }
+    this.activeUserOperations.set(
+      userId,
+      (this.activeUserOperations.get(userId) ?? 0) + 1,
+    );
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      const remaining = (this.activeUserOperations.get(userId) ?? 1) - 1;
+      if (remaining > 0) this.activeUserOperations.set(userId, remaining);
+      else this.activeUserOperations.delete(userId);
+    };
+  }
+
+  private beginExclusiveUserMutation(
+    userIds: readonly string[],
+  ): (() => void) | null {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.some(userId => this.transferringUserIds.has(userId))) {
+      return null;
+    }
+    for (const userId of uniqueUserIds) this.transferringUserIds.add(userId);
+    return () => {
+      for (const userId of uniqueUserIds) this.transferringUserIds.delete(userId);
+    };
+  }
+
+  private beginAnonymousUserCleanup(userId: string): (() => void) | null {
+    const release = this.beginExclusiveUserMutation([userId]);
+    if (!release) return null;
+    const clientIds = [...this.clientUsers]
+      .filter(([, user]) => user.user.id === userId)
+      .map(([clientId]) => clientId);
+    const isActive =
+      (this.activeUserOperations.get(userId) ?? 0) > 0 ||
+      clientIds.some(clientId => this.sseStreams.has(clientId)) ||
+      clientIds.some(clientId => this.handlers.get(clientId)?.isBusy?.());
+    if (isActive) {
+      release();
+      return null;
+    }
+    for (const clientId of clientIds) this.disconnectClient(clientId);
+    return release;
+  }
+
+  private async cleanupAnonymousUser(userContext: UserContext): Promise<void> {
+    if (!this.userRuntimeRegistry) {
+      throw new Error("Anonymous User runtime cleanup is unavailable");
+    }
+    await this.uploadRegistry.deleteOwnedByUser(userContext.user.id);
+    await this.userRuntimeRegistry.retireUser(userContext);
   }
 
   private handleStaticRequest(
@@ -1024,6 +1472,13 @@ function normalizeUploadName(value: unknown): string | null {
   return base && base !== "." && base !== ".." ? base : null;
 }
 
+function uploadPreviewUrl(id: string, clientId?: string): string {
+  const route = `/api/uploads/${encodeURIComponent(id)}/preview`;
+  return clientId
+    ? `${route}?clientId=${encodeURIComponent(clientId)}`
+    : route;
+}
+
 function workspacePreviewMimeType(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();
   if (extension === ".png") return "image/png";
@@ -1107,6 +1562,15 @@ function isClientMessage(value: unknown): value is ClientMessage {
     return Boolean(data.payload && typeof data.payload === "object");
   }
   return false;
+}
+
+function browserAuthentication(
+  userContext: UserContext,
+): BridgeAuthenticationState {
+  const user = userContext.user;
+  return "username" in user
+    ? { status: "authenticated", user: toBrowserUserSummary(user) }
+    : { status: "anonymous" };
 }
 
 function formatSseMessage(message: ServerMessage): string {

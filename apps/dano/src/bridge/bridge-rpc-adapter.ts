@@ -38,6 +38,9 @@ import {
 } from "./ask-user-question-errors.js";
 import { DetachedSessionRegistry } from "./session-registry.js";
 import {
+  workspaceSessionDirectoryPath,
+} from "./runtime-layout.js";
+import {
   ASK_USER_QUESTION_PRESENTATION_RETRY_CODE,
   ASK_USER_QUESTION_PRESENTATION_TERMINAL_CODE,
   ASK_USER_QUESTION_TOOL_NAME,
@@ -91,8 +94,12 @@ import type {
   BridgeClient,
 } from "./types.js";
 import { detectWorkspaceEnvironments } from "./workspace-environment.js";
-import type { UploadRegistry } from "./upload-registry.js";
+import type { UploadAccess, UploadRegistry } from "./upload-registry.js";
 import type { FieldAssistService } from "./field-assist.js";
+import type {
+  AssistantTurnBindingHandle,
+  CredentialBroker,
+} from "./credential-broker.js";
 import {
   canApplyFormInteractionTransition,
   createFormInteractionForQuestion,
@@ -638,26 +645,33 @@ function listSessionFilesInDir(sessionDir: string): string[] {
   }
 }
 
-function getSessionsRoot(): string {
+function getSessionsRoot(sessionsRootPath?: string): string {
   return (
+    sessionsRootPath ??
     process.env.DANO_SESSIONS_ROOT ??
     process.env.PI_WEB_SESSIONS_ROOT ??
     path.join(os.homedir(), ".pi", "agent", "sessions")
   );
 }
 
-function workspaceSessionDirName(workspacePath: string): string {
-  return `--${workspacePath.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+function workspaceSessionDirPath(
+  workspacePath: string,
+  sessionsRootPath?: string,
+): string {
+  return workspaceSessionDirectoryPath(
+    getSessionsRoot(sessionsRootPath),
+    workspacePath,
+  );
 }
 
-function workspaceSessionDirPath(workspacePath: string): string {
-  return path.join(getSessionsRoot(), workspaceSessionDirName(workspacePath));
-}
-
-function resolveWorkspaceSessionDirPath(workspacePath: string): string {
+function resolveWorkspaceSessionDirPath(
+  workspacePath: string,
+  sessionsRootPath?: string,
+): string {
   const normalizedWorkspacePath = normalizeOptionalWorkspaceRoot(workspacePath);
   const preferredPath = workspaceSessionDirPath(
     normalizedWorkspacePath ?? workspacePath,
+    sessionsRootPath,
   );
   if (fs.existsSync(preferredPath)) {
     return preferredPath;
@@ -667,7 +681,7 @@ function resolveWorkspaceSessionDirPath(workspacePath: string): string {
     return preferredPath;
   }
 
-  for (const workspace of listRegisteredWorkspaces()) {
+  for (const workspace of listRegisteredWorkspaces(sessionsRootPath)) {
     if (
       normalizeOptionalWorkspaceRoot(workspace.workspacePath) ===
       normalizedWorkspacePath
@@ -741,7 +755,10 @@ function decodeWorkspaceSessionDirName(sessionDirName: string): string | null {
   return resolveExistingWorkspacePathFromEncoded(encoded) ?? directPath;
 }
 
-function ensureRegisteredWorkspace(workspacePath: string): {
+function ensureRegisteredWorkspace(
+  workspacePath: string,
+  sessionsRootPath?: string,
+): {
   metadata: WorkspaceMetadata;
   created: boolean;
 } {
@@ -750,7 +767,10 @@ function ensureRegisteredWorkspace(workspacePath: string): {
     throw new Error("Workspace path is required");
   }
 
-  const sessionDir = resolveWorkspaceSessionDirPath(normalizedWorkspacePath);
+  const sessionDir = resolveWorkspaceSessionDirPath(
+    normalizedWorkspacePath,
+    sessionsRootPath,
+  );
   const created = !fs.existsSync(sessionDir);
 
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -778,8 +798,10 @@ function ensureWorkspaceDirectory(workspacePath: string): string | null {
   }
 }
 
-function listRegisteredWorkspaces(): RegisteredWorkspace[] {
-  const sessionsRoot = getSessionsRoot();
+function listRegisteredWorkspaces(
+  sessionsRootPath?: string,
+): RegisteredWorkspace[] {
+  const sessionsRoot = getSessionsRoot(sessionsRootPath);
   if (!fs.existsSync(sessionsRoot)) return [];
 
   const workspaces: RegisteredWorkspace[] = [];
@@ -800,10 +822,11 @@ function listRegisteredWorkspaces(): RegisteredWorkspace[] {
 function workspaceSummary(
   workspacePath: string,
   updatedAt?: string,
+  sessionsRootPath?: string,
 ): RpcWorkspaceSummary {
   const workspace = workspaceMetadata(
     workspacePath,
-    workspaceSessionDirPath(workspacePath),
+    workspaceSessionDirPath(workspacePath, sessionsRootPath),
   );
   return {
     id: workspace.workspaceId,
@@ -827,11 +850,17 @@ function compareWorkspaceSummaries(
   return left.path.localeCompare(right.path);
 }
 
-function readWorkspaceUpdatedAt(workspacePath: string): string | undefined {
+function readWorkspaceUpdatedAt(
+  workspacePath: string,
+  sessionsRootPath?: string,
+): string | undefined {
   let latestHeaderTimestamp: string | undefined;
   let latestMtime = Number.NEGATIVE_INFINITY;
 
-  for (const sessionPath of listWorkspaceSessionFiles(workspacePath)) {
+  for (const sessionPath of listWorkspaceSessionFiles(
+    workspacePath,
+    sessionsRootPath,
+  )) {
     const header = readSessionFileHeader(sessionPath);
     if (header?.timestamp) {
       const normalizedTimestamp = normalizeSessionTimestamp(header.timestamp);
@@ -862,6 +891,7 @@ function appendWorkspaceSummary(
   workspaces: Map<string, RpcWorkspaceSummary>,
   workspacePath?: string,
   updatedAt?: string,
+  sessionsRootPath?: string,
 ) {
   const normalizedWorkspacePath = normalizeOptionalWorkspaceRoot(workspacePath);
   if (!normalizedWorkspacePath) return;
@@ -874,7 +904,11 @@ function appendWorkspaceSummary(
       : existing?.updatedAt;
   workspaces.set(
     normalizedWorkspacePath,
-    workspaceSummary(normalizedWorkspacePath, nextUpdatedAt),
+    workspaceSummary(
+      normalizedWorkspacePath,
+      nextUpdatedAt,
+      sessionsRootPath,
+    ),
   );
 }
 
@@ -944,8 +978,13 @@ function pickWorkspaceDirectoryFromNativeDialog(): string | null {
   return null;
 }
 
-function listWorkspaceSessionFiles(workspacePath: string): string[] {
-  return listSessionFilesInDir(resolveWorkspaceSessionDirPath(workspacePath));
+function listWorkspaceSessionFiles(
+  workspacePath: string,
+  sessionsRootPath?: string,
+): string[] {
+  return listSessionFilesInDir(
+    resolveWorkspaceSessionDirPath(workspacePath, sessionsRootPath),
+  );
 }
 
 function readFileChunk(
@@ -3078,12 +3117,16 @@ function uploadedFilesToProjectFileReferences(
   uploadRegistry: UploadRegistry,
   correlationId: string,
   workspacePath: string,
+  access?: UploadAccess,
 ): UploadedProjectFileRef[] | undefined {
   if (!files?.length) return undefined;
 
   const resolved: UploadedProjectFileRef[] = [];
   for (const file of files) {
-    const stored = uploadRegistry.resolve(file) as UploadedProjectFileRef | null;
+    const stored = uploadRegistry.resolve(file, {
+      ...access,
+      workspacePath,
+    }) as UploadedProjectFileRef | null;
     if (!stored) {
       throw new Error(`Uploaded file was not found: ${file.name}`);
     }
@@ -3113,7 +3156,12 @@ function uploadedFilesToProjectFileReferences(
   }
 
   for (const file of resolved) {
-    uploadRegistry.markReferenced(file.id, { correlationId });
+    uploadRegistry.markReferenced(
+      file.id,
+      access
+        ? { ...access, workspacePath, correlationId }
+        : { correlationId },
+    );
   }
   return resolved;
 }
@@ -3295,6 +3343,20 @@ function queuedAgentMessages(
     | undefined;
   const queue = agent?.[queueName];
   return Array.isArray(queue?.messages) ? queue.messages : [];
+}
+
+function queuedFollowUpEntries(session: AgentSession): object[] {
+  return queuedAgentMessages(session, "followUpQueue").filter(
+    (entry): entry is object => typeof entry === "object" && entry !== null,
+  );
+}
+
+function queuedFollowUpEntryAt(
+  session: AgentSession,
+  index: number,
+): object | undefined {
+  const entry = queuedAgentMessages(session, "followUpQueue")[index];
+  return typeof entry === "object" && entry !== null ? entry : undefined;
 }
 
 function trackedQueuedMessages(
@@ -3536,6 +3598,7 @@ class BrowserSessionView {
     private readonly registry: DetachedSessionRegistry,
     private readonly createExtensionUIContext: () => ExtensionUIContext,
     private readonly onDetachedSessionEvent: (event: AgentSessionEvent) => void,
+    private readonly runtimeScope?: BridgeRuntimeScope,
   ) {
     const initialSessionPath = this.registry.getInitialSessionPath();
     if (!initialSessionPath) return;
@@ -3797,7 +3860,10 @@ class BrowserSessionView {
       normalizeOptionalWorkspaceRoot(this.context.state.cwd) ||
       this.context.state.cwd;
     const sessionDir = options.workspacePath
-      ? resolveWorkspaceSessionDirPath(targetCwd)
+      ? resolveWorkspaceSessionDirPath(
+          targetCwd,
+          this.runtimeScope?.sessionsRootPath,
+        )
       : currentSessionFile
         ? path.dirname(currentSessionFile)
         : undefined;
@@ -5189,7 +5255,15 @@ class SessionStatsPusher {
 
 export type RpcAdapterSend = (message: ServerMessage) => void;
 
+export interface BridgeRuntimeScope {
+  readonly userId: string;
+  readonly sessionsRootPath: string;
+  ownsSessionPath(candidatePath: string): boolean;
+  ownsWorkspacePath(candidatePath: string): boolean;
+}
+
 export class BridgeRpcAdapter {
+  readonly defaultWorkspacePath?: string;
   private client: BridgeClient;
   private send: RpcAdapterSend;
   private context: BridgeRpcAdapterContext;
@@ -5210,9 +5284,11 @@ export class BridgeRpcAdapter {
     RpcTranscriptUpsertEvent
   >();
   private readonly retryingSessions = new Set<string>();
-  private readonly pendingDetachedPromptTimers = new Set<
-    ReturnType<typeof setTimeout>
+  private readonly pendingDetachedPromptTimers = new Map<
+    ReturnType<typeof setTimeout>,
+    () => void
   >();
+  private readonly pendingDetachedPrompts = new Set<Promise<void>>();
 
   // Detached-session registry subscription.
   private unsubscribeRegistryEvents: (() => void) | undefined;
@@ -5234,7 +5310,12 @@ export class BridgeRpcAdapter {
     emitEvent: (event: BridgeEvent) => void,
     uploadRegistry: UploadRegistry,
     sessionRegistry?: DetachedSessionRegistry,
+    private readonly runtimeScope?: BridgeRuntimeScope,
+    private readonly credentialBroker?: CredentialBroker,
+    private readonly loginSessionId?: string,
+    private readonly beginUserOperation: () => () => void = () => () => {},
   ) {
+    this.defaultWorkspacePath = config.defaultWorkspacePath;
     this.client = client;
     this.send = send;
     this.context = context;
@@ -5263,6 +5344,7 @@ export class BridgeRpcAdapter {
       event => {
         this.handleSelectedSessionEvent(event);
       },
+      runtimeScope,
     );
     this.sessionStatsPusher = new SessionStatsPusher(
       sessionPath => this.buildSessionStats(sessionPath),
@@ -5281,6 +5363,53 @@ export class BridgeRpcAdapter {
 
   currentGitCwd(): string {
     return this.sessionRuntime.currentGitCwd();
+  }
+
+  currentSessionId(): string {
+    return this.sessionRuntime.currentSessionManager().getSessionId();
+  }
+
+  isBusy(): boolean {
+    const state = this.sessionRuntime.buildActiveState();
+    return (
+      state.isStreaming ||
+      state.isCompacting ||
+      this.pendingDetachedPromptTimers.size > 0 ||
+      this.pendingDetachedPrompts.size > 0
+    );
+  }
+
+  private currentUploadAccess(
+    sessionId: string,
+    sourceSessionId?: string,
+  ): UploadAccess | undefined {
+    if (!this.runtimeScope) return undefined;
+    return {
+      ownerUserId: this.runtimeScope.userId,
+      ownerClientId: this.client.id,
+      workspacePath: this.sessionRuntime.currentGitCwd(),
+      sessionId,
+      sourceSessionId,
+    };
+  }
+
+  private queueAssistantTurn(
+    sessionId: string,
+  ): AssistantTurnBindingHandle | undefined {
+    const scope = this.runtimeScope?.userId;
+    return scope
+      ? this.credentialBroker?.queueAssistantTurn(
+          scope,
+          sessionId,
+          this.loginSessionId,
+        )
+      : undefined;
+  }
+
+  private cancelQueuedAssistantTurn(
+    binding: AssistantTurnBindingHandle | undefined,
+  ): void {
+    this.credentialBroker?.cancelQueuedAssistantTurn(binding);
   }
 
   /* ------------------------------------------------------------------------
@@ -6000,14 +6129,14 @@ export class BridgeRpcAdapter {
       return;
     }
 
-    this.handleClientMessage(message);
+    void this.handleClientMessage(message);
   }
 
-  handleClientMessage(message: ClientMessage): void {
+  handleClientMessage(message: ClientMessage): void | Promise<void> {
     if (this.disposed) return;
 
     if (message.type === "command") {
-      void this.handleCommand(message.payload);
+      return this.handleCommand(message.payload);
     } else if (message.type === "extension_ui_response") {
       this.handleUIResponse(message.payload);
     } else {
@@ -6184,6 +6313,9 @@ export class BridgeRpcAdapter {
 
       case "prompt": {
         const transcriptImages = normalizeRpcImages(command.images);
+        const sourceSessionId = this.sessionRuntime
+          .currentSessionManager()
+          .getSessionId();
 
         // Auto-create a detached session when no session is selected.
         // Without this, the fallback calls this.context.actions.sendUserMessage() which
@@ -6200,6 +6332,7 @@ export class BridgeRpcAdapter {
           this.uploadRegistry,
           correlationId,
           this.sessionRuntime.currentGitCwd(),
+          this.currentUploadAccess(session.sessionId, sourceSessionId),
         );
         const images = mergeRpcImages(
           transcriptImages,
@@ -6208,7 +6341,7 @@ export class BridgeRpcAdapter {
         const promptExpansionOptions = this.slashCommandsAndMentionsEnabled
           ? {}
           : { expandPromptTemplates: false as const };
-        const promptOptions = session.isStreaming
+        const defaultPromptOptions = session.isStreaming
           ? {
               source: "rpc" as const,
               images,
@@ -6230,38 +6363,95 @@ export class BridgeRpcAdapter {
           ),
         });
 
+        const finishUserOperation = this.beginUserOperation();
         const promptTimer = setTimeout(() => {
           this.pendingDetachedPromptTimers.delete(promptTimer);
-          if (this.disposed) return;
+          if (this.disposed) {
+            finishUserOperation();
+            return;
+          }
 
-          void session
-            .prompt(injectedMessage, promptOptions)
-            .catch(error => {
-              const message =
-                error instanceof Error ? error.message : String(error);
-              const sessionPath = session.sessionFile ?? null;
-              console.error(
-                `BridgeRpcAdapter[${this.client.id}]: Detached prompt failed:`,
-                message,
+          try {
+            const isQueuedFollowUp =
+              session.isStreaming && command.streamingBehavior === "followUp";
+            const binding =
+              !session.isStreaming || isQueuedFollowUp
+                ? this.queueAssistantTurn(session.sessionId)
+                : undefined;
+            const promptOptions = this.credentialBroker
+              ? session.isStreaming
+                ? {
+                    source: "rpc" as const,
+                    images,
+                    streamingBehavior: command.streamingBehavior ?? "steer",
+                    ...promptExpansionOptions,
+                  }
+                : {
+                    source: "rpc" as const,
+                    images,
+                    ...promptExpansionOptions,
+                    preflightResult: (success: boolean) => {
+                      if (!success) {
+                        this.cancelQueuedAssistantTurn(binding);
+                      }
+                    },
+                  }
+              : defaultPromptOptions;
+            let promptOperation!: Promise<void>;
+            const executePrompt = () =>
+              Promise.resolve().then(() =>
+                session.prompt(injectedMessage, promptOptions),
               );
-              this.emitEvent({
-                type: "command_error",
-                client: this.client,
-                commandType: "prompt",
-                correlationId,
-                error: message,
+            const startedPrompt =
+              isQueuedFollowUp && this.credentialBroker
+                ? this.credentialBroker.enqueueAssociatedAssistantTurn(
+                    binding,
+                    () => queuedFollowUpEntries(session),
+                    executePrompt,
+                  )
+                : executePrompt().then(() => {
+                    this.cancelQueuedAssistantTurn(binding);
+                  });
+            promptOperation = startedPrompt
+              .catch(error => {
+                this.cancelQueuedAssistantTurn(binding);
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                const sessionPath = session.sessionFile ?? null;
+                console.error(
+                  `BridgeRpcAdapter[${this.client.id}]: Detached prompt failed:`,
+                  message,
+                );
+                this.emitEvent({
+                  type: "command_error",
+                  client: this.client,
+                  commandType: "prompt",
+                  correlationId,
+                  error: message,
+                });
+                this.sendEvent({
+                  type: "command_error",
+                  commandType: "prompt",
+                  correlationId,
+                  error: message,
+                });
+                this.sendEvent(toRpcAgentEndEvent({}, sessionPath));
+                if (sessionPath) this.sessionStatsPusher.queue(sessionPath);
+              })
+              .finally(() => {
+                this.pendingDetachedPrompts.delete(promptOperation);
+                finishUserOperation();
               });
-              this.sendEvent({
-                type: "command_error",
-                commandType: "prompt",
-                correlationId,
-                error: message,
-              });
-              this.sendEvent(toRpcAgentEndEvent({}, sessionPath));
-              if (sessionPath) this.sessionStatsPusher.queue(sessionPath);
-            });
+            this.pendingDetachedPrompts.add(promptOperation);
+          } catch (error) {
+            finishUserOperation();
+            throw error;
+          }
         }, 0);
-        this.pendingDetachedPromptTimers.add(promptTimer);
+        this.pendingDetachedPromptTimers.set(
+          promptTimer,
+          finishUserOperation,
+        );
 
         if (autoCreated) {
           this.transcriptProjector.syncPage(autoCreated.transcript);
@@ -6298,6 +6488,9 @@ export class BridgeRpcAdapter {
           this.uploadRegistry,
           correlationId,
           this.sessionRuntime.currentGitCwd(),
+          this.currentUploadAccess(
+            this.sessionRuntime.currentSessionManager().getSessionId(),
+          ),
         );
         const images = mergeRpcImages(
           transcriptImages,
@@ -6349,6 +6542,9 @@ export class BridgeRpcAdapter {
           this.uploadRegistry,
           correlationId,
           this.sessionRuntime.currentGitCwd(),
+          this.currentUploadAccess(
+            this.sessionRuntime.currentSessionManager().getSessionId(),
+          ),
         );
         const images = mergeRpcImages(
           transcriptImages,
@@ -6369,15 +6565,42 @@ export class BridgeRpcAdapter {
         });
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
-          void session
-            .followUp(injectedMessage, images)
-            .catch(error => {
-              console.error(
-                `BridgeRpcAdapter[${this.client.id}]: Detached follow_up failed:`,
-                error,
+          const finishUserOperation = this.beginUserOperation();
+          try {
+            const binding = this.queueAssistantTurn(session.sessionId);
+            const enqueueFollowUp = () =>
+              Promise.resolve().then(() =>
+                session.followUp(injectedMessage, images),
               );
-            });
+            const startedFollowUp = this.credentialBroker
+              ? this.credentialBroker.enqueueAssociatedAssistantTurn(
+                  binding,
+                  () => queuedFollowUpEntries(session),
+                  enqueueFollowUp,
+                )
+              : enqueueFollowUp();
+            let followUpOperation!: Promise<void>;
+            followUpOperation = startedFollowUp
+              .catch(error => {
+                this.cancelQueuedAssistantTurn(binding);
+                console.error(
+                  `BridgeRpcAdapter[${this.client.id}]: Detached follow_up failed:`,
+                  error,
+                );
+              })
+              .finally(() => {
+                this.pendingDetachedPrompts.delete(followUpOperation);
+                finishUserOperation();
+              });
+            this.pendingDetachedPrompts.add(followUpOperation);
+          } catch (error) {
+            finishUserOperation();
+            throw error;
+          }
         } else {
+          this.queueAssistantTurn(
+            this.sessionRuntime.currentSessionManager().getSessionId(),
+          );
           this.context.actions.sendUserMessage(
             buildUserMessageContent(injectedMessage, images),
             {
@@ -6416,6 +6639,12 @@ export class BridgeRpcAdapter {
             session.abortCompaction();
           } else {
             clearSteeringQueue(session);
+            if (this.runtimeScope) {
+              this.credentialBroker?.clearQueuedAssistantTurns(
+                this.runtimeScope.userId,
+                session.sessionId,
+              );
+            }
             await session.abort();
           }
         } else if (this.context.state.isCompacting()) {
@@ -6839,7 +7068,9 @@ export class BridgeRpcAdapter {
 
         const session = await this.sessionRuntime.ensureDetachedSession();
         try {
+          const queueEntry = queuedFollowUpEntryAt(session, command.index);
           const removed = dequeueFollowUpMessage(session, command.index);
+          this.credentialBroker?.cancelQueuedAssistantTurnForEntry(queueEntry);
           return {
             id: correlationId,
             type: "response",
@@ -6967,6 +7198,19 @@ export class BridgeRpcAdapter {
         const workspacePath = normalizeOptionalWorkspaceRoot(
           command.workspacePath,
         );
+        if (
+          workspacePath &&
+          this.runtimeScope &&
+          !this.runtimeScope.ownsWorkspacePath(workspacePath)
+        ) {
+          return {
+            id: correlationId,
+            type: "response",
+            command: "new_session",
+            success: false,
+            error: "Workspace was not found",
+          };
+        }
         if (workspacePath) {
           const workspaceError = ensureWorkspaceDirectory(workspacePath);
           if (workspaceError) {
@@ -6979,7 +7223,10 @@ export class BridgeRpcAdapter {
             };
           }
 
-          ensureRegisteredWorkspace(workspacePath);
+          ensureRegisteredWorkspace(
+            workspacePath,
+            this.runtimeScope?.sessionsRootPath,
+          );
         }
 
         const created = await this.sessionRuntime.createDetachedSession({
@@ -7026,6 +7273,19 @@ export class BridgeRpcAdapter {
           };
         }
 
+        if (
+          this.runtimeScope &&
+          !this.runtimeScope.ownsWorkspacePath(selectedWorkspacePath)
+        ) {
+          return {
+            id: correlationId,
+            type: "response",
+            command: "register_workspace",
+            success: false,
+            error: "Workspace was not found",
+          };
+        }
+
         const workspaceError = ensureWorkspaceDirectory(selectedWorkspacePath);
         if (workspaceError) {
           return {
@@ -7037,7 +7297,10 @@ export class BridgeRpcAdapter {
           };
         }
 
-        const registered = ensureRegisteredWorkspace(selectedWorkspacePath);
+        const registered = ensureRegisteredWorkspace(
+          selectedWorkspacePath,
+          this.runtimeScope?.sessionsRootPath,
+        );
         return {
           id: correlationId,
           type: "response",
@@ -7054,6 +7317,19 @@ export class BridgeRpcAdapter {
       case "switch_session": {
         try {
           const sessionPath = command.sessionPath as string;
+          if (
+            sessionPath &&
+            this.runtimeScope &&
+            !this.runtimeScope.ownsSessionPath(sessionPath)
+          ) {
+            return {
+              id: correlationId,
+              type: "response",
+              command: "switch_session",
+              success: false,
+              error: "Session file not found",
+            };
+          }
           const cachedSessionManager = sessionPath
             ? this.sessionRuntime.getCachedSessionManager(sessionPath)
             : null;
@@ -7141,7 +7417,12 @@ export class BridgeRpcAdapter {
 
       case "delete_session": {
         const sessionPath = command.sessionPath as string;
-        if (!sessionPath || !fs.existsSync(sessionPath)) {
+        if (
+          !sessionPath ||
+          (this.runtimeScope &&
+            !this.runtimeScope.ownsSessionPath(sessionPath)) ||
+          !fs.existsSync(sessionPath)
+        ) {
           return {
             id: correlationId,
             type: "response",
@@ -7451,14 +7732,21 @@ export class BridgeRpcAdapter {
               workspaces,
               sessionManager.getCwd() || header?.cwd || fallbackWorkspacePath,
               header?.timestamp,
+              this.runtimeScope?.sessionsRootPath,
             );
           };
 
-          for (const registeredWorkspace of listRegisteredWorkspaces()) {
+          for (const registeredWorkspace of listRegisteredWorkspaces(
+            this.runtimeScope?.sessionsRootPath,
+          )) {
             appendWorkspaceSummary(
               workspaces,
               registeredWorkspace.workspacePath,
-              readWorkspaceUpdatedAt(registeredWorkspace.workspacePath),
+              readWorkspaceUpdatedAt(
+                registeredWorkspace.workspacePath,
+                this.runtimeScope?.sessionsRootPath,
+              ),
+              this.runtimeScope?.sessionsRootPath,
             );
           }
 
@@ -7513,6 +7801,19 @@ export class BridgeRpcAdapter {
           };
         }
 
+        if (
+          this.runtimeScope &&
+          !this.runtimeScope.ownsWorkspacePath(workspacePath)
+        ) {
+          return {
+            id: correlationId,
+            type: "response" as const,
+            command: "list_sessions" as const,
+            success: false as const,
+            error: "Workspace was not found",
+          };
+        }
+
         try {
           const sessions: WorkspaceSessionEntry[] = [];
           const seenSessionPaths = new Set<string>();
@@ -7563,7 +7864,10 @@ export class BridgeRpcAdapter {
             });
           };
 
-          for (const sessionPath of listWorkspaceSessionFiles(workspacePath)) {
+          for (const sessionPath of listWorkspaceSessionFiles(
+            workspacePath,
+            this.runtimeScope?.sessionsRootPath,
+          )) {
             appendSession(
               readWorkspaceSessionSummary(
                 sessionPath,
@@ -7646,6 +7950,19 @@ export class BridgeRpcAdapter {
       case "list_tree_entries": {
         try {
           const requestedSessionPath = command.sessionPath;
+          if (
+            requestedSessionPath &&
+            this.runtimeScope &&
+            !this.runtimeScope.ownsSessionPath(requestedSessionPath)
+          ) {
+            return {
+              id: correlationId,
+              type: "response" as const,
+              command: "list_tree_entries" as const,
+              success: false as const,
+              error: "Session file not found",
+            };
+          }
           const liveSessionPath =
             this.sessionRuntime.currentTranscriptSessionPath() ??
             this.context.state.sessionManager.getSessionFile();
@@ -7682,6 +7999,18 @@ export class BridgeRpcAdapter {
           normalizeOptionalWorkspaceRoot(command.workspacePath) ||
           this.sessionRuntime.currentGitCwd();
         if (
+          this.runtimeScope &&
+          !this.runtimeScope.ownsWorkspacePath(cwd)
+        ) {
+          return {
+            id: correlationId,
+            type: "response" as const,
+            command: "list_workspace_entries" as const,
+            success: false as const,
+            error: "Workspace was not found",
+          };
+        }
+        if (
           command.force ||
           !this.workspaceEntriesCache ||
           this.workspaceEntriesCache.cwd !== cwd
@@ -7702,11 +8031,22 @@ export class BridgeRpcAdapter {
       }
 
       case "read_workspace_file": {
-        const result = readWorkspaceFile(
+        const cwd =
           normalizeOptionalWorkspaceRoot(command.workspacePath) ||
-            this.sessionRuntime.currentGitCwd(),
-          command.path,
-        );
+          this.sessionRuntime.currentGitCwd();
+        if (
+          this.runtimeScope &&
+          !this.runtimeScope.ownsWorkspacePath(cwd)
+        ) {
+          return {
+            id: correlationId,
+            type: "response" as const,
+            command: "read_workspace_file" as const,
+            success: false as const,
+            error: "Workspace was not found",
+          };
+        }
+        const result = readWorkspaceFile(cwd, command.path);
         if ("error" in result) {
           return {
             id: correlationId,
@@ -8017,8 +8357,12 @@ export class BridgeRpcAdapter {
     }
     this.pendingLlmErrors.clear();
     this.retryingSessions.clear();
-    for (const timer of this.pendingDetachedPromptTimers) {
+    for (const [
+      timer,
+      finishUserOperation,
+    ] of this.pendingDetachedPromptTimers) {
       clearTimeout(timer);
+      finishUserOperation();
     }
     this.pendingDetachedPromptTimers.clear();
 

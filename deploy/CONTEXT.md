@@ -31,3 +31,7 @@ _Avoid_: Runtime skill download, Pi package seed
 **Local Search Daemon**:
 The loopback-only `open-websearch` process started and supervised with the Dano app on every normal container start. It becomes ready before Dano starts and shares the container lifecycle without exposing a Compose port.
 _Avoid_: Sidecar, public search endpoint
+
+**Production Authentication Gate**:
+The configuration-only server entrypoint executed directly against the exact Release Build image before Compose replaces running containers. It applies the server's production parser, actively validates every provider TLS origin's certificate chain and hostname, and exits without Agent Config initialization, Local Search Daemon startup, Runtime loading, or a listener. A failed gate leaves the running deployment unchanged.
+_Avoid_: Demo authentication initialization, smoke-only configuration check

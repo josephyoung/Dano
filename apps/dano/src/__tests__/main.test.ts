@@ -19,7 +19,28 @@ import {
   parseDanoServerOptions,
   readDanoPackageInfo,
   resolveDefaultStaticDir,
+  validateOAuthProviderTls,
 } from "../main.js";
+
+function oauthEnvironment(
+  overrides: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  return {
+    DANO_OAUTH_ISSUER: "https://provider.example.test",
+    DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+      "https://provider.example.test/authorize",
+    DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
+    DANO_OAUTH_IDENTITY_ENDPOINT: "https://provider.example.test/identity",
+    DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
+    DANO_OAUTH_CLIENT_ID: "dano-client",
+    DANO_OAUTH_CLIENT_SECRET: "test-client-secret",
+    DANO_OAUTH_SCOPE: "profile offline_access",
+    DANO_OAUTH_REDIRECT_URI: "https://dano.example.test/api/auth/callback",
+    DANO_OAUTH_CREDENTIAL_KEY: Buffer.alloc(32, 5).toString("base64url"),
+    DANO_OAUTH_CREDENTIAL_KEY_VERSION: "key-v1",
+    ...overrides,
+  };
+}
 
 describe("Dano main", () => {
   it("ships bash with pinned Heimdall guards", () => {
@@ -254,7 +275,7 @@ describe("Dano main", () => {
       /^\/opt\/dano\/runtime-data\/workspaces\/ws_[0-9a-f-]{36}$/,
     );
     expect(options.sessionsRootPath).toBe(
-      `${options.defaultWorkspacePath}/.dano/sessions`,
+      "/opt/dano/runtime-data/.dano/sessions",
     );
     expect(options.staticDir).toBe(
       resolveDefaultStaticDir(resolve("apps/dano/src/main.ts")),
@@ -332,6 +353,30 @@ describe("Dano main", () => {
     });
   });
 
+  it("uses safe Anonymous User cleanup defaults and explicit deployment overrides", () => {
+    expect(parseDanoServerOptions([], {}).anonymousUserCleanup).toEqual({
+      idleTtlMs: 24 * 60 * 60 * 1000,
+      intervalMs: 60 * 60 * 1000,
+    });
+    expect(
+      parseDanoServerOptions([], {
+        DANO_ANONYMOUS_IDLE_TTL_MS: "7200000",
+        DANO_ANONYMOUS_CLEANUP_INTERVAL_MS: "300000",
+      }).anonymousUserCleanup,
+    ).toEqual({ idleTtlMs: 7_200_000, intervalMs: 300_000 });
+  });
+
+  it("rejects unsafe Anonymous User cleanup configuration", () => {
+    expect(() =>
+      parseDanoServerOptions([], { DANO_ANONYMOUS_IDLE_TTL_MS: "0" }),
+    ).toThrow("DANO_ANONYMOUS_IDLE_TTL_MS must be a positive integer");
+    expect(() =>
+      parseDanoServerOptions([], {
+        DANO_ANONYMOUS_CLEANUP_INTERVAL_MS: "not-a-number",
+      }),
+    ).toThrow("DANO_ANONYMOUS_CLEANUP_INTERVAL_MS must be a positive integer");
+  });
+
   it("resolves the global agent directory from environment or runtime root", () => {
     expect(
       parseDanoServerOptions([], {
@@ -370,6 +415,265 @@ describe("Dano main", () => {
     });
 
     expect(options.userAuthentication).toBeUndefined();
+  });
+
+  it("configures one OAuth confidential client from server environment", () => {
+    const key = Buffer.alloc(32, 5).toString("base64url");
+    const options = parseDanoServerOptions([], {
+      DANO_RUNTIME_DIR: "/tmp/dano-runtime",
+      DANO_OAUTH_ISSUER: "https://provider.example.test",
+      DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+        "https://provider.example.test/authorize",
+      DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
+      DANO_OAUTH_IDENTITY_ENDPOINT:
+        "https://provider.example.test/identity",
+      DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
+      DANO_OAUTH_CLIENT_ID: "dano-client",
+      DANO_OAUTH_CLIENT_SECRET: "client-secret",
+      DANO_OAUTH_SCOPE: "profile offline_access",
+      DANO_OAUTH_PROVIDER_HEADERS_JSON:
+        '{"X-Provider-Context":"fixed-context"}',
+      DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT: "true",
+      DANO_OAUTH_REVOCATION_TRANSPORT: "delete-query-basic",
+      DANO_OAUTH_REVOCATION_ENDPOINT:
+        "https://provider.example.test/revoke",
+      DANO_OAUTH_REDIRECT_URI:
+        "https://dano.example.test/api/auth/callback",
+      DANO_OAUTH_CREDENTIAL_KEY: key,
+      DANO_OAUTH_CREDENTIAL_KEY_VERSION: "key-v1",
+    });
+
+    expect(options.oauthAuthentication).toEqual({
+      appOrigin: "https://dano.example.test",
+      redirectUri: "https://dano.example.test/api/auth/callback",
+      providerApiOrigin: "https://provider-api.example.test",
+      provider: {
+        issuer: "https://provider.example.test/",
+        authorizationEndpoint: "https://provider.example.test/authorize",
+        tokenEndpoint: "https://provider.example.test/token",
+        identityEndpoint: "https://provider.example.test/identity",
+        revocation: {
+          transport: "delete-query-basic",
+          endpoint: "https://provider.example.test/revoke",
+        },
+        clientId: "dano-client",
+        clientSecret: "client-secret",
+        scope: "profile offline_access",
+        requestHeaders: { "x-provider-context": "fixed-context" },
+        sendStateToTokenEndpoint: true,
+      },
+      credentialEncryptionKey: {
+        version: "key-v1",
+        key: Buffer.alloc(32, 5),
+      },
+      session: {
+        idleTtlMs: 8 * 60 * 60 * 1000,
+        absoluteTtlMs: 7 * 24 * 60 * 60 * 1000,
+        cleanupIntervalMs: 60 * 60 * 1000,
+      },
+    });
+  });
+
+  it("rejects a partially configured OAuth client", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        DANO_OAUTH_CLIENT_ID: "only-one-value",
+      }),
+    ).toThrow("OAuth configuration is incomplete");
+  });
+
+  it("rejects malformed provider request headers", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_PROVIDER_HEADERS_JSON: '["not", "an", "object"]',
+      }),
+    ).toThrow("OAuth provider headers must be a JSON object");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_PROVIDER_HEADERS_JSON: '{"x-provider-context":42}',
+      }),
+    ).toThrow("OAuth provider headers must contain string values");
+  });
+
+  it("validates optional OAuth revocation transport configuration", () => {
+    const configured = parseDanoServerOptions([], {
+      ...oauthEnvironment(),
+      DANO_OAUTH_REVOCATION_TRANSPORT: "delete-query-basic",
+    });
+    expect(configured.oauthAuthentication?.provider.revocation).toEqual({
+      transport: "delete-query-basic",
+      endpoint: "https://provider.example.test/token",
+    });
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_REVOCATION_TRANSPORT: "invented",
+      }),
+    ).toThrow("OAuth revocation transport is unsupported");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
+      }),
+    ).toThrow("OAuth RFC 7009 revocation endpoint is required");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_REVOCATION_ENDPOINT:
+          "https://provider.example.test/revoke",
+      }),
+    ).toThrow(
+      "OAuth revocation transport is required when its endpoint is configured",
+    );
+  });
+
+  it("rejects an invalid token state compatibility flag", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT: "sometimes",
+      }),
+    ).toThrow(
+      "DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT must be true or false",
+    );
+  });
+
+  it("requires the complete OAuth configuration in production", () => {
+    expect(() =>
+      parseDanoServerOptions([], { NODE_ENV: "production" }),
+    ).toThrow("OAuth configuration is required in production");
+
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+      }).oauthAuthentication,
+    ).toBeDefined();
+  });
+
+  it("supports a configuration-only production startup gate", () => {
+    const options = parseDanoServerOptions(["--validate-config"], {
+      NODE_ENV: "production",
+      ...oauthEnvironment(),
+    });
+
+    expect(options.validateConfig).toBe(true);
+    expect(options.help).toBe(false);
+  });
+
+  it("actively validates each unique provider TLS origin with sanitized failures", async () => {
+    const configuration = parseDanoServerOptions(["--validate-config"], {
+      NODE_ENV: "production",
+      ...oauthEnvironment({
+        DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
+        DANO_OAUTH_REVOCATION_ENDPOINT:
+          "https://provider-revoke.example.test/revoke",
+      }),
+    }).oauthAuthentication!;
+    const probes: string[] = [];
+
+    await validateOAuthProviderTls(configuration, async endpoint => {
+      probes.push(endpoint.href);
+    });
+
+    expect(probes).toEqual([
+      "https://provider.example.test/",
+      "https://provider-api.example.test/",
+      "https://provider-revoke.example.test/",
+    ]);
+    await expect(
+      validateOAuthProviderTls(configuration, async endpoint => {
+        throw new Error(`private TLS detail for ${endpoint.href}`);
+      }),
+    ).rejects.toThrow("OAuth provider TLS validation failed");
+  });
+
+  it("rejects residual Demo authentication in production", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+        DANO_DEMO_JWT: "must-not-be-used",
+      }),
+    ).toThrow("Demo authentication is not allowed in production");
+
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+        DANO_AUTH_JWT_SECRET: "must-not-be-used",
+      }),
+    ).toThrow("Demo authentication is not allowed in production");
+  });
+
+  it("rejects untrusted production OAuth transport and callback configuration", () => {
+    for (const override of [
+      { DANO_OAUTH_TOKEN_ENDPOINT: "http://provider.example.test/token" },
+      { DANO_OAUTH_API_ORIGIN: "http://provider.example.test" },
+      { DANO_OAUTH_REDIRECT_URI: "http://dano.example.test/api/auth/callback" },
+      {
+        DANO_OAUTH_REDIRECT_URI:
+          "https://dano.example.test/api/auth/callback?next=/",
+      },
+      { NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+    ]) {
+      expect(() =>
+        parseDanoServerOptions([], {
+          NODE_ENV: "production",
+          ...oauthEnvironment(override),
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("configures Login Session lifetime and cleanup from deployment values", () => {
+    expect(
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_LOGIN_SESSION_IDLE_TTL_MS: "60000",
+        DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS: "120000",
+        DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS: "30000",
+      }).oauthAuthentication?.session,
+    ).toEqual({
+      idleTtlMs: 60_000,
+      absoluteTtlMs: 120_000,
+      cleanupIntervalMs: 30_000,
+    });
+
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_LOGIN_SESSION_IDLE_TTL_MS: "120000",
+        DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS: "60000",
+      }),
+    ).toThrow("absolute TTL must be greater than idle TTL");
+  });
+
+  it("requires Secure guest Cookies in production and allows a local override", () => {
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+      }).guestCookieSecure,
+    ).toBe(true);
+    expect(
+      parseDanoServerOptions([], { NODE_ENV: "development" }).guestCookieSecure,
+    ).toBe(false);
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(),
+        DANO_GUEST_COOKIE_SECURE: "false",
+      }).guestCookieSecure,
+    ).toBe(true);
+    expect(
+      parseDanoServerOptions([], {
+        NODE_ENV: "development",
+        DANO_GUEST_COOKIE_SECURE: "true",
+      }).guestCookieSecure,
+    ).toBe(true);
   });
 
   it("uses upload configuration from environment", () => {
@@ -482,7 +786,7 @@ describe("Dano main", () => {
     expect(options.defaultWorkspacePath).not.toBe("/tmp/custom-dano");
     expect(options.defaultWorkspacePath).not.toBe("/tmp/legacy-dano");
     expect(options.sessionsRootPath).toBe(
-      `${options.defaultWorkspacePath}/.dano/sessions`,
+      "/tmp/dano-runtime/.dano/sessions",
     );
   });
 
@@ -497,25 +801,21 @@ describe("Dano main", () => {
     );
     expect(options.defaultWorkspacePath).not.toBe("/tmp/cli-dano");
     expect(options.sessionsRootPath).toBe(
-      `${options.defaultWorkspacePath}/.dano/sessions`,
+      "/opt/dano/runtime-data/.dano/sessions",
     );
   });
 
-  it("uses Dano sessions root from environment", () => {
+  it("uses Dano sessions root as the base for per-User session roots", () => {
     const options = parseDanoServerOptions([], {
-      DANO_DEFAULT_WORKSPACE_PATH: "/tmp/custom-dano",
+      DANO_RUNTIME_DIR: "/tmp/dano-runtime",
       DANO_SESSIONS_ROOT: "/tmp/custom-dano-sessions",
     });
 
-    expect(options.defaultWorkspacePath).toMatch(
-      /^\/opt\/dano\/runtime-data\/workspaces\/ws_[0-9a-f-]{36}$/,
-    );
     expect(options.sessionsRootPath).toBe("/tmp/custom-dano-sessions");
   });
 
   it("keeps PI_WEB_SESSIONS_ROOT compatibility when Dano sessions root is absent", () => {
     const options = parseDanoServerOptions([], {
-      DANO_DEFAULT_WORKSPACE_PATH: "/tmp/custom-dano",
       PI_WEB_SESSIONS_ROOT: "/tmp/pi-web-sessions",
     });
 

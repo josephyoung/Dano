@@ -1,0 +1,700 @@
+#!/usr/bin/env -S node --import jiti/register
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import type { IncomingHttpHeaders, ServerResponse } from "node:http";
+import { join, resolve } from "node:path";
+import { createAnonymousUserContextResolver } from "../apps/dano/src/bridge/anonymous-user-context.ts";
+import { CredentialBroker } from "../apps/dano/src/bridge/credential-broker.ts";
+import { createOAuthAuthentication } from "../apps/dano/src/bridge/oauth-authentication.ts";
+import { createOAuth2ProviderAdapter } from "../apps/dano/src/bridge/oauth-provider.ts";
+import type { ProviderCredential } from "../apps/dano/src/bridge/oauth-provider.ts";
+import { DEFAULT_BRIDGE_CONFIG } from "../apps/dano/src/bridge/types.ts";
+import { startDanoServer } from "../apps/dano/src/server.ts";
+import {
+  classifyRefreshArmFailure,
+  classifyRefreshExecutionFailure,
+  createRefreshArmSingleFlight,
+  createObservedAccessTokenInvalid,
+  createPostLogoutAnonymousCapture,
+  findRefreshAcceptanceTranscriptOutcome,
+  isRefreshCurrentObservationAction,
+  prepareInvalidAccessCredential,
+  RealRefreshAcceptanceProducer,
+  resolveRefreshCurrentObservation,
+  selectRefreshAcceptanceSessions,
+  refreshAcceptanceControlPage,
+} from "../apps/dano/src/__tests__/support/real-refresh-acceptance-producer.ts";
+
+const runtimeRootPath = resolve(required("DANO_RUNTIME_DIR"));
+const sessionsRootPath = resolve(
+  process.env.DANO_SESSIONS_ROOT?.trim() || join(runtimeRootPath, ".dano", "sessions"),
+);
+const expectedSkillPath = resolve(
+  process.env.PI_CODING_AGENT_DIR?.trim() || join(runtimeRootPath, ".pi", "agent"),
+  "skills",
+  "provider-broker-release-gate",
+  "SKILL.md",
+);
+const providerApiOrigin = new URL(required("DANO_OAUTH_API_ORIGIN")).origin;
+const providerPath = relativePath(required("DANO_PROVIDER_ACCEPTANCE_PATH"));
+const appOrigin = new URL(required("DANO_OAUTH_REDIRECT_URI")).origin;
+const tokenEndpoint = required("DANO_OAUTH_TOKEN_ENDPOINT");
+const credentialKey = Buffer.from(required("DANO_OAUTH_CREDENTIAL_KEY"), "base64url");
+if (credentialKey.byteLength !== 32) throw new Error("OAuth Credential key must be 32 bytes");
+mkdirSync(sessionsRootPath, { recursive: true });
+
+const headers = providerHeaders(process.env.DANO_OAUTH_PROVIDER_HEADERS_JSON);
+const providerOptions = (clientSecret: string) => ({
+  issuer: required("DANO_OAUTH_ISSUER"),
+  authorizationEndpoint: required("DANO_OAUTH_AUTHORIZATION_ENDPOINT"),
+  tokenEndpoint,
+  identityEndpoint: required("DANO_OAUTH_IDENTITY_ENDPOINT"),
+  clientId: required("DANO_OAUTH_CLIENT_ID"),
+  clientSecret,
+  scope: required("DANO_OAUTH_SCOPE"),
+  requestHeaders: headers,
+  sendStateToTokenEndpoint:
+    process.env.DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT?.trim() === "true",
+  revocation: revocationOptions(tokenEndpoint),
+  allowInsecureRequests: process.env.DANO_REFRESH_ACCEPTANCE_ALLOW_INSECURE === "true",
+});
+const provider = createOAuth2ProviderAdapter(
+  providerOptions(required("DANO_OAUTH_CLIENT_SECRET")),
+);
+const failingProvider = createOAuth2ProviderAdapter(
+  providerOptions(randomBytes(32).toString("base64url")),
+);
+const producer = new RealRefreshAcceptanceProducer();
+let refreshMode: "normal" | "fail" = "normal";
+let activeRefreshOwner: string | undefined;
+let activeRefreshStage:
+  | Parameters<typeof classifyRefreshExecutionFailure>[0]
+  | undefined;
+let controller: Awaited<ReturnType<typeof startDanoServer>> | undefined;
+let pendingLogout: { status: number; owner: string } | undefined;
+let pendingLogin: { status: number; owner: string } | undefined;
+let pendingAnonymousWorkspace: string | undefined;
+const postLogoutAnonymousCapture = createPostLogoutAnonymousCapture();
+type ObservedLoginSession = {
+  id: string;
+  owner: string;
+  user: string;
+  workspace: string;
+};
+type RuntimeObservedLoginSession = ObservedLoginSession & {
+  client: string;
+  firstSeen: number;
+};
+let targetSession: RuntimeObservedLoginSession | undefined;
+let peerSession: RuntimeObservedLoginSession | undefined;
+const observedLoginSessions = new Map<string, RuntimeObservedLoginSession>();
+let observedLoginSessionSequence = 0;
+let explicitTargetSessionId: string | undefined;
+let explicitPeerSessionId: string | undefined;
+let lastPhaseReport: string | undefined;
+const authentication = await createOAuthAuthentication({
+  runtimeRootPath,
+  appOrigin,
+  redirectUri: required("DANO_OAUTH_REDIRECT_URI"),
+  provider: {
+    ...provider,
+    async refreshCredential(credential) {
+      activeRefreshStage = "grant";
+      const selected = refreshMode === "fail" ? failingProvider : provider;
+      if (!selected.refreshCredential) throw new Error("Provider refresh is unavailable");
+      let refreshed: ProviderCredential;
+      try {
+        refreshed = await selected.refreshCredential(credential);
+      } catch (error) {
+        if (activeRefreshOwner && refreshMode === "fail") {
+          producer.observeRefreshRejection(activeRefreshOwner);
+        }
+        throw error;
+      }
+      if (activeRefreshOwner) {
+        producer.observeRefreshGrant(
+          activeRefreshOwner,
+          credentialFingerprint(refreshed),
+        );
+      }
+      return refreshed;
+    },
+    async validateCredential(credential) {
+      if (activeRefreshOwner) activeRefreshStage = "identity";
+      if (!provider.validateCredential) {
+        throw new Error("Provider identity validation is unavailable");
+      }
+      const identity = await provider.validateCredential(credential);
+      if (activeRefreshOwner) activeRefreshStage = "record";
+      return identity;
+    },
+  },
+  credentialEncryptionKey: {
+    version: required("DANO_OAUTH_CREDENTIAL_KEY_VERSION"),
+    key: credentialKey,
+  },
+});
+
+const observedAuthentication = {
+  ...authentication,
+  async handle(req: Parameters<typeof authentication.handle>[0], res: ServerResponse, url: URL, lifecycle: Parameters<typeof authentication.handle>[3]) {
+    if (url.pathname === "/api/acceptance/refresh") {
+      if (req.method === "GET") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "text/html; charset=utf-8");
+        res.setHeader("cache-control", "no-store");
+        res.end(refreshAcceptanceControlPage());
+        return true;
+      }
+      if (req.method === "POST") {
+        const action = url.searchParams.get("action");
+        const authSessionState = isRefreshCurrentObservationAction(action)
+          ? await authentication.resolveAuthSessionState(req.headers)
+          : null;
+        const currentObservation =
+          authSessionState
+            ? resolveRefreshCurrentObservation({
+                action,
+                loginSessionId: authSessionState.loginSessionId,
+                status: authSessionState.status,
+                explicitTargetSessionId,
+                explicitPeerSessionId,
+              })
+            : null;
+        if (currentObservation) {
+          try {
+            const owner = ownerFingerprint(authSessionState!.loginSessionId);
+            if (currentObservation.role === "peer") {
+              if (
+                currentObservation.status !== "authenticated" ||
+                !(await verifyPeerSession(owner))
+              ) {
+                throw new Error("Peer authentication observation failed");
+              }
+            } else {
+              producer.observeAuthCurrent(owner, currentObservation.status);
+              reportPhase();
+            }
+            res.statusCode = 303;
+            res.setHeader("location", "/api/acceptance/refresh");
+            res.end();
+            return true;
+          } catch {
+            res.statusCode = 409;
+            res.end();
+            return true;
+          }
+        }
+        if (isRefreshCurrentObservationAction(action)) {
+          res.statusCode = 409;
+          res.end();
+          return true;
+        }
+        const resolution = await authentication.resolveExisting?.(req.headers);
+        const role = url.searchParams.get("role") ?? await readControlRole(req);
+        if (
+          resolution?.authentication.status !== "authenticated" ||
+          !resolution.loginSessionId ||
+          (role !== "target" && role !== "peer")
+        ) {
+          res.statusCode = 403;
+          res.end();
+          return true;
+        }
+        if (role === "target") explicitTargetSessionId = resolution.loginSessionId;
+        else explicitPeerSessionId = resolution.loginSessionId;
+        observedLoginSessions.delete(resolution.loginSessionId);
+        res.statusCode = 303;
+        res.setHeader("location", "/");
+        res.end();
+        console.log(`[refresh acceptance] ${role} browser bound`);
+        return true;
+      }
+    }
+    const owner = cookieOwner(req.headers.cookie);
+    const handled = await authentication.handle(req, res, url, lifecycle);
+    queueMicrotask(() => {
+      if (url.pathname === "/api/auth/logout" && req.method === "POST" && owner) {
+        pendingLogout = { status: res.statusCode, owner };
+        applyPendingAction();
+      } else if (url.pathname === "/api/auth/login" && req.method === "GET" && owner) {
+        pendingLogin = { status: res.statusCode, owner };
+        applyPendingAction();
+      }
+    });
+    return handled;
+  },
+};
+
+const anonymousUsers = createAnonymousUserContextResolver({
+  runtimeRootPath,
+  secureCookie: false,
+  authenticatedResolver: observedAuthentication,
+  activityWriteIntervalMs: 0,
+});
+const broker = new CredentialBroker({
+  providerApiOrigin: "https://refresh-acceptance.invalid",
+  fetch: async (input, init = {}) => {
+    const source = new URL(input instanceof Request ? input.url : String(input));
+    const target = new URL(`${source.pathname}${source.search}`, providerApiOrigin);
+    const requestHeaders = new Headers(headers);
+    new Headers(init.headers).forEach((value, name) => requestHeaders.set(name, value));
+    return fetch(target, { ...init, headers: requestHeaders });
+  },
+  readCredential: id => authentication.readProviderCredential(id),
+  observeRequestBinding: id => {
+    const matches = id === explicitTargetSessionId;
+    console.log(
+      `[refresh acceptance] turn binding ${matches ? "confirmed" : "mismatch"}`,
+    );
+    if (!matches) producer.observeEvidenceFailure();
+  },
+  observeCredentialAvailability: available => {
+    if (!available) {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure("credential_missing")}`,
+      );
+    }
+  },
+  observeRequestStage: stage => {
+    console.log(`[refresh acceptance] broker stage=${stage}`);
+  },
+  refreshCredential: async id => {
+    const owner = ownerFingerprint(id);
+    let stage: Parameters<typeof classifyRefreshExecutionFailure>[0] =
+      "credential_read";
+    let credentialBefore: ProviderCredential | null;
+    try {
+      credentialBefore = await authentication.readProviderCredential(id);
+    } catch {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+      );
+      return null;
+    }
+    if (!credentialBefore) {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure("credential_missing")}`,
+      );
+      return null;
+    }
+    try {
+      stage = "evidence";
+      producer.observeRefreshStart(
+        owner,
+        loginRecordFingerprint(id),
+        credentialFingerprint(credentialBefore),
+      );
+    } catch {
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+      );
+      return null;
+    }
+    activeRefreshOwner = owner;
+    try {
+      stage = "grant";
+      activeRefreshStage = stage;
+      const refreshed = await authentication.refreshProviderCredential(id);
+      if (!refreshed) {
+        console.error(
+          `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+        );
+        return null;
+      }
+      stage = "owner";
+      activeRefreshStage = stage;
+      if (!targetSession || targetSession.owner !== owner) {
+        throw new Error(
+          "Refreshed Credential owner is not the target Login Session",
+        );
+      }
+      stage = "evidence";
+      activeRefreshStage = stage;
+      producer.observeRefreshValidatedUser(owner, targetSession.user);
+      stage = "record";
+      activeRefreshStage = stage;
+      const recordFingerprint = loginRecordFingerprint(id);
+      stage = "evidence";
+      activeRefreshStage = stage;
+      producer.observeRefreshSuccess(
+        owner,
+        recordFingerprint,
+        credentialFingerprint(refreshed),
+      );
+      return refreshed;
+    } catch {
+      stage = activeRefreshStage ?? stage;
+      console.error(
+        `[refresh acceptance] refresh failed; stage=${classifyRefreshExecutionFailure(stage)}`,
+      );
+      try {
+        producer.observeRefreshFailure(owner);
+      } catch {}
+      return null;
+    } finally {
+      activeRefreshOwner = undefined;
+      activeRefreshStage = undefined;
+    }
+  },
+  isAccessTokenInvalid: createObservedAccessTokenInvalid(provider, producer),
+  requireReauthentication: async id => {
+    await authentication.requireReauthentication(id);
+    producer.observeReauthentication(ownerFingerprint(id));
+    controller?.requireReauthentication(id);
+    void pollTranscript();
+  },
+});
+
+controller = await startDanoServer(
+  {
+    ...DEFAULT_BRIDGE_CONFIG,
+    host: "127.0.0.1",
+    port: 8080,
+    upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir: join(runtimeRootPath, "uploads") },
+  },
+  {
+    cwd: runtimeRootPath,
+    sessionsRootPath,
+    captureSigint: false,
+    userContextResolver: anonymousUsers,
+    anonymousUsers,
+    authHttpHandler: observedAuthentication,
+    credentialBroker: broker,
+    danoConfig: {},
+  },
+);
+controller.subscribe(event => {
+  if (event.type !== "client_connect") return;
+  const resolution = controller?.getClientUserResolution(event.client.id);
+  if (!resolution) return;
+  if (resolution.authentication.status === "authenticated" && resolution.loginSessionId) {
+    observeLoginSession({
+      id: resolution.loginSessionId,
+      owner: ownerFingerprint(resolution.loginSessionId),
+      user: fingerprint(resolution.userContext.user.id),
+      workspace: fingerprint(resolution.userContext.folderPath),
+    }, fingerprint(event.client.id));
+  } else if (
+    resolution.authentication.status === "anonymous" &&
+    producer.currentKind() === "cancel" &&
+    postLogoutAnonymousCapture.accept()
+  ) {
+    pendingAnonymousWorkspace = fingerprint(resolution.userContext.folderPath);
+    applyPendingAction();
+  }
+});
+
+console.log("[refresh acceptance] ready; login in the in-app Browser first");
+const requestArm = createRefreshArmSingleFlight(arm);
+const requestArmFromSignal = (kind: "success" | "cancel" | "confirm") => {
+  void requestArm(kind).then(started => {
+    if (!started) {
+      console.error(
+        `[refresh acceptance] ${kind} could not be armed; stage=arm_in_progress`,
+      );
+    }
+  });
+};
+process.on("SIGUSR2", () => requestArmFromSignal("success"));
+process.on("SIGURG", () => requestArmFromSignal("cancel"));
+process.on("SIGWINCH", () => requestArmFromSignal("confirm"));
+const transcriptTimer = setInterval(() => void pollTranscript(), 250);
+transcriptTimer.unref();
+const stop = async () => {
+  clearInterval(transcriptTimer);
+  await controller?.stop();
+  await authentication.dispose();
+  process.exit(0);
+};
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+
+async function arm(kind: "success" | "cancel" | "confirm") {
+  let marker: string | undefined;
+  try {
+    const selected = await selectRefreshAcceptanceSessions(
+      [...observedLoginSessions.values()],
+      explicitTargetSessionId,
+      explicitPeerSessionId,
+      id => authentication.readProviderCredential(id),
+    );
+    if (!selected) {
+      throw new Error("Both browser sessions need active Credentials");
+    }
+    targetSession = selected.target;
+    peerSession = selected.peer;
+    const { targetCredential, peerCredential } = selected;
+    producer.observeTargetClient(
+      targetSession.owner,
+      targetSession.client,
+      targetSession.workspace,
+      targetSession.user,
+    );
+    producer.observePeerClient(
+      peerSession.owner,
+      peerSession.client,
+      peerSession.user,
+    );
+    if (!provider.validateCredential) {
+      throw new Error("Provider validation is required");
+    }
+    await Promise.all([
+      provider.validateCredential(targetCredential),
+      provider.validateCredential(peerCredential),
+    ]);
+    refreshMode = kind === "success" ? "normal" : "fail";
+    pendingLogout = undefined;
+    pendingLogin = undefined;
+    pendingAnonymousWorkspace = undefined;
+    postLogoutAnonymousCapture.reset();
+    marker = producer.arm(kind);
+    producer.observePreflight(
+      targetSession.owner,
+      targetSession.user,
+      peerSession.owner,
+      peerSession.user,
+      loginCredentialRecordFingerprint(peerSession.id),
+      credentialFingerprint(peerCredential),
+    );
+    const recordPath = join(
+        runtimeRootPath,
+        "auth",
+        "login-sessions",
+        `${ownerFingerprint(targetSession.id)}.json`,
+      );
+    await prepareInvalidAccessCredential({
+      recordPath,
+      loginSessionId: targetSession.id,
+      credential: targetCredential,
+      encryptionKey: {
+        version: required("DANO_OAUTH_CREDENTIAL_KEY_VERSION"),
+        key: credentialKey,
+      },
+      beforeWrite: preparedCredential => {
+        producer.observeInvalidAccessPrepared(
+          targetSession!.owner,
+          credentialFingerprint(targetCredential),
+          credentialFingerprint(preparedCredential),
+          refreshGrantFingerprint(targetCredential),
+          refreshGrantFingerprint(preparedCredential),
+        );
+      },
+    });
+    console.log(
+      `[refresh acceptance] ${kind} armed; invoke Skill with marker ${marker}`,
+    );
+    lastPhaseReport = undefined;
+    reportPhase();
+  } catch (error) {
+    if (marker) {
+      try {
+        producer.abortPhase(marker);
+      } catch {}
+    }
+    const code = classifyRefreshArmFailure(error);
+    console.error(
+      `[refresh acceptance] ${kind} could not be armed; stage=${code}`,
+    );
+  }
+}
+
+async function pollTranscript() {
+  const marker = producer.currentMarker();
+  if (!marker) return;
+  reportPhase();
+  const outcome = findTranscriptOutcome(
+    sessionsRootPath,
+    marker,
+    providerPath,
+    expectedSkillPath,
+  );
+  if (!outcome) return;
+  try {
+    producer.observeTranscript(marker, outcome);
+    applyPendingAction();
+    reportPhase();
+  } catch {}
+}
+
+function applyPendingAction() {
+  try {
+    const logout = pendingLogout;
+    if (logout) {
+      postLogoutAnonymousCapture.observeLogout(() =>
+        producer.observeLogout(logout.status, logout.owner),
+      );
+      pendingLogout = undefined;
+    }
+    if (pendingLogin) {
+      producer.observeLoginRedirect(pendingLogin.status, pendingLogin.owner);
+      pendingLogin = undefined;
+    }
+    if (pendingAnonymousWorkspace) {
+      producer.observeAnonymousClient(pendingAnonymousWorkspace);
+      pendingAnonymousWorkspace = undefined;
+    }
+    reportPhase();
+  } catch {}
+}
+
+function observeLoginSession(
+  resolution: ObservedLoginSession,
+  client: string,
+) {
+  const existing = observedLoginSessions.get(resolution.id);
+  const observed = {
+    ...resolution,
+    client,
+    firstSeen: existing?.firstSeen ?? ++observedLoginSessionSequence,
+  };
+  observedLoginSessions.set(observed.id, observed);
+  if (!targetSession || targetSession.id === resolution.id) {
+    targetSession = observed;
+    producer.observeTargetClient(
+      observed.owner,
+      client,
+      observed.workspace,
+      observed.user,
+    );
+    return;
+  }
+  if (!peerSession || peerSession.id === resolution.id) {
+    peerSession = observed;
+    producer.observePeerClient(observed.owner, client, observed.user);
+    return;
+  }
+  if (resolution.id !== peerSession.id) {
+    targetSession = observed;
+    producer.observeTargetClient(
+      resolution.owner,
+      client,
+      resolution.workspace,
+      resolution.user,
+    );
+  }
+}
+
+async function verifyPeerSession(owner: string): Promise<boolean> {
+  try {
+    if (!peerSession || owner !== peerSession.owner || !provider.validateCredential) {
+      return false;
+    }
+    const credential = await authentication.readProviderCredential(peerSession.id);
+    if (!credential) return false;
+    await provider.validateCredential(credential);
+    producer.observePeerCredential(
+      owner,
+      peerSession.user,
+      loginCredentialRecordFingerprint(peerSession.id),
+      credentialFingerprint(credential),
+    );
+    producer.observeAuthCurrent(owner, "authenticated");
+    reportPhase();
+    return true;
+  } catch {
+    console.error("[refresh acceptance] peer Login Session verification failed");
+    return false;
+  }
+}
+
+function reportPhase() {
+  const phase = producer.phaseStatus();
+  const report =
+    phase.status === "passed"
+      ? `${phase.kind}: PASS`
+      : `${phase.kind}: pending; pending=${producer.pendingChecks().join(",")}`;
+  if (report === lastPhaseReport) return;
+  lastPhaseReport = report;
+  console.log(`[refresh acceptance] ${report}`);
+}
+
+function findTranscriptOutcome(root: string, marker: string, expectedPath: string, skillPath: string): "success" | "reauth_required" | null {
+  for (const file of jsonlFiles(root)) {
+    const entries = readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).flatMap(line => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
+    const outcome = findRefreshAcceptanceTranscriptOutcome(
+      entries,
+      marker,
+      expectedPath,
+      skillPath,
+    );
+    if (outcome) return outcome;
+  }
+  return null;
+}
+
+function jsonlFiles(root: string): string[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    const target = join(root, entry.name);
+    return entry.isDirectory() ? jsonlFiles(target) : entry.isFile() && entry.name.endsWith(".jsonl") ? [target] : [];
+  });
+}
+
+function cookieOwner(cookie: string | undefined): string | null {
+  const match = cookie?.match(/(?:^|;\s*)dano_login=([^;]+)/);
+  return match?.[1] ? ownerFingerprint(decodeURIComponent(match[1])) : null;
+}
+
+function loginRecordFingerprint(id: string): string {
+  return fingerprint(readFileSync(join(runtimeRootPath, "auth", "login-sessions", `${ownerFingerprint(id)}.json`)));
+}
+function loginCredentialRecordFingerprint(id: string): string {
+  const record = JSON.parse(
+    readFileSync(
+      join(
+        runtimeRootPath,
+        "auth",
+        "login-sessions",
+        `${ownerFingerprint(id)}.json`,
+      ),
+      "utf8",
+    ),
+  ) as { credential?: unknown };
+  if (!record.credential) throw new Error("Login Session Credential is unavailable");
+  return fingerprint(JSON.stringify(record.credential));
+}
+function ownerFingerprint(value: string) { return fingerprint(value); }
+function credentialFingerprint(value: unknown) { return fingerprint(JSON.stringify(value)); }
+function refreshGrantFingerprint(value: ProviderCredential) {
+  if (!value.refreshToken) throw new Error("Refresh Credential is unavailable");
+  return fingerprint(value.refreshToken);
+}
+function fingerprint(value: string | Buffer) { return createHash("sha256").update(value).digest("hex"); }
+function relativePath(value: string) { const url = new URL(value, "https://invalid.test"); if (!value.startsWith("/") || value.startsWith("//") || url.origin !== "https://invalid.test") throw new Error("Provider path must be relative"); return `${url.pathname}${url.search}`; }
+function providerHeaders(value: string | undefined) {
+  if (!value?.trim()) return {};
+  const parsed = JSON.parse(value);
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    Object.values(parsed).some(header => typeof header !== "string")
+  ) {
+    throw new Error("Provider headers must be a string-valued object");
+  }
+  return parsed as Record<string, string>;
+}
+async function readControlRole(req: Parameters<typeof authentication.handle>[0]) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8")).get("role");
+}
+function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }
+function revocationOptions(endpoint: string) {
+  const transport = required("DANO_OAUTH_REVOCATION_TRANSPORT");
+  const configuredEndpoint = process.env.DANO_OAUTH_REVOCATION_ENDPOINT?.trim();
+  if (transport === "rfc7009") {
+    if (!configuredEndpoint) throw new Error("OAuth revocation endpoint is required");
+    return { transport, endpoint: configuredEndpoint } as const;
+  }
+  if (transport === "delete-query-basic") {
+    return {
+      transport,
+      endpoint: configuredEndpoint || endpoint,
+    } as const;
+  }
+  throw new Error("OAuth revocation transport is unsupported");
+}

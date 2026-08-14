@@ -127,53 +127,72 @@ operators can set the `OPEN_WEBSEARCH_*` values documented in `.env.example` to
 restrict engines or configure an explicit runtime proxy. Package-install proxy
 or registry settings remain separate from these runtime network settings.
 
-## Authenticated User Context
+## Production Authentication
 
-Dano can verify an HS256 JWT supplied as an `Authorization: Bearer` token or
-an HttpOnly cookie. Configure `DANO_AUTH_JWT_SECRET` to enable verification;
-`DANO_AUTH_JWT_ISSUER`, `DANO_AUTH_JWT_AUDIENCE`, and
-`DANO_AUTH_COOKIE_NAME` optionally constrain the token source (the cookie name
-defaults to `dano_auth`). Valid tokens require an unexpired `exp` and a safe,
-stable `sub`; `name` or `preferred_username` supplies the display name and
-`picture` may supply an HTTP(S) avatar URL.
+Production runs one OAuth confidential client and does not inject a fixed User
+or authentication Cookie. The required deployment values are:
 
-The verified `sub` maps to
-`$DANO_RUNTIME_DIR/users/<sub>/`. Dano rejects traversal-shaped subjects,
-symlink folder boundaries, invalid signatures, and client-supplied identity
-fields. Without a configured verifier or a verified token, Dano does not
-invent an anonymous User and does not expose a User Folder.
-
-Production releases initialize one fixed Demo identity in the Deploy Control
-Directory before Compose starts. On the first release,
-`scripts/init-demo-auth.mjs` creates a random `DANO_AUTH_JWT_SECRET` and one
-HS256 `DANO_DEMO_JWT` for `demo-user` / `演示用户`, then stores both in
-`/opt/dano/deploy/.env` with mode `0600`. Later releases verify the signature,
-identity claims, and expiration and reuse the exact pair. A one-sided pair,
-expired token, invalid signature, or changed Demo identity stops the release;
-the release never repairs the state by overwriting or rotating credentials.
-When `DANO_AUTH_JWT_ISSUER` or `DANO_AUTH_JWT_AUDIENCE` is configured, first
-initialization includes the matching claim and later releases reject a token
-that is incompatible with the active verifier constraints.
-
-For a manual Compose deployment, initialize the same persisted pair before
-starting the stack:
-
-```bash
-pnpm run deploy:init-demo-auth -- --file /opt/dano/deploy/.env
+```text
+DANO_OAUTH_ISSUER
+DANO_OAUTH_AUTHORIZATION_ENDPOINT
+DANO_OAUTH_TOKEN_ENDPOINT
+DANO_OAUTH_IDENTITY_ENDPOINT
+DANO_OAUTH_API_ORIGIN
+DANO_OAUTH_CLIENT_ID
+DANO_OAUTH_CLIENT_SECRET
+DANO_OAUTH_SCOPE
+DANO_OAUTH_REDIRECT_URI
+DANO_OAUTH_CREDENTIAL_KEY
+DANO_OAUTH_CREDENTIAL_KEY_VERSION
 ```
 
-When `DANO_DEMO_JWT` is present, nginx sets `dano_auth` on proxied HTML
-responses so a new browser authenticates before its first API request. The
-cookie is `Path=/`, `HttpOnly`, and `SameSite=Lax`; HTTPS responses also add
-`Secure`. Its persistent `Expires` value is derived from the signed JWT `exp`
-and never exceeds the token lifetime. Without `DANO_DEMO_JWT`, nginx does not
-emit the authentication cookie and Dano keeps its existing no-fallback
-behavior. `DANO_DEMO_COOKIE_EXPIRES` is derived metadata and should not be
-edited independently.
+If the provider requires fixed transport headers, configure them as a JSON
+object in `DANO_OAUTH_PROVIDER_HEADERS_JSON`. Dano applies them only inside the
+server-side OAuth provider adapter; protocol-generated headers take precedence.
+For providers that require callback state again during code exchange, set
+`DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT=true`; the adapter keeps state scoped
+to the corresponding exchange.
 
-The JWT is provided only to nginx and the app receives only the signing Secret.
-Neither value belongs in the Dockerfile, browser code, image build arguments,
-or Git.
+Provider credential revocation is optional. Use
+`DANO_OAUTH_REVOCATION_TRANSPORT=rfc7009` with an explicit
+`DANO_OAUTH_REVOCATION_ENDPOINT` for the standard protocol, or
+`delete-query-basic` for providers that require a DELETE request with Basic
+client authentication. The latter defaults to the configured token endpoint.
+
+The redirect URI must be the fixed `/api/auth/callback` URL. Provider
+server-to-server endpoints, the API origin, and the production callback must
+use trusted HTTPS. URL credentials, fragments, callback query parameters, a
+non-origin API value, global TLS verification bypass, incomplete configuration,
+and any residual fixed Demo/JWT authentication setting stop production startup.
+The Credential key is exactly 32 random bytes encoded as base64url; rotate its
+version together with its deployment-managed key. Do not put client secrets,
+Credential keys, tokens, account identifiers, or provider payloads in source,
+image layers, command arguments, logs, or test snapshots.
+
+Login Session defaults are idle eight hours, absolute seven days, and hourly
+cleanup. They can be set with positive integer milliseconds:
+
+```text
+DANO_LOGIN_SESSION_IDLE_TTL_MS
+DANO_LOGIN_SESSION_ABSOLUTE_TTL_MS
+DANO_LOGIN_SESSION_CLEANUP_INTERVAL_MS
+DANO_ANONYMOUS_IDLE_TTL_MS
+DANO_ANONYMOUS_CLEANUP_INTERVAL_MS
+```
+
+The absolute Login Session TTL must be greater than its idle TTL. Anonymous
+User data defaults to 24 hours idle with hourly cleanup.
+
+Release Build runs `node ./dist/server/main.js --validate-config` inside the
+new image with the container entrypoint bypassed before replacing containers.
+This Production Authentication Gate uses the same parser and provider TLS
+validation as normal production startup, and exits before Agent Config, local
+search, Runtime, or listener initialization. Failure leaves the running
+deployment unchanged. After a successful gate, the release atomically removes
+only legacy fixed-Demo keys from the Deploy Control Directory and starts the
+OAuth-only Compose configuration. Nginx forwards `/api/auth/*` Cookies and
+Origin; the exact callback location disables both access and error logs so code
+and state query values are not logged even when the upstream fails.
 
 The app container runs as the non-root `node` user (`1000:1000`) with
 `HOME=/home/node`. The image installs `/usr/bin/bwrap` setuid (`4755`) because
@@ -210,13 +229,241 @@ checkout under the system temporary directory. Start the Podman machine first
 when it is not already running. Run `smoke:deploy` and the browser acceptance
 steps below after `container:up` when validating a change.
 
-For the fixed Demo authentication flow, open `http://localhost:18082` in the
-Codex in-app Browser. Verify that the app identifies the fixed `演示用户`, change
-and reload the theme, then restore the original theme preference before
-handoff.
+The HTTP-only local example below validates Anonymous User, chat, upload, SSE,
+and deployment behavior. OAuth browser acceptance additionally requires a
+trusted HTTPS callback and a TLS-capable exposure mode (or an environment-owned
+TLS terminator); do not treat the HTTP example as OAuth acceptance. In the
+HTTPS browser flow, verify the login entry in the left Menu, clean callback
+return, authenticated Menu, logout, and the new usable Anonymous User.
+
+### Real OAuth User isolation release gate
+
+Use one Dano callback for both controlled test accounts. Authenticate slot A in
+the Codex in-app Browser and slot B in Chrome against the same running Dano
+origin; a second callback address or second Dano frontend is not part of this
+gate.
+
+Start the live capture producer before the browser run:
+
+```bash
+pnpm run test:auth-real-users -- capture /path/to/real-user-evidence.json \
+  --origin http://localhost:5173
+```
+
+The producer prints one run-specific module URL for slot A and one for slot B.
+Import slot A in the authenticated Codex in-app Browser and slot B in
+authenticated Chrome, then call the module's `run()` export. The modules use
+the current browser's HttpOnly login session indirectly through same-origin
+Dano requests; they never read or forward a Cookie. They create and inspect
+their own Client, Agent Session, transcript, Runtime Workspace, upload, and
+preference, exchange the exact in-memory resource targets through the local
+collector, and run the cross-User probes in both directions.
+
+The collector emits `LIVE HTTP/SSE/Pi COLLECTOR PASS` only after both modules
+finish and its in-memory terminal validation succeeds. This proves the observed
+HTTP/SSE/Pi behavior and resource relationships, not which browser surface sent
+the requests: application-layer requests cannot distinguish the Codex in-app
+Browser, Chrome, or another compatible client. Keep the manifest's IAB/Chrome
+mapping as the operation contract and attach the external actual-browser
+acceptance record as the browser-surface provenance. Raw resource identifiers are used in memory for
+the cross probes but are fingerprinted before persistence. The JSON file is a
+redacted audit record only; it does not prove browser provenance and cannot be
+used to reconstruct a live collector PASS. Provider
+addresses, credentials, Cookies, raw identifiers, private payloads, response
+bodies, and response headers are never persisted.
+
+Optionally check the redacted record's structure. This deliberately prints
+`AUDIT ONLY (NOT LIVE COLLECTOR PASS)`:
+
+```bash
+pnpm run test:auth-real-users -- audit /path/to/real-user-evidence.json
+```
+
+### Anonymous User cleanup live behavior gate
+
+The Anonymous User cleanup harness exercises two distinct Cookie bindings over
+public Dano HTTP/SSE and immediately checks the live runtime for cross-User
+session, transcript, Runtime Workspace, file, upload, and preference isolation;
+idle cleanup; active SSE and Assistant Turn protection; and authenticated User
+retention. Its `PASS live HTTP/SSE/runtime` result proves those live transport
+and runtime behaviors only. The harness cannot distinguish the Codex in-app
+Browser from Chrome over HTTP, and its transport fingerprints prove only that
+the two Cookie bindings differ. Browser-surface provenance must be recorded by
+the external acceptance run that actually operates slot A in the Codex in-app
+Browser and slot B in Chrome; the harness and offline audit do not prove it.
+
+### Real provider Skill/Broker release gate
+
+Use the test-only `provider-broker-release-gate` Skill to prove that a real Pi
+Turn reaches the configured provider through `provider_request`. Choose a
+read-only provider path whose response is safe for an acceptance transcript;
+the path stays in runtime configuration and is not part of Dano core.
+
+Install the Skill into the disposable Agent Config Directory used by the test
+runtime **before starting Dano**. Start the backend with the same
+`PI_CODING_AGENT_DIR` and provider-path environment; that directory must also
+contain the real model configuration and credential used by the acceptance
+runner:
+
+```bash
+PI_CODING_AGENT_DIR=/path/to/test-agent-config \
+DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
+node scripts/check-provider-skill-release-gate.mjs install
+```
+
+Start the live collector after installing the Skill and starting the test Dano
+runtime. The producer reads the selected model through public `get_state`; both
+browser slots must report the same non-empty provider/model selection. It
+prints one run-specific module URL for Login Session A in the Codex
+in-app Browser and one for Login Session B in Chrome:
+
+```bash
+pnpm run test:auth-real-provider-skill -- capture \
+  /path/to/provider-skill-evidence.json \
+  --origin http://localhost:5173
+```
+
+Use the single configured Dano callback and one running Dano origin for both
+Login Sessions. Create Login Session A in the Codex in-app Browser and Login
+Session B in Chrome by signing the same test account into each browser context;
+do not add a second callback address or start a second Dano frontend. Open the
+same Agent Session from both. The B producer calls `switch_session` once and
+then remains continuously subscribed as a viewer; do not reload or switch B
+again while A's question is pending. This keeps the real Pi runtime and its
+open `ask_user_question` alive when A disconnects. The collector does not let A
+logout until B's persistent viewer has observed that held question. Invoke the
+Skill from A with a unique
+`gate-a-before` marker. The Skill asks one controlled `ask_user_question`
+single-choice question; answer `continue` from A and confirm its subsequent
+`provider_request` succeeds.
+
+Invoke it from A again with `gate-a-after` and leave that question pending. Log
+out A and confirm its old client is disconnected. From B's view of the same
+Agent Session, answer A's pending question with `continue`. This resumes the
+already-started Assistant Turn, whose Credential remains bound to A; its
+subsequent `provider_request` must return `authentication_required`. Finally
+invoke the Skill in a new Turn from B with `gate-b-after`, answer its question
+from B, and confirm the provider request still succeeds. The controlled test
+accounts are recorded in
+`apps/dano/src/__tests__/fixtures/real-oauth-acceptance.json`.
+
+Import each printed module in its matching authenticated browser and call
+`run()` without awaiting it in the console so both slots can run concurrently,
+for example `void import("<SLOT_A-or-SLOT_B>").then(module => module.run())`.
+Start A first; after it has created the shared Agent Session, start B. The
+modules use only public Dano HTTP/SSE commands and the browser's
+HttpOnly Login Session implicitly; they never read or forward Cookies. The
+operation contract assigns A to the Codex in-app Browser and B to Chrome, with
+both on the same Dano callback without recording its address. The collector
+cannot prove those browser surfaces from application-layer requests; retain the
+external actual-browser acceptance record for that provenance:
+
+- `aStatus` and `bStatus` come from each authenticated auth DTO.
+- Client fingerprints are SHA-256 hashes of the two `/api/clients` response
+  Client IDs. A's two prompts must use the same Client; B must be different.
+- User ID fingerprints are SHA-256 hashes of the authenticated auth DTO's
+  browser-safe, opaque `user.id`. They must match; do not record the raw ID.
+  `defaultWorkspacePath` is runtime data and must never be used as User
+  identity. Set the User's preference to the collector-provided `yellow` marker through A
+  and read it through B, then restore the initial preference after capture.
+- Session fingerprints are SHA-256 hashes of the `sessionPath` returned through
+  the Bridge. B must successfully `switch_session` to A's path; record only the
+  hash, never the path.
+- The public `get_state` response must contain a selected Pi provider/model in
+  both slots, and both selections must match. Model credentials and model
+  configuration are not copied into the audit record.
+- Record `aBeforeBrowser` as `codex-in-app-browser`; record both
+  `aAfterBrowser` and `bAfterBrowser` as `chrome`. These are expected operation
+  labels, not collector-observed browser provenance. The external acceptance
+  record identifies which browser submitted each public `answer_question`
+  command without recording a Cookie or Login Session ID.
+- Sequence timestamps surround each public prompt, question tool call,
+  `answer_question` command/result, logout POST, old-A Client request, B auth
+  DTO read, and provider result. Logout must return 200 after A's second
+  question call and before B answers it; the old A Client request must
+  return 404, and B must remain `authenticated` before its post-logout Skill
+  Turn succeeds.
+
+The collector retains raw Client, Session, and selected-model mappings only in
+memory, reads the live Pi transcript itself, and emits
+`LIVE HTTP/SSE/Pi COLLECTOR PASS` only
+after all three ordered phases pass. This proves the behavior and resource
+relationships, while browser-surface provenance remains part of the external
+IAB/Chrome acceptance record. The written JSON is a redacted audit record and cannot reconstruct
+the live result. Its structure can be checked separately without printing
+response bodies, headers, credentials, Cookies, Login Session IDs, or provider
+addresses; this prints `AUDIT ONLY (NOT LIVE COLLECTOR PASS)`:
+
+```bash
+DANO_PROVIDER_ACCEPTANCE_PATH=/configured/read-only/status \
+DANO_PROVIDER_GATE_SESSION=/path/to/shared-session.jsonl \
+pnpm run test:auth-real-provider-skill -- audit \
+  /path/to/provider-skill-evidence.json
+```
+
+The producer waits for each Turn's settled transcript snapshot instead of
+advancing on an intermediate tool-result event. The verifier requires the
+Skill's exact canonical `ask_user_question` call and its answered `continue`
+result before each `provider_request`, so the held A
+Turn is portable and reproducible through Dano's public HTTP/SSE command seam,
+without a hidden acceptance endpoint, shell sandbox, copied credential, or
+direct Broker call. Remove the test Skill after acceptance:
+
+```bash
+PI_CODING_AGENT_DIR=/path/to/test-agent-config \
+node scripts/check-provider-skill-release-gate.mjs remove
+```
+
+### Real provider refresh release gate
+
+Run the refresh producer with the normal disposable OAuth runtime environment
+and the same read-only `DANO_PROVIDER_ACCEPTANCE_PATH` used by the Skill gate:
+
+```bash
+pnpm run test:auth-real-refresh:run
+```
+
+The producer keeps credentials in process memory and observes the real OAuth
+adapter, encrypted Login Session record, Broker retry, public auth HTTP/SSE
+flow, and Pi transcript directly. It does not write an evidence JSON file or
+expose an acceptance route. For an HTTP-only controlled test provider, opt in
+only for this process with `DANO_REFRESH_ACCEPTANCE_ALLOW_INSECURE=true`.
+
+Create the target Login Session in the Codex in-app Browser and the peer Login
+Session in Chrome by signing the same controlled account into the single Dano
+callback. Keep the peer authenticated throughout every phase. After both live
+Clients are observed, send the indicated signal to the producer process, then
+invoke `provider-broker-release-gate` from the target with the printed marker:
+
+- `SIGUSR2`: real refresh succeeds; call `/api/auth/current` and keep the same
+  Login Session.
+- `SIGURG`: the real token endpoint rejects refresh; refresh the Dano page to
+  confirm `reauth_required`, then click **继续匿名使用** and wait for the new
+  Anonymous Client.
+- Log in again, then `SIGWINCH`: repeat the rejected refresh, refresh Dano to
+  display the AlertDialog, and click **重新登录**. Keep the producer running
+  until it prints `confirm: PASS`.
+
+After each target Skill result, refresh the peer Dano page once so its public
+`/api/auth/current` state is observed. The phase cannot pass unless the peer
+remains authenticated with the same encrypted Login Session Credential.
+
+The failure phases use a random incorrect confidential-client secret only for
+the real refresh request. Neither the secret nor any provider token, address,
+Cookie, raw User ID, response body, or response header is printed or persisted.
+For every phase, the producer atomically replaces only the target Login
+Session's encrypted access token with a one-time invalid value while preserving
+its real refresh token. The configured business API must reject that access
+token before the Broker attempts refresh. This avoids provider revocation,
+which can invalidate the whole grant and make a successful refresh impossible.
+The success phase then requires the real token endpoint grant, identity
+validation, encrypted Credential record rotation, accepted retry, and unchanged
+peer Credential. The failure phases require the real token endpoint to reject
+the incorrect client secret before `reauth_required` and the selected UI path.
 
 ```bash
 cp .env.example .env
+# Fill the required DANO_OAUTH_* values in .env before startup.
 docker build -t dano-app:local .
 DANO_NGINX_PORT=18082 pnpm run deploy:up
 DANO_SMOKE_BASE_URL=http://127.0.0.1:18082 pnpm run smoke:deploy
@@ -531,8 +778,10 @@ Release Build accepts `DANO_EXPOSURE_MODE` with these values:
 | `both` | HTTP and HTTPS | Redirects HTTP to the matching HTTPS path and query |
 | `both-no-redirect-http` | HTTP and HTTPS | Serves Dano directly on both protocols |
 
-The default is `http`, so existing deployments do not gain a TLS port or
-certificate requirement after upgrading.
+The default exposure mode is `http`, which can remain behind an environment
+owned TLS terminator. The public OAuth callback and provider server-to-server
+endpoints must still be configured with trusted HTTPS. Direct TLS exposure uses
+the modes below.
 
 TLS-capable modes require two environment-owned files:
 
@@ -589,6 +838,7 @@ The smoke test checks:
 - `GET /`
 - `GET /api/health`
 - `POST /api/clients`
+- the opaque, host-only Anonymous User Cookie and anonymous authentication DTO
 - `GET /api/clients/<id>/events`
 - `POST /api/clients/<id>/messages`
 - a matching SSE `response` or `event`

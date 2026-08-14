@@ -5,12 +5,17 @@ import * as path from "node:path";
 import { createHash, createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BridgeEventBus } from "../bridge-event-bus.js";
+import { createAnonymousUserContextResolver } from "../anonymous-user-context.js";
 import {
   BridgeServer,
-  type RpcConnectionHandler,
+  type AuthHttpHandler,
   type RpcConnectionHandlerFactory,
 } from "../server.js";
-import { createJwtUserContextResolver } from "../user-context.js";
+import {
+  createJwtUserContextResolver,
+  type UserContextResolver,
+} from "../user-context.js";
+import { UserRuntimeRegistry } from "../user-runtime-registry.js";
 import {
   DEFAULT_BRIDGE_CONFIG,
   type BridgeConfig,
@@ -43,7 +48,7 @@ afterEach(async () => {
 });
 
 function createServer(
-  factory?: (ctx: Parameters<RpcConnectionHandlerFactory>[0]) => RpcConnectionHandler,
+  factory?: RpcConnectionHandlerFactory,
   config: Partial<BridgeConfig> = {},
   auth?: {
     secret?: string;
@@ -63,11 +68,14 @@ function createServer(
   const eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
   const emitEvent = vi.fn();
   const handlerFactory: RpcConnectionHandlerFactory = ctx =>
-    factory?.(ctx) ?? {
-      handleClientMessage: vi.fn(),
-      currentGitCwd: () => workspaceDir,
-      dispose: vi.fn(),
-    };
+    factory
+      ? factory(ctx)
+      : {
+          handleClientMessage: vi.fn(),
+          currentGitCwd: () => workspaceDir,
+          currentSessionId: () => "test-agent-session",
+          dispose: vi.fn(),
+        };
   const userContextResolver = auth?.secret
     ? createJwtUserContextResolver({
         runtimeRootPath: runtimeRoot,
@@ -257,6 +265,24 @@ describe("BridgeServer HTTP/SSE transport", () => {
     );
   });
 
+  it("rolls back logical client state when runtime initialization fails", async () => {
+    const { server, emitEvent } = createServer(async () => {
+      throw new Error("runtime initialization failed");
+    });
+    const address = await server.start();
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/clients`,
+      { method: "POST", body: "{}" },
+    );
+
+    expect(response.status).toBe(500);
+    expect(server.getClientCount()).toBe(0);
+    expect(emitEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "client_connect" }),
+    );
+  });
+
   it("binds a verified JWT User to the client and creates that User Folder", async () => {
     let connectionUser: Parameters<RpcConnectionHandlerFactory>[0]["user"];
     const { server, runtimeRoot } = createServer(
@@ -290,7 +316,11 @@ describe("BridgeServer HTTP/SSE transport", () => {
     );
 
     expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
+    const created = await response.json() as {
+      client: { id: string };
+      currentUser: { username: string; avatarUrl: string };
+    };
+    expect(created).toMatchObject({
       currentUser: {
         username: "Joseph",
         avatarUrl: "https://example.test/avatar.png",
@@ -303,6 +333,13 @@ describe("BridgeServer HTTP/SSE transport", () => {
     expect(fs.statSync(path.join(runtimeRoot, "users", "user-42")).isDirectory()).toBe(
       true,
     );
+    expect(server.getClientUserResolution(created.client.id)).toMatchObject({
+      userContext: { user: { id: "user-42", username: "Joseph" } },
+      authentication: {
+        status: "authenticated",
+        user: { username: "Joseph" },
+      },
+    });
   });
 
   it("does not turn a client-reported identity into a User Context", async () => {
@@ -892,7 +929,10 @@ describe("BridgeServer HTTP/SSE transport", () => {
 
     expect(uploadResponse.status).toBe(201);
     expect(ownerResponse.status).toBe(200);
-    await expect(ownerResponse.json()).resolves.toEqual({ username: "Owner" });
+    await expect(ownerResponse.json()).resolves.toEqual({
+      id: "owner",
+      username: "Owner",
+    });
     expect(missingResponse.status).toBe(401);
     expect(attackerResponse.status).toBe(403);
     expect(attackerMessageResponse.status).toBe(403);
@@ -999,6 +1039,305 @@ describe("BridgeServer HTTP/SSE transport", () => {
       type: "response",
       payload: { id: "cmd-1", success: true },
     });
+  });
+
+  it("rejects owner transfer while an accepted User command is still active", async () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dano-transfer-gate-"));
+    userRoots.push(runtimeRoot);
+    const source = {
+      user: { id: "guest-transfer-gate" },
+      folderPath: path.join(runtimeRoot, "users", "guest-transfer-gate"),
+    };
+    const target = {
+      user: { id: "authenticated-transfer-gate", username: "Test User" },
+      folderPath: path.join(runtimeRoot, "users", "authenticated-transfer-gate"),
+    };
+    fs.mkdirSync(path.join(source.folderPath, "workspaces", "default"), {
+      recursive: true,
+    });
+    fs.mkdirSync(target.folderPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(source.folderPath, "workspaces", "default", "kept.txt"),
+      "guest data",
+      "utf8",
+    );
+    let guestBindingActive = true;
+    const resolver: UserContextResolver = {
+      async resolve() {
+        return guestBindingActive ? source : null;
+      },
+      async resolveForClient() {
+        return guestBindingActive
+          ? { userContext: source, authentication: { status: "anonymous" } }
+          : null;
+      },
+      async resolveExisting() {
+        return guestBindingActive
+          ? { userContext: source, authentication: { status: "anonymous" } }
+          : null;
+      },
+      async resolveAnonymous() {
+        return guestBindingActive ? source : null;
+      },
+      async revokeAnonymous(_headers, expectedUserId) {
+        if (!guestBindingActive || expectedUserId !== source.user.id) return false;
+        guestBindingActive = false;
+        return true;
+      },
+    };
+    const authHandler: AuthHttpHandler = {
+      async handle(req, res, url, lifecycle) {
+        if (req.method !== "POST" || url.pathname !== "/api/test-transfer") {
+          return false;
+        }
+        await lifecycle.transferAnonymousUser(req.headers, source.user.id, target);
+        res.writeHead(204);
+        res.end();
+        return true;
+      },
+    };
+    let finishCommand!: () => void;
+    const commandGate = new Promise<void>(resolve => {
+      finishCommand = resolve;
+    });
+    const eventBus = new BridgeEventBus(DEFAULT_BRIDGE_CONFIG);
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "dano-transfer-upload-"));
+    uploadRoots.push(uploadDir);
+    const registry = new UserRuntimeRegistry(async () => {
+      throw new Error("test backend should not be created");
+    });
+    const server = new BridgeServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir },
+      },
+      ctx => ({
+        defaultWorkspacePath: path.join(source.folderPath, "workspaces", "default"),
+        handleClientMessage: () => commandGate,
+        dispose: vi.fn(),
+      }),
+      eventBus,
+      vi.fn(),
+      resolver,
+      authHandler,
+      registry,
+    );
+    servers.push(server);
+    const address = await server.start();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const client = await postJson<{
+      client: { id: string };
+      eventsUrl: string;
+      messagesUrl: string;
+    }>(`${origin}/api/clients`);
+    const sse = openSse(`${origin}${client.eventsUrl}`);
+    await vi.waitFor(() =>
+      expect(eventBus.hasActiveClientConnection(client.client.id)).toBe(true),
+    );
+
+    const accepted = await fetch(`${origin}${client.messagesUrl}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "command",
+        payload: { id: "held-command", type: "get_state" },
+      }),
+    });
+    expect(accepted.status).toBe(202);
+    const blocked = await fetch(`${origin}/api/test-transfer`, {
+      method: "POST",
+    });
+    expect(blocked.status).toBe(409);
+    expect(guestBindingActive).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(target.folderPath, "workspaces", "default", "kept.txt"),
+      ),
+    ).toBe(false);
+
+    finishCommand();
+    await vi.waitFor(async () => {
+      const completed = await fetch(`${origin}/api/test-transfer`, {
+        method: "POST",
+      });
+      expect(completed.status).toBe(204);
+    });
+    sse.close();
+    expect(guestBindingActive).toBe(false);
+    expect(
+      fs.readFileSync(
+        path.join(target.folderPath, "workspaces", "default", "kept.txt"),
+        "utf8",
+      ),
+    ).toBe("guest data");
+  });
+
+  it("retries transferred Anonymous User cleanup after retirement fails", async () => {
+    const runtimeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-transfer-cleanup-retry-"),
+    );
+    userRoots.push(runtimeRoot);
+    const anonymousUsers = createAnonymousUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secureCookie: false,
+      now: () => 1_000,
+    });
+    const created = await anonymousUsers.resolveForClient!({});
+    if (!created?.setCookie) throw new Error("Expected Anonymous User Cookie");
+    const source = created.userContext;
+    const sourceWorkspacePath = path.join(
+      source.folderPath,
+      "workspaces",
+      "default",
+    );
+    fs.mkdirSync(sourceWorkspacePath, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceWorkspacePath, "transferred.txt"),
+      "retained by target",
+      "utf8",
+    );
+    const target = {
+      user: {
+        id: "authenticated-cleanup-target",
+        username: "Cleanup Target",
+      },
+      folderPath: path.join(
+        runtimeRoot,
+        "users",
+        "authenticated-cleanup-target",
+      ),
+    };
+    fs.mkdirSync(target.folderPath, { recursive: true });
+
+    class FailingOnceRegistry extends UserRuntimeRegistry {
+      retireAttempts = 0;
+
+      override async retireUser(userContext: typeof source): Promise<void> {
+        this.retireAttempts += 1;
+        if (this.retireAttempts === 1) {
+          throw new Error("injected retirement failure");
+        }
+        await super.retireUser(userContext);
+      }
+    }
+    const registry = new FailingOnceRegistry(async () => {
+      throw new Error("test backend should not be created");
+    });
+    const authHandler: AuthHttpHandler = {
+      async handle(req, res, url, lifecycle) {
+        if (req.method !== "POST" || url.pathname !== "/api/test-transfer") {
+          return false;
+        }
+        await lifecycle.transferAnonymousUser(
+          req.headers,
+          source.user.id,
+          target,
+        );
+        res.writeHead(204);
+        res.end();
+        return true;
+      },
+    };
+    const uploadDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "dano-transfer-cleanup-upload-"),
+    );
+    uploadRoots.push(uploadDir);
+    const server = new BridgeServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir },
+      },
+      () => {
+        throw new Error("test handler should not be created");
+      },
+      new BridgeEventBus(DEFAULT_BRIDGE_CONFIG),
+      vi.fn(),
+      anonymousUsers,
+      authHandler,
+      registry,
+      anonymousUsers,
+      { idleTtlMs: 60_000, intervalMs: 60_000 },
+    );
+    servers.push(server);
+    const address = await server.start();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const cookie = created.setCookie.split(";", 1)[0]!;
+
+    const response = await fetch(`${origin}/api/test-transfer`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    });
+
+    expect(response.status).toBe(204);
+    expect(
+      fs.readFileSync(
+        path.join(
+          target.folderPath,
+          "workspaces",
+          "default",
+          "transferred.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("retained by target");
+    expect(await anonymousUsers.resolveAnonymous!({ cookie })).toBeNull();
+    expect(registry.retireAttempts).toBe(1);
+    expect(fs.existsSync(source.folderPath)).toBe(true);
+    expect(
+      fs.readdirSync(path.join(runtimeRoot, "anonymous-sessions")),
+    ).toHaveLength(1);
+
+    await server.stop();
+    servers.splice(servers.indexOf(server), 1);
+    const restartedAnonymousUsers = createAnonymousUserContextResolver({
+      runtimeRootPath: runtimeRoot,
+      secureCookie: false,
+      now: () => 1_000,
+    });
+    const restartedRegistry = new UserRuntimeRegistry(async () => {
+      throw new Error("test backend should not be created");
+    });
+    const restartedServer = new BridgeServer(
+      {
+        ...DEFAULT_BRIDGE_CONFIG,
+        host: "127.0.0.1",
+        port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir },
+      },
+      () => {
+        throw new Error("test handler should not be created");
+      },
+      new BridgeEventBus(DEFAULT_BRIDGE_CONFIG),
+      vi.fn(),
+      restartedAnonymousUsers,
+      undefined,
+      restartedRegistry,
+      restartedAnonymousUsers,
+      { idleTtlMs: 60_000, intervalMs: 60_000 },
+    );
+    servers.push(restartedServer);
+
+    await restartedServer.start();
+
+    expect(fs.existsSync(source.folderPath)).toBe(false);
+    expect(
+      fs.readdirSync(path.join(runtimeRoot, "anonymous-sessions")),
+    ).toEqual([]);
+    expect(
+      fs.readFileSync(
+        path.join(
+          target.folderPath,
+          "workspaces",
+          "default",
+          "transferred.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("retained by target");
   });
 
   it("returns 202 before an asynchronous provider-stage prompt error is presented", async () => {

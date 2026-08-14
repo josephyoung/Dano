@@ -10,7 +10,6 @@ const composeBin = process.env.DANO_COMPOSE || "docker";
 const baseArgs = composeBin === "podman" ? ["compose"] : ["compose"];
 const shouldPullImage = Boolean(process.env.DANO_IMAGE?.trim());
 const shellNginxConf = process.env.DANO_NGINX_CONF;
-const shellNginxDemoAuthConf = process.env.DANO_NGINX_DEMO_AUTH_CONF;
 const shellNginxSharedDir = process.env.DANO_NGINX_SHARED_DIR;
 const hasEnvFile = existsSync(".env");
 if (hasEnvFile) process.loadEnvFile(".env");
@@ -31,14 +30,6 @@ const composeEnv = {
         DANO_NGINX_CONF: join(
           sourceRoot,
           `deploy/nginx/${exposure.mode}.conf.template`,
-        ),
-      }
-    : {}),
-  ...(!usesReleaseAssets && !shellNginxDemoAuthConf
-    ? {
-        DANO_NGINX_DEMO_AUTH_CONF: join(
-          sourceRoot,
-          "deploy/nginx/demo-auth.conf.template",
         ),
       }
     : {}),

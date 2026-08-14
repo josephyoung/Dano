@@ -4,10 +4,6 @@ Dano is an enterprise assistant that turns user requests into controlled actions
 
 ## Language
 
-**curl Tool**:
-A native network capability for the Dano Agent, which does not expose a shell. It forwards curl arguments and returns the curl process result.
-_Avoid_: REST runtime, HTTP client, policy engine
-
 **Dano Bridge**:
 The internal HTTP/SSE and RPC subsystem inside the Dano server that connects browser clients to runtime session capabilities. It is a source-module boundary, not an independent workspace package or separate service.
 _Avoid_: bridge workspace package, separate bridge service
@@ -54,12 +50,32 @@ The single project folder Dano gives to Pi for one Dano session. Dano may know t
 _Avoid_: chat workspace, user workspace, project folder
 
 **User**:
-The stable person identity established from a server-verified token. A User is independent of browser clients, sessions, and Runtime Workspaces; none of those identifiers may stand in for a User.
-_Avoid_: client, session owner inferred from clientId, anonymous identity
+The stable server-established owner of Dano runtime data. An authenticated User is established from a server-verified token; an Anonymous User is established from a server-side opaque guest mapping. A User is independent of browser clients, sessions, and Runtime Workspaces; none of those identifiers may stand in for a User.
+_Avoid_: client, session owner inferred from clientId, browser-provided identity
+
+**Anonymous User**:
+A temporary User created or restored by the server from an opaque guest Cookie. Each Anonymous User owns an isolated User Folder and Runtime Workspace while remaining able to use ordinary Dano capabilities without authentication.
+_Avoid_: unauthenticated error, shared guest, client identity
 
 **User Context**:
-The server-owned request context produced after verifying a User token. It carries the authenticated User and the safely resolved User Folder; browser-provided identity fields never create or change it.
+The server-owned request context produced after resolving an authenticated or Anonymous User. It carries the User and the safely resolved User Folder; browser-provided identity fields never create or change it.
 _Avoid_: client context, browser identity, session context
+
+**External Identity**:
+The provider-adapter output that establishes an authenticated User from one stable opaque `userId` plus optional display name and avatar URL. Dano does not interpret provider-private fields or use display data as identity.
+_Avoid_: provider payload, account category, display-name identity
+
+**Dano Login Session**:
+A persistent, revocable server-side session created for one successful OAuth login. Its opaque browser Cookie identifies only that Login Session; it does not contain a provider token or establish a separate User data namespace.
+_Avoid_: User, Browser Client, JWT Cookie, provider SSO session
+
+**Provider Credential**:
+The encrypted server-side access and optional refresh credential owned by exactly one Dano Login Session. It is never browser or model data and is not shared merely because two Login Sessions resolve to the same User.
+_Avoid_: User credential, browser token, shared account token
+
+**Credential Broker**:
+The server-owned module that binds a provider request to the Dano Login Session that initiated its Assistant Turn, reads that session's Provider Credential, and forwards the request only to the configured provider origin. Skill instructions can use its generic provider request tool without receiving the credential.
+_Avoid_: browser proxy, business endpoint client, User credential lookup
 
 **User Folder**:
 The persistent directory under the Dano runtime users root that is mapped from one verified User ID. It holds user-owned data such as preferences and must remain isolated from other User Folders and Runtime Workspaces.

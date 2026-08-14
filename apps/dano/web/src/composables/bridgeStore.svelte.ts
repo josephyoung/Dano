@@ -1,6 +1,8 @@
 import type {
   AccentColorPreset,
   AskUserQuestionAnswer,
+  BridgeAuthenticationState,
+  BridgeLoginError,
   BridgeUserSummary,
   ClientMessage,
   FieldAssistCommandPayload,
@@ -43,6 +45,7 @@ import {
   ACCENT_COLOR_PRESET_KEYS,
   DEFAULT_ACCENT_COLOR_PRESET,
 } from "@dano/types/protocol";
+import { createBrowserClient } from "./browserClientBootstrap";
 import {
   normalizeRpcModel,
   upsertModel,
@@ -86,6 +89,10 @@ const readTranscriptConfigState = transcriptConfigState as (
 // ---------------------------------------------------------------------------
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
+
+export type BrowserAuthenticationState =
+  | { readonly status: "checking" }
+  | BridgeAuthenticationState;
 
 export type TranscriptEntry = RpcTranscriptMessage;
 export type TranscriptDelta = RpcTranscriptDeltaEvent;
@@ -327,6 +334,7 @@ function setActiveTreeSessionPath(sessionPath: string | null) {
 }
 
 let _connectionStatus = $state<ConnectionStatus>("disconnected");
+let _authentication = $state<BrowserAuthenticationState>({ status: "checking" });
 let _currentUser = $state<BridgeUserSummary | undefined>(undefined);
 let _accentColorPreset = $state<AccentColorPreset>(DEFAULT_ACCENT_COLOR_PRESET);
 let themeColorSelectionRevision = 0;
@@ -390,6 +398,7 @@ let _prefillText = $state<string | null>(null);
 // ---------------------------------------------------------------------------
 
 let connectionStatus = $derived(_connectionStatus);
+let authentication = $derived(_authentication);
 let currentUser = $derived(_currentUser);
 let accentColorPreset = $derived(_accentColorPreset);
 let transcript = $derived(_transcript);
@@ -2430,12 +2439,26 @@ export async function fieldAssist(
 // ---------------------------------------------------------------------------
 
 function handleServerMessage(raw: MessageEvent) {
-  let envelope: ServerMessage;
+  let parsed: unknown;
   try {
-    envelope = JSON.parse(raw.data as string) as ServerMessage;
+    parsed = JSON.parse(raw.data as string) as unknown;
   } catch {
     return;
   }
+
+  if (!parsed || typeof parsed !== "object") return;
+  const candidate = parsed as { type?: unknown; payload?: unknown };
+  if (candidate.type === "authentication") {
+    const authentication = parseBridgeAuthenticationState(candidate.payload);
+    if (!authentication) return;
+    applyAuthentication(authentication);
+    if (authentication.status === "reauth_required") {
+      stopTransportForReauthentication();
+    }
+    return;
+  }
+
+  const envelope = parsed as ServerMessage;
 
   if (envelope.type === "response") {
     handleResponse(envelope.payload);
@@ -2886,6 +2909,27 @@ async function startDefaultWorkspaceSession(
   defaultSessionStartedForPage = true;
 
   try {
+    const sessionsResp = await loadWorkspaceSessions({
+      workspacePath,
+      limit: 1,
+      merge: "replace",
+    });
+    const sessionData = sessionsResp.success
+      ? (sessionsResp.data as { sessions?: SessionEntry[] } | undefined)
+      : undefined;
+    const existingSession = sessionData?.sessions?.[0];
+    if (existingSession) {
+      const switchResp = await switchSession(existingSession.path);
+      await Promise.all(bootstrap);
+      if (!switchResp.success) await restoreLiveSessionState();
+      return true;
+    }
+    if (!sessionsResp.success) {
+      await Promise.all(bootstrap);
+      await restoreLiveSessionState();
+      return true;
+    }
+
     const registerResp = await registerWorkspace(workspacePath);
     if (!registerResp.success) {
       pushNotification(
@@ -2961,6 +3005,7 @@ async function fetchInitialState() {
 function resetTransportState() {
   clientId = null;
   clientMessagesUrl = null;
+  _authentication = { status: "checking" };
   _currentUser = undefined;
   themeColorSelectionRevision += 1;
   themeColorTransportRevision += 1;
@@ -2972,6 +3017,87 @@ function resetTransportState() {
   if (eventSource) {
     eventSource.close();
     eventSource = null;
+  }
+}
+
+function applyAuthentication(state: BridgeAuthenticationState) {
+  _authentication = state;
+  _currentUser = state.status === "authenticated" ? state.user : undefined;
+}
+
+export function parseBridgeAuthenticationState(
+  value: unknown,
+): BridgeAuthenticationState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as {
+    status?: unknown;
+    user?: unknown;
+    loginError?: unknown;
+  };
+  const loginErrorCode =
+    candidate.loginError && typeof candidate.loginError === "object"
+      ? (candidate.loginError as { code?: unknown }).code
+      : undefined;
+  const loginError: BridgeLoginError | undefined =
+    loginErrorCode === "provider_identity_invalid" ||
+    loginErrorCode === "provider_login_failed"
+      ? { code: loginErrorCode }
+      : undefined;
+  const withLoginError = loginError ? { loginError } : {};
+
+  if (candidate.status === "anonymous") {
+    return { status: "anonymous", ...withLoginError };
+  }
+  if (candidate.status === "reauth_required") {
+    return { status: "reauth_required", ...withLoginError };
+  }
+  if (candidate.status !== "authenticated") return undefined;
+  if (
+    !candidate.user ||
+    typeof candidate.user !== "object" ||
+    typeof (candidate.user as { id?: unknown }).id !== "string" ||
+    typeof (candidate.user as { username?: unknown }).username !== "string"
+  ) {
+    return undefined;
+  }
+  const id = (candidate.user as { id: string }).id;
+  const username = (candidate.user as { username: string }).username;
+  const avatarUrl = (candidate.user as { avatarUrl?: unknown }).avatarUrl;
+  return {
+    status: "authenticated",
+    user: {
+      id,
+      username,
+      ...(typeof avatarUrl === "string" ? { avatarUrl } : {}),
+    },
+    ...withLoginError,
+  };
+}
+
+function stopTransportForReauthentication() {
+  clientId = null;
+  clientMessagesUrl = null;
+  clearPromptPending();
+  stopHeartbeatWatchdog();
+  lastHeartbeatAt = 0;
+  eventSource?.close();
+  eventSource = null;
+  _connectionStatus = "disconnected";
+  _lastDisconnectReason = "";
+  rejectPendingRequests("Login is required again");
+}
+
+async function readCurrentAuthentication(): Promise<
+  BridgeAuthenticationState | undefined
+> {
+  try {
+    const response = await fetch("/api/auth/current", {
+      credentials: "same-origin",
+    });
+    if (!response.ok) return undefined;
+    return parseBridgeAuthenticationState(await response.json());
+  } catch {
+    return undefined;
   }
 }
 
@@ -3026,11 +3152,24 @@ async function connectOnce(): Promise<boolean> {
   resetTransportState();
 
   try {
-    const createResponse = await fetch("/api/clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
+    const currentAuthentication = await readCurrentAuthentication();
+    if (currentAuthentication) {
+      applyAuthentication(currentAuthentication);
+      if (currentAuthentication.loginError) {
+        pushNotification(t("authentication.loginFailed"), "error");
+      }
+    }
+    if (currentAuthentication?.status === "reauth_required") {
+      _connectionStatus = "disconnected";
+      return false;
+    }
+    const createClient = () =>
+      fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    const createResponse = await createBrowserClient(createClient);
 
     if (!createResponse.ok) {
       throw new Error(
@@ -3043,6 +3182,7 @@ async function connectOnce(): Promise<boolean> {
       eventsUrl?: string;
       messagesUrl?: string;
       defaultWorkspacePath?: string | null;
+      authentication?: unknown;
       currentUser?: BridgeUserSummary;
     };
     const nextClientId = created.client?.id;
@@ -3053,7 +3193,14 @@ async function connectOnce(): Promise<boolean> {
     clientId = nextClientId;
     clientMessagesUrl = created.messagesUrl;
     defaultWorkspacePath = normalizeBridgePath(created.defaultWorkspacePath);
-    _currentUser = created.currentUser;
+    const createdAuthentication = parseBridgeAuthenticationState(
+      created.authentication,
+    );
+    if (createdAuthentication) {
+      applyAuthentication(createdAuthentication);
+    } else {
+      _currentUser = created.currentUser;
+    }
     eventSource = new EventSource(created.eventsUrl);
   } catch (error) {
     markDisconnected(
@@ -3121,6 +3268,24 @@ function disconnect() {
   resetTransportState();
 }
 
+function login() {
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  window.location.assign(
+    `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+  );
+}
+
+async function logout(): Promise<void> {
+  const response = await fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    throw new Error("Logout failed");
+  }
+  window.location.reload();
+}
+
 // ---------------------------------------------------------------------------
 // Auto-connect
 // ---------------------------------------------------------------------------
@@ -3136,6 +3301,9 @@ export function initBridge() {
     },
     get currentUser() {
       return currentUser;
+    },
+    get authentication() {
+      return authentication;
     },
     get accentColorPreset() {
       return accentColorPreset;
@@ -3302,6 +3470,8 @@ export function initBridge() {
     fieldAssist,
     setAccentColorPreset,
     dismissNotification,
+    login,
+    logout,
     reconnect: connect,
     disconnect,
   };

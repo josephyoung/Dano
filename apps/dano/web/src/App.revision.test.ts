@@ -7,6 +7,7 @@ const bridge = vi.hoisted(() => ({
   abortGeneration: vi.fn(),
   accentColorPreset: "green",
   activeSessionPath: "/sessions/history.jsonl",
+  authentication: { status: "anonymous" },
   availableModels: [],
   cancelQueuedMessage: vi.fn(),
   commands: [],
@@ -103,6 +104,9 @@ vi.mock("./components/ExtensionDialog.svelte", async () => ({
   default: (await import("./test/EmptyComponentHarness.svelte")).default,
 }));
 vi.mock("./components/ReconnectBanner.svelte", async () => ({
+  default: (await import("./test/EmptyComponentHarness.svelte")).default,
+}));
+vi.mock("./components/ReauthenticationDialog.svelte", async () => ({
   default: (await import("./test/EmptyComponentHarness.svelte")).default,
 }));
 vi.mock("./components/ThemeSettingsDialog.svelte", async () => ({

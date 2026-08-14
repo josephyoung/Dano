@@ -15,7 +15,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { X509Certificate } from "node:crypto";
+import { randomBytes, X509Certificate } from "node:crypto";
 
 const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const releaseScript = join(sourceRoot, "scripts/deploy-release.mjs");
@@ -27,6 +27,19 @@ const buildParent = join(workDir, "builds");
 const project = `dano-exposure-${process.pid}`;
 const skillmannerNetwork = "skillmanner_default";
 let createdSkillmannerNetwork = false;
+const oauthAcceptanceEnvironment = {
+  DANO_OAUTH_ISSUER: "https://provider.invalid",
+  DANO_OAUTH_AUTHORIZATION_ENDPOINT: "https://provider.invalid/authorize",
+  DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.invalid/token",
+  DANO_OAUTH_IDENTITY_ENDPOINT: "https://provider.invalid/identity",
+  DANO_OAUTH_API_ORIGIN: "https://provider.invalid",
+  DANO_OAUTH_CLIENT_ID: "exposure-acceptance",
+  DANO_OAUTH_CLIENT_SECRET: randomBytes(24).toString("base64url"),
+  DANO_OAUTH_SCOPE: "profile",
+  DANO_OAUTH_REDIRECT_URI: "https://localhost/api/auth/callback",
+  DANO_OAUTH_CREDENTIAL_KEY: randomBytes(32).toString("base64url"),
+  DANO_OAUTH_CREDENTIAL_KEY_VERSION: "exposure-acceptance",
+};
 
 if (!image) {
   throw new Error(
@@ -155,34 +168,11 @@ if (args[0] === "clone") {
     join(fakeBin, "compose-runtime"),
     `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 const args = process.argv.slice(2);
 if (args[0] === "build") process.exit(0);
 if (args[0] !== "compose") process.exit(2);
 const result = spawnSync(process.env.DANO_ACCEPTANCE_RUNTIME, args, { stdio: "inherit", env: process.env });
 if (result.error) throw result.error;
-const upIndex = args.indexOf("up");
-if (result.status === 0 && upIndex >= 0 && process.env.DANO_AUTH_JWT_SECRET) {
-  const secretHash = spawnSync(
-    process.env.DANO_ACCEPTANCE_RUNTIME,
-    [
-      ...args.slice(0, upIndex),
-      "exec",
-      "-T",
-      "app",
-      "node",
-      "-e",
-      "process.stdout.write(require('node:crypto').createHash('sha256').update(process.env.DANO_AUTH_JWT_SECRET || '').digest('hex'))",
-    ],
-    { encoding: "utf8", env: process.env },
-  );
-  const expectedHash = createHash("sha256")
-    .update(process.env.DANO_AUTH_JWT_SECRET)
-    .digest("hex");
-  if (secretHash.status !== 0 || secretHash.stdout !== expectedHash) {
-    throw new Error("app container Secret does not match the persisted deployment Secret");
-  }
-}
 process.exit(result.status ?? 1);
 `,
   );
@@ -203,35 +193,35 @@ function compose(deployDir, args, { allowFailure = false, env } = {}) {
     "--env-file",
     ".env",
     ...args,
-  ], { cwd: deployDir, allowFailure, env });
+  ], {
+    cwd: deployDir,
+    allowFailure,
+    env: { ...process.env, ...oauthAcceptanceEnvironment, ...env },
+  });
 }
 
-async function verifyUnconfiguredDemoAuth(deployDir, httpPort) {
+async function verifyAnonymousAuth(deployDir, httpPort) {
   compose(
     deployDir,
     ["up", "-d", "--no-build", "--force-recreate", "nginx"],
     {
-      env: {
-        ...process.env,
-        DANO_DEMO_JWT: "",
-        DANO_NGINX_PORT: String(httpPort),
-      },
+      env: { DANO_NGINX_PORT: String(httpPort) },
     },
   );
   await waitForHealth(`http://127.0.0.1:${httpPort}/api/health`);
-  const root = await probe(`http://127.0.0.1:${httpPort}/`);
-  if (root.setCookie?.length) {
-    throw new Error("unconfigured nginx emitted a Demo authentication cookie");
-  }
+  await probe(`http://127.0.0.1:${httpPort}/`);
   const client = await fetch(`http://127.0.0.1:${httpPort}/api/clients`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
-  if (client.status !== 401) {
-    throw new Error(`unconfigured Demo authentication returned ${client.status}`);
+  if (
+    client.status !== 201 ||
+    !client.headers.get("set-cookie")?.startsWith("dano_guest=")
+  ) {
+    throw new Error(`Anonymous User creation returned ${client.status}`);
   }
-  console.log("[deploy-exposure] unconfigured Demo authentication: passed");
+  console.log("[deploy-exposure] Anonymous User: passed");
 }
 
 function release(mode, deployDir, runtimeDir, secretsDir, certPath, keyPath, httpPort, httpsPort) {
@@ -243,6 +233,7 @@ function release(mode, deployDir, runtimeDir, secretsDir, certPath, keyPath, htt
     cwd: sourceRoot,
     env: {
       ...process.env,
+      ...oauthAcceptanceEnvironment,
       PATH: `${fakeBin}:${process.env.PATH}`,
       COMPOSE_PROJECT_NAME: project,
       DANO_ACCEPTANCE_RUNTIME: runtimeBin,
@@ -290,7 +281,7 @@ async function verifyMode(mode, certPath, keyPath, certificateFingerprint) {
     if (mode === "http") {
       await waitForHealth(httpHealth);
       await expectUnavailable(httpsHealth);
-      await verifyUnconfiguredDemoAuth(deployDir, httpPort);
+      await verifyAnonymousAuth(deployDir, httpPort);
     } else if (mode === "https") {
       const response = await waitForHealth(httpsHealth);
       if (response.peerFingerprint !== certificateFingerprint) {

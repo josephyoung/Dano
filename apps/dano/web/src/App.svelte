@@ -8,6 +8,7 @@
   import { onMount } from "svelte";
   import ExtensionDialog from "./components/ExtensionDialog.svelte";
   import ReconnectBanner from "./components/ReconnectBanner.svelte";
+  import ReauthenticationDialog from "./components/ReauthenticationDialog.svelte";
   import ThemeSettingsDialog from "./components/ThemeSettingsDialog.svelte";
   import { hasActiveCenterFocusStage } from "./layout/centerFocusStage";
   import {
@@ -1218,14 +1219,22 @@
       onNewSession={handleExplicitNewSession}
       {newSessionPending}
       {showNewSession}
-      currentUser={bridge.currentUser}
+      authentication={bridge.authentication}
       onOpenTheme={openThemeSettings}
+      onLogin={bridge.login}
+      onLogout={bridge.logout}
     />
 
     <ReconnectBanner
       visible={bridge.isReconnecting}
       reason={bridge.lastDisconnectReason}
       reconnectCount={bridge.reconnectCount}
+    />
+
+    <ReauthenticationDialog
+      open={bridge.authentication.status === "reauth_required"}
+      onCancel={bridge.logout}
+      onConfirm={bridge.login}
     />
 
     <div class="app-body">

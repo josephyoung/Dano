@@ -1151,9 +1151,36 @@ export interface BridgeQuickActionConfig {
 
 /** Browser-safe projection of the server-authenticated User. */
 export interface BridgeUserSummary {
+  /** Opaque canonical Dano User ID; display data must never replace it. */
+  readonly id: string;
   readonly username: string;
   readonly avatarUrl?: string;
 }
+
+export type BridgeLoginErrorCode =
+  | "provider_identity_invalid"
+  | "provider_login_failed";
+
+/** Recoverable, browser-safe failure from the latest login attempt. */
+export interface BridgeLoginError {
+  readonly code: BridgeLoginErrorCode;
+}
+
+/** Browser-safe authentication state for the current Dano client. */
+export type BridgeAuthenticationState =
+  | {
+      readonly status: "anonymous";
+      readonly loginError?: BridgeLoginError;
+    }
+  | {
+      readonly status: "reauth_required";
+      readonly loginError?: BridgeLoginError;
+    }
+  | {
+      readonly status: "authenticated";
+      readonly user: BridgeUserSummary;
+      readonly loginError?: BridgeLoginError;
+    };
 
 /** Stable keys accepted by the server-owned Theme Color preference. */
 export const ACCENT_COLOR_PRESET_KEYS = [
@@ -1212,6 +1239,7 @@ export type RpcBridgeEvent =
 
 export type ServerMessage =
   | { type: "event"; payload: RpcBridgeEvent }
+  | { type: "authentication"; payload: BridgeAuthenticationState }
   | { type: "extension_ui_request"; payload: RpcExtensionUIRequest }
   | { type: "response"; payload: RpcResponse };
 
