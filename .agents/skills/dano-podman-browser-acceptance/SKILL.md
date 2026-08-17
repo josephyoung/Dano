@@ -17,7 +17,8 @@ Use the shipped container path and real browser behavior as the authority. Do no
 ## Prepare an isolated deployment
 
 1. Verify the Podman machine, current containers, occupied ports, and available disk before mutation.
-2. Create a dedicated run root with `mktemp -d` under `/private/tmp`. Place runtime data, generated certificates, Compose overrides, and temporary env files there. Never use the checkout as `DANO_RUNTIME_DIR` or workspace.
+2. Create a dedicated run root with `mktemp -d` under `/private/tmp`. Place generated certificates, Compose overrides, and temporary env files there. Never use the checkout as `DANO_RUNTIME_DIR` or workspace.
+   On macOS, do **not** mount a host path under `/private/tmp` or `/Users` as `DANO_RUNTIME_DIR` when Heimdall/bash acceptance is required. Podman exposes it through virtiofs, where Bubblewrap cannot safely remount a deep per-User workspace. Use a uniquely named Podman volume for runtime data, record its exact name, and remove only that volume during cleanup. Keep secrets and generated certificates in the run root as read-only mounts.
 3. Set secret-bearing files to mode `0600`. Do not print, commit, or place real provider addresses, Client Secrets, tokens, cookies, raw User IDs, or private payloads in issues, PRs, fixtures, command output, or browser evidence.
 4. Build the real image from the current source with a unique temporary tag. Start it through the repository Compose/deploy path, not an approximate `podman run` command.
 5. On macOS, if `podman ps` works but Compose reports a machine lock or missing machine, rerun the same Compose operation on the permitted/escalated path. Do not change Dano code to compensate for blocked Podman metadata.
@@ -36,17 +37,18 @@ Use the shipped container path and real browser behavior as the authority. Do no
 
 1. Run the repository deployment smoke check immediately after startup.
 2. Verify health, HTTPS, anonymous HttpOnly Cookie issuance, Client creation, SSE connection, command response, and disconnect through the deployed nginx origin.
-3. Inspect the running container facts relevant to the change: image/version, non-root UID, runtime mounts, writable runtime directory, trusted CA, configured endpoint origins, and enabled tools. Report presence or fingerprints, never secret values.
-4. Open the deployed origin in the Codex in-app Browser. Reuse or reclaim the existing tab when possible; close temporary tabs after use.
-5. For authentication, prove the complete user-visible chain:
+3. Inspect the running container facts relevant to the change: image/version, non-root UID, runtime mounts and filesystem type, writable runtime directory, trusted CA, configured endpoint origins, and enabled tools. Report presence or fingerprints, never secret values. On macOS, fail the sandbox gate before browser testing if the active per-User workspace resolves under a host virtiofs mount instead of the recorded Podman named volume.
+4. Before browser handoff, run the preflight in [Container sandbox diagnostics](references/container-sandbox-diagnostics.md) as the deployed app user against the **actual current per-User workspace**, not a legacy or empty workspace root. A healthy app does not prove that Heimdall/Bubblewrap can execute tools.
+5. Open the deployed origin in the Codex in-app Browser. Reuse or reclaim the existing tab when possible; close temporary tabs after use.
+6. For authentication, prove the complete user-visible chain:
    - select Login from the existing top-left menu;
    - reach the external login/authorization surface;
    - return to a clean Dano URL;
    - see the authenticated username in the same menu;
    - recover the pre-login/latest conversation and transcript;
    - log out and obtain a usable fresh Anonymous User.
-6. When deploy/runtime/Heimdall/upload behavior is in scope, additionally prove one plain chat answer, one image upload the model actually reads/describes, and one model-triggered `bash ls` result in the transcript.
-7. Capture a screenshot for user-visible acceptance. A navigation timeout is not page-failure proof; inspect final URL, visible state, tab ownership, SSE, and server logs before concluding.
+7. When deploy/runtime/Heimdall/upload behavior is in scope, additionally prove one plain chat answer, one image upload the model actually reads/describes, and one model-triggered `bash ls` result in the transcript.
+8. Capture a screenshot for user-visible acceptance. A navigation timeout is not page-failure proof; inspect final URL, visible state, tab ownership, SSE, and server logs before concluding.
 
 ## Diagnose without contaminating evidence
 
@@ -70,8 +72,9 @@ Otherwise:
 
 1. Stop the temporary relay/tunnel and Compose stack.
 2. Confirm no container references the temporary image.
-3. Remove only the run directory, temporary image/tag, and dangling layers created by this run. Keep reusable base images.
-4. Verify the checkout remains clean and the test ports are no longer listening.
+3. Remove the exact temporary runtime named volume recorded at startup after confirming no container references it. Never run a broad volume prune.
+4. Remove only the run directory, temporary image/tag, and dangling layers created by this run. Keep reusable base images.
+5. Verify the checkout remains clean and the test ports are no longer listening.
 
 ## Completion checklist
 
