@@ -445,6 +445,30 @@ describe("OAuth authentication over HTTP", () => {
     });
   });
 
+  it("preserves an explicitly allowed HTTP authorization origin", () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.example.test",
+      authorizationEndpoint:
+        "http://provider-browser.example.test:90/system/oauth2/authorize",
+      tokenEndpoint: "https://provider.example.test/token",
+      identityEndpoint: "https://provider.example.test/identity",
+      clientId: "fake-client",
+      clientSecret: "fake-client-secret",
+      scope: "profile",
+      allowInsecureAuthorizationEndpoint: true,
+    });
+
+    const authorizationUrl = provider.authorizationUrl({
+      state: "state-1",
+      redirectUri: "https://dano.example.test/api/auth/callback",
+    });
+
+    expect(authorizationUrl.origin).toBe(
+      "http://provider-browser.example.test:90",
+    );
+    expect(authorizationUrl.pathname).toBe("/system/oauth2/authorize");
+  });
+
   it("uses openid-client for the confidential Authorization Code exchange without PKCE", async () => {
     const identityFixture = JSON.parse(
       fs.readFileSync(
