@@ -1,6 +1,6 @@
 {
   "name": "@dano/dano",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "private": true,
   "description": "Dano P0 web LLM chat",
   "type": "module",
@@ -21,6 +21,9 @@
     "deploy:logs": "node scripts/deploy-compose.mjs logs",
     "deploy:ps": "node scripts/deploy-compose.mjs ps",
     "deploy:release": "node scripts/deploy-release.mjs",
+    "deploy:switch": "node scripts/deploy-switch.mjs switch",
+    "deploy:rollback": "node scripts/deploy-switch.mjs rollback",
+    "deploy:check-oauth-relay": "node scripts/check-oauth-relay-contract.mjs",
     "deploy:stop": "node scripts/deploy-compose.mjs stop",
     "deploy:up": "node scripts/deploy-compose.mjs up",
     "deploy:check-bash": "node scripts/check-bash-acceptance.mjs",
@@ -36,7 +39,7 @@
     "test:auth-real-provider-skill": "node scripts/check-provider-skill-release-gate.mjs",
     "test:auth-real-refresh:run": "pnpm -C apps/dano exec node --import jiti/register ../../scripts/run-real-refresh-acceptance.ts",
     "test:auth-real-users": "node scripts/check-real-user-isolation.mjs",
-    "test:auth-release": "DANO_NGINX_RUNTIME_TEST=1 vitest run apps/dano/src/__tests__/main.test.ts apps/dano/src/__tests__/oauth-login-http.test.ts apps/dano/src/__tests__/anonymous-user-http.test.ts apps/dano/src/__tests__/user-runtime-isolation-http.test.ts apps/dano/src/bridge/__tests__/credential-broker.test.ts apps/dano/src/bridge/__tests__/anonymous-user-cleanup.test.ts apps/dano/src/bridge/__tests__/detached-session.test.ts apps/dano/src/bridge/__tests__/heimdall-extension.test.ts apps/dano/web/src/layout/AppHeader.test.ts apps/dano/web/src/components/ReauthenticationDialog.test.ts apps/dano/web/src/composables/bridgeStore.prompt.test.ts apps/dano/src/bridge/__tests__/production-auth-deploy.test.ts && vitest run apps/dano/src/bridge/__tests__/deploy-compose.test.ts -t \"builds releases|stops a release|removes only fixed Demo\" && pnpm run test:auth-built-entrypoint && vitest run apps/dano/src/bridge/__tests__/bridge-rpc-adapter.test.ts -t \"projects provider_request results as JSON-safe transcript data\"",
+    "test:auth-release": "DANO_NGINX_RUNTIME_TEST=1 vitest run apps/dano/src/__tests__/main.test.ts apps/dano/src/__tests__/oauth-login-http.test.ts apps/dano/src/__tests__/anonymous-user-http.test.ts apps/dano/src/__tests__/user-runtime-isolation-http.test.ts apps/dano/src/bridge/__tests__/credential-broker.test.ts apps/dano/src/bridge/__tests__/anonymous-user-cleanup.test.ts apps/dano/src/bridge/__tests__/detached-session.test.ts apps/dano/src/bridge/__tests__/heimdall-extension.test.ts apps/dano/web/src/layout/AppHeader.test.ts apps/dano/web/src/components/ReauthenticationDialog.test.ts apps/dano/web/src/composables/bridgeStore.prompt.test.ts apps/dano/src/bridge/__tests__/production-auth-deploy.test.ts apps/dano/src/bridge/__tests__/deploy-switch.test.ts apps/dano/src/bridge/__tests__/oauth-relay-deploy.test.ts && vitest run apps/dano/src/bridge/__tests__/deploy-compose.test.ts -t \"builds releases|stops a release|removes only fixed Demo\" && pnpm run test:auth-built-entrypoint && vitest run apps/dano/src/bridge/__tests__/bridge-rpc-adapter.test.ts -t \"projects provider_request results as JSON-safe transcript data\"",
     "test:watch": "vitest"
   },
   "devDependencies": {

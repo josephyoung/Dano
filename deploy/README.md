@@ -91,18 +91,9 @@ On container startup, `deploy/docker-entrypoint.sh` creates:
 
 The entrypoint initializes those files from `deploy/runtime-defaults/` only when
 the runtime file is missing. It renders a missing `SYSTEM.md` with the effective
-product name. It never overwrites an existing runtime file, so the host
-persistence location may be edited directly. The release workflow explicitly
-synchronizes `SYSTEM.md` once per deployment, before starting the new app image;
-ordinary application and container restarts still preserve the current file.
-Manual Compose deployments can perform the same explicit synchronization with:
-
-```bash
-docker compose --env-file .env run --rm --no-deps app \
-  node ./deploy/render-system-prompt.mjs --replace \
-  /app/deploy/runtime-defaults/SYSTEM.md \
-  /opt/dano/runtime-data/.pi/agent/SYSTEM.md
-```
+product name. Neither release nor ordinary container startup overwrites an
+existing runtime file, so operator-managed `SYSTEM.md`, settings, and Heimdall
+configuration remain authoritative.
 
 The shared renderer uses the mature `atomically` package for complete
 temporary-file writes followed by atomic publication. Missing-file
@@ -195,6 +186,14 @@ DANO_ANONYMOUS_CLEANUP_INTERVAL_MS
 
 The absolute Login Session TTL must be greater than its idle TTL. Anonymous
 User data defaults to 24 hours idle with hourly cleanup.
+
+When the OAuth provider is relayed through the same nginx origin, set
+`DANO_OAUTH_RELAY_ORIGIN` to the provider origin and configure the public OAuth
+endpoints below `/admin-api/`. Nginx strips `/admin-api` before forwarding and
+rewrites provider `/assets/`, logo, and favicon references back into that
+isolated namespace. The origin is deployment configuration and is never
+hardcoded in the shipped nginx files. Run `pnpm run deploy:check-oauth-relay`
+before a switch.
 
 Release Build runs `node ./dist/server/main.js --validate-config` inside the
 new image with the container entrypoint bypassed before replacing containers.
@@ -682,9 +681,12 @@ manual `podman run` only receives the environment values explicitly passed with
 ## Production Server Run
 
 The release script builds from a temporary source checkout, copies only deploy
-inputs to `/opt/dano/deploy`, initializes or verifies the persisted Demo
-authentication pair, starts the prebuilt image, runs the smoke test, and removes
-`/tmp/dano-build-*` even when a step fails:
+inputs to `/opt/dano/deploy`, validates production configuration and the OAuth
+relay contract, then performs a two-phase switch: it recreates only `app` while
+the current nginx remains online, waits for the app healthcheck, and only then
+recreates `nginx`. It does not overwrite runtime `SYSTEM.md`, recreate adjacent
+services, or remove named volumes. The smoke test runs after the switch and
+`/tmp/dano-build-*` is removed even when a step fails:
 
 ```bash
 DANO_REPO_URL=git@github.com:zhengchengqiaobusiness-arch/Dano.git \
@@ -695,24 +697,29 @@ pnpm run deploy:release
 Dependency installs use `https://mirrors.cloud.tencent.com/npm/` by default.
 Set `NPM_REGISTRY` to use npmjs.org or a private registry for a release build.
 
-To start from an already-built local or pulled image in `/opt/dano/deploy`:
+To switch from an already-built local or pulled image after updating `.env` and
+the repository-managed deployment files in `/opt/dano/deploy`:
 
 ```bash
-cd /opt/dano/deploy
-DANO_IMAGE=dano-app:local docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.exposure.yml \
-  --env-file .env up -d --no-build
+cd /opt/dano/deploy && node scripts/deploy-switch.mjs switch
 ```
 
-`scripts/deploy-compose.mjs` uses the same `--no-build` path.
+For rollback, first restore the saved repository-managed deployment files and
+the previous `DANO_IMAGE` without displaying `.env`, then use the same order:
+
+```bash
+cd /opt/dano/deploy && node scripts/deploy-switch.mjs rollback
+```
+
+Both commands target only `app` and `nginx` with `--no-deps`; the rollback must
+not restore runtime data or user configuration.
 
 如果绕过 `scripts/deploy-release.mjs` 手动运行 Compose，需要确认持久化运行目录
 可被容器内 `node` 用户写入：
 
 ```bash
 mkdir -p /opt/dano/runtime-data
-chown -R 1000:1000 /opt/dano/runtime-data
+chown 1000:1000 /opt/dano/runtime-data
 ```
 
 全新 release 部署会自动处理这一步。

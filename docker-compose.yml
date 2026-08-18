@@ -98,6 +98,7 @@ services:
     restart: unless-stopped
     environment:
       NGINX_ENVSUBST_FILTER: ^DANO_
+      DANO_OAUTH_RELAY_ORIGIN: ${DANO_OAUTH_RELAY_ORIGIN:-http://127.0.0.1:9}
     depends_on:
       app:
         condition: service_healthy

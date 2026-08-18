@@ -31,7 +31,7 @@ Before touching local or remote state, read the current versions of:
 - `AGENTS.md` and `deploy/AGENTS.md`
 - `deploy/README.md`, root `package.json`, `Dockerfile`, `.env.example`, and `docker-compose.yml`
 - `deploy/docker-entrypoint.sh`, `deploy/runtime-defaults/*`, `deploy/compose/*`, and `deploy/nginx/*`
-- `scripts/deploy-release.mjs`, `scripts/deploy-compose.mjs`, `scripts/deploy-exposure.mjs`, `scripts/smoke-dano-deploy.mjs`, and relevant acceptance helpers
+- `scripts/deploy-release.mjs`, `scripts/deploy-switch.mjs`, `scripts/deploy-env-file.mjs`, `scripts/check-oauth-relay-contract.mjs`, `scripts/deploy-compose.mjs`, `scripts/deploy-exposure.mjs`, `scripts/smoke-dano-deploy.mjs`, and relevant acceptance helpers
 - this skill's `scripts/summarize-logs.mjs` and `scripts/summarize-compose-config.mjs` before production log or resolved-Compose diagnostics
 
 Apply this precedence rule: explicit host invariants in this skill identify the authorized production target and required directory boundaries; the current repository defines shipped build/runtime behavior; live read-only inventory defines environment-owned topology and configuration. Stop on an unexplained conflict instead of choosing one source silently. Prefer repository scripts when they preserve the inventoried production environment. Compare `deploy:release` staging behavior with the live layout before using it so environment-owned routing or adjacent-service configuration remains intact.
@@ -80,7 +80,7 @@ Checkpoint: stop if the locked inventory differs from the pre-lock inventory, th
 
 ## Phase 4: Fast-forward server source
 
-In `/root/Dano-source`, confirm a clean checkout, switch to `main`, run normal Git diagnostics, and then run `git pull --ff-only` on its tracked upstream. Confirm the resulting HEAD equals the target SHA.
+Use `cd /root/Dano-source && git ...` for every server Git command because the production Git 1.8.3.1 does not support Git's working-directory option. Confirm a clean checkout, switch to `main`, run normal Git diagnostics, and then run `cd /root/Dano-source && git pull --ff-only` on its tracked upstream. Confirm the resulting HEAD equals the target SHA.
 
 If pull fails or appears hung, inspect the exact command, current directory, branch/upstream, dirty state, remote configuration, ahead/behind counts, Git process state, and concrete connectivity error. Use non-TTY BatchMode SSH for diagnostics. Do not call it a server-network problem without evidence and do not retry blindly. Use an alternate transfer such as a verified Git bundle only after the root cause is established and the resulting commit can still be proven byte-for-byte equal to target.
 
@@ -108,6 +108,8 @@ Use the current repository deployment scripts where they safely match the invent
 
 Before changing anything, diff new Compose/nginx/deploy inputs against `/opt/dano/deploy`. Classify each file as repository-managed or environment-owned. Preserve custom `/web/`, TLS, secret, network, and adjacent-service wiring. Update only repository-managed Dano inputs and the allowlisted `DANO_IMAGE` entry; never print the rest of `.env`. Keep `.env` mode `600`.
 
+Use `scripts/deploy-env-file.mjs` for allowlisted `.env` changes. Updating a key must fold all duplicates to one entry; an empty optional value removes the key instead of writing `''`. Never print before/after env contents or values. Before switching, run `node scripts/check-oauth-relay-contract.mjs`; the relay upstream must come from `DANO_OAUTH_RELAY_ORIGIN`, `/admin-api/` must be stripped upstream, and `/assets/`, logo, and favicon references must remain under `/admin-api/` without a hardcoded provider domain.
+
 Resolve Compose as JSON entirely on-host and pipe it through `scripts/summarize-compose-config.mjs` with `bash -o pipefail`. After classifying repository-managed and environment-owned nginx inputs, set `DANO_NGINX_HASH_ROOTS_JSON` to the exact approved source and deploy nginx directories. If the filter runs in a container, mount only those approved roots at identical paths and read-only; never mount broad `/root`, `/opt`, deploy, or runtime trees for hashing. The filter resolves real paths, rejects sources outside the allowlist or through a symlink escape, and must report `rejectedHashSources=0`. Return only the filtered projection; never return full `docker compose config` output because it can contain resolved environment values. Require both the Compose producer and filter to exit zero. Validate the filtered model before `up`. Prove that:
 
 - app/nginx use the new immutable image/config;
@@ -121,7 +123,7 @@ Resolve Compose as JSON entirely on-host and pipe it through `scripts/summarize-
 
 Immediately before switching traffic, fetch and compare `upstream/main` with `target_sha`. Treat `target_sha` as the release locked by this run. If upstream advanced, restart manifest/build preparation for the new SHA by default; deploy the locked older SHA only with explicit user direction.
 
-Capture an RFC3339 UTC `switch_timestamp` immediately before Compose mutation. Run Compose `up -d --no-build` for only the Dano app/nginx services required by the current topology. Do not recreate or restart adjacent services. Wait for the app healthcheck and nginx dependency to settle. On failure, collect structured status and log counts scoped to `switch_timestamp`, then either correct the proven cause or execute the recorded rollback.
+Capture an RFC3339 UTC `switch_timestamp` immediately before Compose mutation. From `/opt/dano/deploy`, run `node scripts/deploy-switch.mjs switch`. The script must keep the current nginx online, recreate only `app` with `--no-deps`, wait for `app` to become healthy, and only then recreate `nginx`; do not replace this with an aggregate Compose `up`. Do not recreate or restart adjacent services. On failure, collect structured status and log counts scoped to `switch_timestamp`, then either correct the proven cause or execute the recorded rollback.
 
 Checkpoint: the running container image ID must equal the built image ID before acceptance begins.
 
@@ -177,7 +179,7 @@ End the run in exactly one reported state: `accepted`, `rolled back`, or `held p
 
 ## Phase 9: Cleanup and rollback discipline
 
-Keep the previous image until every acceptance item passes. If a release regression is confirmed, restore the previous `DANO_IMAGE` and saved repository-managed deploy config, run the minimal Compose recreate for Dano app/nginx, and repeat health checks. Do not roll back runtime data or user config unless a release-specific migration explicitly requires and documents it.
+Keep the previous image until every acceptance item passes. If a release regression is confirmed, restore the previous `DANO_IMAGE` and saved repository-managed deploy config without displaying `.env`, then run `cd /opt/dano/deploy && node scripts/deploy-switch.mjs rollback`. Rollback uses the same order as switching: keep current nginx online, recreate only the previous `app`, wait for it to become healthy, then recreate `nginx`. Repeat health checks. Do not roll back runtime data or user config unless a release-specific migration explicitly requires and documents it.
 
 After success:
 

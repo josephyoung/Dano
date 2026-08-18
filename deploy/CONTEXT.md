@@ -21,8 +21,16 @@ The Pi global agent directory selected by `PI_CODING_AGENT_DIR`, where Dano stor
 _Avoid_: Runtime Workspace, user home, project `.pi`
 
 **Runtime Defaults**:
-Source-controlled files used to initialize the Agent Config Directory only when the corresponding runtime file is missing. The system-prompt template is rendered with the deployment's effective product name. Ordinary starts preserve existing host-managed files; an explicit Release Build synchronizes the system prompt atomically before starting the new app image.
+Source-controlled files used to initialize the Agent Config Directory only when the corresponding runtime file is missing. The system-prompt template is rendered with the deployment's effective product name. Release Builds and ordinary starts preserve existing host-managed files.
 _Avoid_: Runtime state, generated config
+
+**Two-phase Switch**:
+The app/nginx release and rollback order that keeps the current nginx online, replaces only the app, waits for its healthcheck, and then replaces nginx. It preserves adjacent services, named volumes, Runtime Data, and Agent Config.
+_Avoid_: Aggregate Compose up, full-stack restart
+
+**OAuth Relay Namespace**:
+The `/admin-api/` browser namespace that nginx strips before forwarding to a deployment-configured OAuth provider origin. Provider asset, logo, and favicon references are rewritten back into the namespace.
+_Avoid_: Hardcoded provider origin, root `/assets/`
 
 **Agent Skill Seed**:
 Image-owned skills installed with the upstream `skills` CLI during the image build, then copied into Pi's persistent global skill directory without runtime downloads or `settings.skills` changes. Existing operator-managed skills with the same name take precedence.

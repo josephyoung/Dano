@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,6 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+// @ts-expect-error Deployment helpers intentionally remain plain Node ESM.
+import { updateEnvText } from "../../../../../scripts/deploy-env-file.mjs";
 
 const deployScript = new URL(
   "../../../../../scripts/deploy-compose.mjs",
@@ -24,6 +27,14 @@ const localContainerScript = new URL(
 ).pathname;
 const releaseScript = new URL(
   "../../../../../scripts/deploy-release.mjs",
+  import.meta.url,
+).pathname;
+const releaseSwitchScript = new URL(
+  "../../../../../scripts/deploy-switch.mjs",
+  import.meta.url,
+).pathname;
+const oauthRelayChecker = new URL(
+  "../../../../../scripts/check-oauth-relay-contract.mjs",
   import.meta.url,
 ).pathname;
 const bashAcceptanceScript = new URL(
@@ -55,6 +66,10 @@ const assistantIconFile = new URL(
   import.meta.url,
 ).pathname;
 const deployRoot = new URL("../../../../../deploy/", import.meta.url).pathname;
+const productionDeploySkill = new URL(
+  "../../../../../.agents/skills/dano-production-deploy/SKILL.md",
+  import.meta.url,
+).pathname;
 const dockerfile = new URL("../../../../../Dockerfile", import.meta.url).pathname;
 const dockerignoreFile = new URL(
   "../../../../../.dockerignore",
@@ -171,7 +186,10 @@ function runRelease(
   mkdirSync(join(fakeRepo, "scripts"), { recursive: true });
   mkdirSync(fakeBin);
   mkdirSync(buildParent);
-  writeFileSync(join(fakeRepo, "docker-compose.yml"), "services:\n  app:\n");
+  writeFileSync(
+    join(fakeRepo, "docker-compose.yml"),
+    "services:\n  app:\n  nginx:\n    environment:\n      DANO_OAUTH_RELAY_ORIGIN: ${DANO_OAUTH_RELAY_ORIGIN:-http://127.0.0.1:9}\n",
+  );
   writeFileSync(
     join(fakeRepo, "deploy/compose/http.yml"),
     "services:\n  nginx:\n    ports:\n      - 80:80\n",
@@ -190,24 +208,26 @@ function runRelease(
   );
   writeFileSync(
     join(fakeRepo, "deploy/nginx/http.conf.template"),
-    "server { listen 80; }\n",
+    'server { listen 80; set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}"; }\n',
   );
   writeFileSync(
     join(fakeRepo, "deploy/nginx/https.conf.template"),
-    "server { listen 443 ssl; }\n",
+    'server { listen 443 ssl; set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}"; }\n',
   );
   writeFileSync(
     join(fakeRepo, "deploy/nginx/both.conf.template"),
-    "server { listen 80; return 308 https://host; }\nserver { listen 443 ssl; }\n",
+    'server { listen 80; return 308 https://host; }\nserver { listen 443 ssl; set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}"; }\n',
   );
   writeFileSync(
     join(fakeRepo, "deploy/nginx/both-no-redirect-http.conf.template"),
-    "server { listen 80; }\nserver { listen 443 ssl; }\n",
+    'server { listen 80; set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}"; }\nserver { listen 443 ssl; set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}"; }\n',
   );
-  writeFileSync(
+  cpSync(
+    join(deployRoot, "nginx/shared/proxy-server.conf"),
     join(fakeRepo, "deploy/nginx/shared/proxy-server.conf"),
-    "location / {}\n",
   );
+  cpSync(releaseSwitchScript, join(fakeRepo, "scripts/deploy-switch.mjs"));
+  cpSync(oauthRelayChecker, join(fakeRepo, "scripts/check-oauth-relay-contract.mjs"));
   writeFileSync(
     join(fakeRepo, "scripts/smoke-dano-deploy.mjs"),
     `import { appendFileSync } from "node:fs";
@@ -229,6 +249,8 @@ if (args[0] === "clone") cpSync(process.env.DANO_FAKE_REPO, args.at(-1), { recur
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("ps") && args.includes("-q")) process.stdout.write("app-container-id\\n");
+if (args[0] === "inspect") process.stdout.write("healthy\\n");
 if (process.env.DANO_FAKE_SWITCH_MARKER && args.includes("up")) {
   appendFileSync(process.env.DANO_FAKE_SWITCH_MARKER, "up\\n");
 }
@@ -263,8 +285,9 @@ appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(["chown", ...process
     }
   }
 
-  execFileSync(process.execPath, [releaseScript], {
+  const output = execFileSync(process.execPath, [releaseScript], {
     cwd,
+    encoding: "utf8",
     env: {
       ...process.env,
       ...options.env,
@@ -303,6 +326,7 @@ appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(["chown", ...process
     nginxConf,
     tlsCertPath,
     tlsKeyPath,
+    output,
     logLines: readFileSync(logPath, "utf8").trim().split("\n"),
   };
 }
@@ -312,6 +336,30 @@ afterEach(() => {
 });
 
 describe("deploy compose wrapper", () => {
+  it("folds duplicate env keys and removes empty optional values", () => {
+    const updated = updateEnvText(
+      [
+        "DANO_IMAGE=old:first",
+        "DANO_OPERATOR_VALUE=preserve-me",
+        "DANO_IMAGE=old:second",
+        "DANO_TLS_CERT_PATH='/old/certificate.pem'",
+        "",
+      ].join("\n"),
+      {
+        DANO_IMAGE: "dano-app:new",
+        DANO_TLS_CERT_PATH: "",
+        DANO_TLS_KEY_PATH: undefined,
+      },
+    );
+
+    expect(updated.match(/^DANO_IMAGE=/gm)).toHaveLength(1);
+    expect(updated).toContain("DANO_IMAGE=dano-app:new");
+    expect(updated).toContain("DANO_OPERATOR_VALUE=preserve-me");
+    expect(updated).not.toContain("DANO_TLS_CERT_PATH");
+    expect(updated).not.toContain("DANO_TLS_KEY_PATH");
+    expect(updated).not.toContain("''");
+  });
+
   it("passes configurable Anonymous User cleanup timing into the app", () => {
     const compose = readFileSync(composeFile, "utf8");
     const example = readFileSync(envExampleFile, "utf8");
@@ -561,6 +609,13 @@ writeFileSync(process.env.DANO_LOCAL_CONTAINER_LOG, JSON.stringify({
     expect(compose).not.toContain("DANO_HTTPS_PORT");
     expect(compose).not.toContain("DANO_TLS_CERT_PATH");
     expect(compose).not.toContain("DANO_TLS_KEY_PATH");
+  });
+
+  it("uses old-Git-compatible production repository commands", () => {
+    const skill = readFileSync(productionDeploySkill, "utf8");
+    expect(skill).toContain("cd /root/Dano-source && git pull --ff-only");
+    expect(skill).not.toContain(`git ${"-C"}`);
+    expect(readFileSync(releaseScript, "utf8")).not.toContain('"-C"');
   });
 
   it("keeps the product name default only in Dano config", () => {
@@ -1235,7 +1290,6 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
     ]);
     expect(JSON.parse(logLines[1])).toEqual([
       "chown",
-      "-R",
       "1000:1000",
       runtimeDir,
     ]);
@@ -1256,7 +1310,7 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "./dist/server/main.js",
       "--validate-config",
     ]);
-    expect(JSON.parse(logLines[3])).toEqual([
+    expect(JSON.parse(logLines[4])).toEqual([
       "compose",
       "-f",
       "docker-compose.yml",
@@ -1264,17 +1318,11 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "docker-compose.exposure.yml",
       "--env-file",
       ".env",
-      "run",
-      "--rm",
-      "--no-deps",
+      "ps",
+      "-q",
       "app",
-      "node",
-      "./deploy/render-system-prompt.mjs",
-      "--replace",
-      "/app/deploy/runtime-defaults/SYSTEM.md",
-      "/opt/dano/runtime-data/.pi/agent/SYSTEM.md",
     ]);
-    expect(JSON.parse(logLines[4])).toEqual([
+    expect(JSON.parse(logLines[3])).toEqual([
       "compose",
       "-f",
       "docker-compose.yml",
@@ -1285,8 +1333,33 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "up",
       "-d",
       "--no-build",
+      "--no-deps",
+      "app",
     ]);
-    expect(logLines[5]).toBe("smoke");
+    expect(JSON.parse(logLines[5])).toEqual([
+      "inspect",
+      "--format",
+      "{{.State.Health.Status}}",
+      "app-container-id",
+    ]);
+    expect(JSON.parse(logLines[6])).toEqual([
+      "compose",
+      "-f",
+      "docker-compose.yml",
+      "-f",
+      "docker-compose.exposure.yml",
+      "--env-file",
+      ".env",
+      "up",
+      "-d",
+      "--no-build",
+      "--no-deps",
+      "nginx",
+    ]);
+    expect(logLines[7]).toBe("smoke");
+    expect(readFileSync(releaseScript, "utf8")).not.toContain(
+      "render-system-prompt.mjs",
+    );
   });
 
   it("stops a release before switching containers when configuration validation fails", () => {
@@ -1324,16 +1397,23 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       [
         "DANO_DEMO_JWT=legacy-token",
         "DANO_AUTH_JWT_SECRET=legacy-secret",
+        "DANO_IMAGE=old:first",
+        "DANO_IMAGE=old:second",
+        "DANO_TLS_CERT_PATH='/old/certificate.pem'",
         "DANO_OPERATOR_VALUE=preserve-me",
         "",
       ].join("\n"),
     );
 
-    runRelease({ deployDir });
+    const { output } = runRelease({ deployDir });
 
     const env = readFileSync(join(deployDir, ".env"), "utf8");
     expect(env).not.toMatch(/DANO_(?:DEMO_JWT|AUTH_JWT_SECRET)=/);
+    expect(env.match(/^DANO_IMAGE=/gm)).toHaveLength(1);
+    expect(env).not.toContain("DANO_TLS_CERT_PATH");
     expect(env).toContain("DANO_OPERATOR_VALUE=preserve-me");
+    expect(output).not.toContain("legacy-secret");
+    expect(output).not.toContain("legacy-token");
   });
 
   it("does not expose a production node-binary override", () => {

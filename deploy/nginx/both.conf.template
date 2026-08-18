@@ -8,5 +8,6 @@ server {
 
 server {
   listen 443 ssl;
+  set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}";
   include /etc/nginx/dano/tls-server.conf;
 }

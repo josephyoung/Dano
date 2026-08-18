@@ -21,6 +21,7 @@ const secretsDir = process.env.DANO_SECRETS_DIR || join(deployDir, ".secrets");
 const nginxConf =
   process.env.DANO_NGINX_CONF || join(deployDir, "nginx/default.conf.template");
 const nginxSharedDir = join(deployDir, "nginx/shared");
+const deployScriptsDir = join(deployDir, "scripts");
 const exposureComposeFile = join(deployDir, "docker-compose.exposure.yml");
 const envPath = join(deployDir, ".env");
 const exposure = resolveDeploymentExposure(process.env, { baseDir: deployDir });
@@ -83,7 +84,7 @@ function requireValue(name, value) {
 function prepareRuntimeDir() {
   mkdirSync(runtimeDir, { recursive: true });
   chmodSync(runtimeDir, 0o755);
-  run("chown", ["-R", runtimeOwner, runtimeDir]);
+  run("chown", [runtimeOwner, runtimeDir]);
 }
 
 try {
@@ -127,6 +128,15 @@ try {
   cpSync(join(buildDir, "deploy/nginx/shared"), nginxSharedDir, {
     recursive: true,
   });
+  mkdirSync(deployScriptsDir, { recursive: true });
+  cpSync(
+    join(buildDir, "scripts/deploy-switch.mjs"),
+    join(deployScriptsDir, "deploy-switch.mjs"),
+  );
+  cpSync(
+    join(buildDir, "scripts/check-oauth-relay-contract.mjs"),
+    join(deployScriptsDir, "check-oauth-relay-contract.mjs"),
+  );
   updateEnvFile(envPath, {
     DANO_IMAGE: image,
     DANO_RUNTIME_DIR: runtimeDir,
@@ -134,7 +144,8 @@ try {
     DANO_NGINX_CONF: nginxConf,
     DANO_NGINX_SHARED_DIR: nginxSharedDir,
     DANO_EXPOSURE_MODE: exposure.mode,
-    ...exposure.tlsEnv,
+    DANO_TLS_CERT_PATH: exposure.tlsEnv.DANO_TLS_CERT_PATH,
+    DANO_TLS_KEY_PATH: exposure.tlsEnv.DANO_TLS_KEY_PATH,
   });
 
   // Validate the exact production image and Compose environment before the
@@ -173,44 +184,13 @@ try {
   ]);
 
   run(
-    composeBin,
-    [
-      ...composeArgs,
-      "-f",
-      "docker-compose.yml",
-      "-f",
-      "docker-compose.exposure.yml",
-      "--env-file",
-      ".env",
-      "run",
-      "--rm",
-      "--no-deps",
-      "app",
-      "node",
-      "./deploy/render-system-prompt.mjs",
-      "--replace",
-      "/app/deploy/runtime-defaults/SYSTEM.md",
-      "/opt/dano/runtime-data/.pi/agent/SYSTEM.md",
-    ],
+    process.execPath,
+    [join(deployScriptsDir, "check-oauth-relay-contract.mjs")],
     { cwd: deployDir },
   );
-
-  run(
-    composeBin,
-    [
-      ...composeArgs,
-      "-f",
-      "docker-compose.yml",
-      "-f",
-      "docker-compose.exposure.yml",
-      "--env-file",
-      ".env",
-      "up",
-      "-d",
-      "--no-build",
-    ],
-    { cwd: deployDir },
-  );
+  run(process.execPath, [join(deployScriptsDir, "deploy-switch.mjs"), "switch"], {
+    cwd: deployDir,
+  });
   run(process.execPath, [join(buildDir, "scripts/smoke-dano-deploy.mjs")], {
     env: {
       ...process.env,

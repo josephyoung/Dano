@@ -22,14 +22,21 @@ export function updateEnvText(content, values) {
     return line.length > 0 || index < all.length - 1;
   });
   const seen = new Set();
-  const next = lines.map(line => {
+  const next = lines.flatMap(line => {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=/);
-    if (!match || !(match[1] in values)) return line;
-    seen.add(match[1]);
-    return `${match[1]}=${serializeEnvValue(values[match[1]])}`;
+    if (!match || !(match[1] in values)) return [line];
+    const name = match[1];
+    if (seen.has(name)) return [];
+    seen.add(name);
+    const value = values[name];
+    return isEmptyOptionalValue(value)
+      ? []
+      : [`${name}=${serializeEnvValue(value)}`];
   });
   for (const [name, value] of Object.entries(values)) {
-    if (!seen.has(name)) next.push(`${name}=${serializeEnvValue(value)}`);
+    if (!seen.has(name) && !isEmptyOptionalValue(value)) {
+      next.push(`${name}=${serializeEnvValue(value)}`);
+    }
   }
   return `${next.join("\n")}\n`;
 }
@@ -71,6 +78,10 @@ function parseEnvValue(value) {
     return value.slice(1, -1);
   }
   return value;
+}
+
+function isEmptyOptionalValue(value) {
+  return value === undefined || value === null || String(value).trim() === "";
 }
 
 function serializeEnvValue(value) {
