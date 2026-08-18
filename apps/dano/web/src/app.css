@@ -46,10 +46,6 @@
 	* {
 		@apply border-border outline-ring/50;
 	}
-	body {
-		background: var(--bg, #0d1117);
-		color: var(--text, #e6edf3);
-	}
 	.app-shell {
 		/* Ordinary stacking contexts, from lowest to highest. Native :modal is above all of them. */
 		--layer-focus-overlay: 20;

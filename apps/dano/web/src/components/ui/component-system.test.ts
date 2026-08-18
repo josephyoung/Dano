@@ -40,6 +40,21 @@ describe("shadcn-svelte component boundary", () => {
     expect(css).toContain("@theme inline");
   });
 
+  it("leaves the pre-mount document canvas unthemed until the app shell renders", () => {
+    const entryHtml = readFileSync(join(danoDirectory, "web/index.html"), "utf8");
+    const css = readFileSync(join(danoDirectory, "web/src/app.css"), "utf8");
+    const documentStyles = `${entryHtml}\n${css}`;
+    const bodyRules = [...documentStyles.matchAll(/\bbody\s*\{([^}]*)\}/g)];
+
+    for (const [, declarations] of bodyRules) {
+      expect(declarations).not.toMatch(/\b(?:background|color)\s*:/);
+    }
+
+    const app = readFileSync(join(danoDirectory, "web/src/App.svelte"), "utf8");
+    expect(app).toMatch(/\.app-shell\s*\{[^}]*background:\s*var\(--bg/s);
+    expect(app).toMatch(/\.app-shell\s*\{[^}]*color:\s*var\(--text/s);
+  });
+
   it("keeps auxiliary component roots outside the application layout track", () => {
     const app = readFileSync(join(danoDirectory, "web/src/App.svelte"), "utf8");
 
