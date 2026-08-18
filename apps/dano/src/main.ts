@@ -280,6 +280,17 @@ function readOAuthAuthentication(
   }
   const redirectUri = new URL(values.DANO_OAUTH_REDIRECT_URI!);
   const revocation = readOAuthRevocation(env, values.DANO_OAUTH_TOKEN_ENDPOINT!);
+  const allowInsecureAuthorizationEndpoint =
+    readOptionalBoolean(
+      env.DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT,
+      "DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT",
+    ) ?? false;
+  const authorizationEndpoint = new URL(
+    values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!,
+  );
+  const optedInHttpAuthorizationEndpoint =
+    authorizationEndpoint.protocol === "http:" &&
+    allowInsecureAuthorizationEndpoint;
   if (
     redirectUri.pathname !== "/api/auth/callback" ||
     redirectUri.search ||
@@ -291,7 +302,7 @@ function readOAuthAuthentication(
   }
   const providerUrls = [
     ["issuer", new URL(values.DANO_OAUTH_ISSUER!)],
-    ["authorization endpoint", new URL(values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!)],
+    ["authorization endpoint", authorizationEndpoint],
     ["token endpoint", new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!)],
     ["identity endpoint", new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!)],
     ["API origin", new URL(values.DANO_OAUTH_API_ORIGIN!)],
@@ -303,7 +314,10 @@ function readOAuthAuthentication(
     if (url.username || url.password || url.hash) {
       throw new Error(`OAuth ${name} is not trusted`);
     }
-    if (url.protocol !== "https:") {
+    const allowedProtocol =
+      url.protocol === "https:" ||
+      (name === "authorization endpoint" && optedInHttpAuthorizationEndpoint);
+    if (!allowedProtocol) {
       throw new Error(`OAuth ${name} must use HTTPS`);
     }
   }
@@ -366,9 +380,7 @@ function readOAuthAuthentication(
     providerApiOrigin: providerApiUrl.origin,
     provider: {
       issuer: new URL(values.DANO_OAUTH_ISSUER!).href,
-      authorizationEndpoint: new URL(
-        values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!,
-      ).href,
+      authorizationEndpoint: authorizationEndpoint.href,
       tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
       identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
       ...(revocation ? { revocation } : {}),
@@ -379,6 +391,9 @@ function readOAuthAuthentication(
       ...(requestHeaders ? { requestHeaders } : {}),
       ...(sendStateToTokenEndpoint !== undefined
         ? { sendStateToTokenEndpoint }
+        : {}),
+      ...(optedInHttpAuthorizationEndpoint
+        ? { allowInsecureAuthorizationEndpoint: true }
         : {}),
     },
     credentialEncryptionKey: {
@@ -504,10 +519,14 @@ export async function validateOAuthProviderTls(
       : []),
   ];
   const origins = [
-    ...new Map(endpoints.map(value => {
-      const url = new URL(value);
-      return [url.origin, new URL(url.origin)] as const;
-    })).values(),
+    ...new Map(
+      endpoints.flatMap(value => {
+        const url = new URL(value);
+        return url.protocol === "https:"
+          ? [[url.origin, new URL(url.origin)] as const]
+          : [];
+      }),
+    ).values(),
   ];
   try {
     await Promise.all(origins.map(origin => probe(origin)));

@@ -61,6 +61,8 @@ export interface OAuth2ProviderAdapterOptions {
   readonly requestHeaders?: Readonly<Record<string, string>>;
   readonly sendStateToTokenEndpoint?: boolean;
   readonly timeoutMs?: number;
+  /** Explicit deployment opt-in for a browser-facing HTTP authorization URL. */
+  readonly allowInsecureAuthorizationEndpoint?: boolean;
   /** Test-only escape hatch for a loopback fake provider. */
   readonly allowInsecureRequests?: boolean;
 }
@@ -95,7 +97,12 @@ export function createOAuth2ProviderAdapter(
     clientAuthentication,
   );
   configuration.timeout = timeoutMs / 1000;
-  if (options.allowInsecureRequests) oauth.allowInsecureRequests(configuration);
+  if (
+    options.allowInsecureAuthorizationEndpoint ||
+    options.allowInsecureRequests
+  ) {
+    oauth.allowInsecureRequests(configuration);
+  }
   const requestHeaders = new Headers(options.requestHeaders);
   configuration[oauth.customFetch] = async (url, init) => {
     const headers = new Headers(requestHeaders);

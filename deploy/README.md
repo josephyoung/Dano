@@ -146,6 +146,15 @@ DANO_OAUTH_CREDENTIAL_KEY
 DANO_OAUTH_CREDENTIAL_KEY_VERSION
 ```
 
+All server-to-server provider endpoints, the API origin, and the callback must
+use trusted HTTPS. If the provider exposes only its browser-facing authorization
+UI over HTTP, set its real URL in `DANO_OAUTH_AUTHORIZATION_ENDPOINT` and opt in
+with `DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT=true`. This exception does
+not relax transport validation for the issuer, token, identity, revocation, API,
+or callback endpoints. Do not replace the provider origin with a Dano same-origin
+proxy: provider redirects such as `/login` must continue to resolve against the
+provider's origin.
+
 `DANO_OAUTH_CLIENT_AUTH_METHOD` is optional and defaults to
 `client_secret_post`. Set it to `client_secret_basic` when the provider requires
 HTTP Basic client authentication at the token endpoint.

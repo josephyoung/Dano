@@ -32,6 +32,7 @@ describe("production authentication deployment contract", () => {
     const required = [
       "DANO_OAUTH_ISSUER",
       "DANO_OAUTH_AUTHORIZATION_ENDPOINT",
+      "DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT",
       "DANO_OAUTH_TOKEN_ENDPOINT",
       "DANO_OAUTH_IDENTITY_ENDPOINT",
       "DANO_OAUTH_API_ORIGIN",
@@ -51,6 +52,9 @@ describe("production authentication deployment contract", () => {
     for (const name of required) expect(compose).toContain(`${name}:`);
     expect(compose).toContain(
       "DANO_OAUTH_CLIENT_AUTH_METHOD: ${DANO_OAUTH_CLIENT_AUTH_METHOD:-client_secret_post}",
+    );
+    expect(compose).toContain(
+      "DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT: ${DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT:-false}",
     );
     expect(compose).not.toMatch(/DANO_(?:DEMO|AUTH_JWT|AUTH_COOKIE)/);
     expect(compose).not.toContain("demo-auth.conf.template");

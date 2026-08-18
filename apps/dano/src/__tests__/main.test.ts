@@ -476,6 +476,42 @@ describe("Dano main", () => {
     });
   });
 
+  it("requires an explicit opt-in for an HTTP authorization endpoint", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment({
+          DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+            "http://provider.example.test/authorize",
+        }),
+      }),
+    ).toThrow("OAuth authorization endpoint must use HTTPS");
+
+    const options = parseDanoServerOptions([], {
+      NODE_ENV: "production",
+      ...oauthEnvironment({
+        DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+          "http://provider.example.test/authorize",
+        DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT: "true",
+      }),
+    });
+
+    expect(options.oauthAuthentication?.provider).toMatchObject({
+      authorizationEndpoint: "http://provider.example.test/authorize",
+      allowInsecureAuthorizationEndpoint: true,
+      tokenEndpoint: "https://provider.example.test/token",
+      identityEndpoint: "https://provider.example.test/identity",
+    });
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT: "sometimes",
+      }),
+    ).toThrow(
+      "DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT must be true or false",
+    );
+  });
+
   it("rejects a partially configured OAuth client", () => {
     expect(() =>
       parseDanoServerOptions([], {
@@ -584,6 +620,9 @@ describe("Dano main", () => {
     const configuration = parseDanoServerOptions(["--validate-config"], {
       NODE_ENV: "production",
       ...oauthEnvironment({
+        DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+          "http://provider-browser.example.test/authorize",
+        DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT: "true",
         DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
         DANO_OAUTH_REVOCATION_ENDPOINT:
           "https://provider-revoke.example.test/revoke",
@@ -627,6 +666,10 @@ describe("Dano main", () => {
 
   it("rejects untrusted production OAuth transport and callback configuration", () => {
     for (const override of [
+      {
+        DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+          "http://provider.example.test/authorize",
+      },
       { DANO_OAUTH_TOKEN_ENDPOINT: "http://provider.example.test/token" },
       { DANO_OAUTH_API_ORIGIN: "http://provider.example.test" },
       { DANO_OAUTH_REDIRECT_URI: "http://dano.example.test/api/auth/callback" },
