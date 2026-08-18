@@ -357,6 +357,9 @@ function readOAuthAuthentication(
     env.DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT,
     "DANO_OAUTH_SEND_STATE_TO_TOKEN_ENDPOINT",
   );
+  const clientAuthMethod = readOAuthClientAuthMethod(
+    env.DANO_OAUTH_CLIENT_AUTH_METHOD,
+  );
   return {
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
@@ -371,6 +374,7 @@ function readOAuthAuthentication(
       ...(revocation ? { revocation } : {}),
       clientId: values.DANO_OAUTH_CLIENT_ID!,
       clientSecret: values.DANO_OAUTH_CLIENT_SECRET!,
+      ...(clientAuthMethod ? { clientAuthMethod } : {}),
       scope: values.DANO_OAUTH_SCOPE!,
       ...(requestHeaders ? { requestHeaders } : {}),
       ...(sendStateToTokenEndpoint !== undefined
@@ -383,6 +387,17 @@ function readOAuthAuthentication(
     },
     session,
   };
+}
+
+function readOAuthClientAuthMethod(
+  value: string | undefined,
+): OAuth2ProviderAdapterOptions["clientAuthMethod"] {
+  const method = value?.trim();
+  if (!method) return undefined;
+  if (method === "client_secret_post" || method === "client_secret_basic") {
+    return method;
+  }
+  throw new Error("OAuth client authentication method is unsupported");
 }
 
 function readOAuthRevocation(

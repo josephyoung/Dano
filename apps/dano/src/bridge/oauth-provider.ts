@@ -56,6 +56,7 @@ export interface OAuth2ProviderAdapterOptions {
     | { readonly transport: "delete-query-basic"; readonly endpoint?: string };
   readonly clientId: string;
   readonly clientSecret: string;
+  readonly clientAuthMethod?: "client_secret_post" | "client_secret_basic";
   readonly scope: string;
   readonly requestHeaders?: Readonly<Record<string, string>>;
   readonly sendStateToTokenEndpoint?: boolean;
@@ -75,6 +76,10 @@ export function createOAuth2ProviderAdapter(
   const tokenExchangeState = new AsyncLocalStorage<string>();
   const clientId = required(options.clientId, "OAuth client ID");
   const clientSecret = required(options.clientSecret, "OAuth client secret");
+  const clientAuthentication =
+    options.clientAuthMethod === "client_secret_basic"
+      ? oauth.ClientSecretBasic(clientSecret)
+      : oauth.ClientSecretPost(clientSecret);
   const serverMetadata = {
     issuer: new URL(options.issuer).href,
     authorization_endpoint: new URL(options.authorizationEndpoint).href,
@@ -87,7 +92,7 @@ export function createOAuth2ProviderAdapter(
     serverMetadata,
     clientId,
     { client_secret: clientSecret },
-    oauth.ClientSecretPost(clientSecret),
+    clientAuthentication,
   );
   configuration.timeout = timeoutMs / 1000;
   if (options.allowInsecureRequests) oauth.allowInsecureRequests(configuration);
