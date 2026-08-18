@@ -430,6 +430,7 @@ describe("Dano main", () => {
       DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
       DANO_OAUTH_CLIENT_ID: "dano-client",
       DANO_OAUTH_CLIENT_SECRET: "client-secret",
+      DANO_OAUTH_CLIENT_AUTH_METHOD: "client_secret_basic",
       DANO_OAUTH_SCOPE: "profile offline_access",
       DANO_OAUTH_PROVIDER_HEADERS_JSON:
         '{"X-Provider-Context":"fixed-context"}',
@@ -458,6 +459,7 @@ describe("Dano main", () => {
         },
         clientId: "dano-client",
         clientSecret: "client-secret",
+        clientAuthMethod: "client_secret_basic",
         scope: "profile offline_access",
         requestHeaders: { "x-provider-context": "fixed-context" },
         sendStateToTokenEndpoint: true,
@@ -480,6 +482,21 @@ describe("Dano main", () => {
         DANO_OAUTH_CLIENT_ID: "only-one-value",
       }),
     ).toThrow("OAuth configuration is incomplete");
+  });
+
+  it("validates the OAuth client authentication method", () => {
+    expect(
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_CLIENT_AUTH_METHOD: " client_secret_post ",
+      }).oauthAuthentication?.provider.clientAuthMethod,
+    ).toBe("client_secret_post");
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_CLIENT_AUTH_METHOD: "private_key_jwt",
+      }),
+    ).toThrow("OAuth client authentication method is unsupported");
   });
 
   it("rejects malformed provider request headers", () => {

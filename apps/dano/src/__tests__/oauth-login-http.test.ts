@@ -516,6 +516,44 @@ describe("OAuth authentication over HTTP", () => {
     });
   });
 
+  it("supports HTTP Basic client authentication for the token endpoint", async () => {
+    const fakeProvider = await startFakeProvider();
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "basicclient",
+      clientSecret: "basicsecret",
+      clientAuthMethod: "client_secret_basic",
+      scope: "user.read",
+      allowInsecureRequests: true,
+    });
+    const { origin } = await startOAuthServer(provider);
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fake-code&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.status).toBe(303);
+    expect(fakeProvider.tokenRequests).toHaveLength(1);
+    expect(fakeProvider.tokenRequests[0]?.has("client_id")).toBe(false);
+    expect(fakeProvider.tokenRequests[0]?.has("client_secret")).toBe(false);
+    expect(fakeProvider.tokenRequestHeaders[0]?.authorization).toBe(
+      `Basic ${Buffer.from("basicclient:basicsecret").toString("base64")}`,
+    );
+  });
+
   it("normalizes a provider data envelope inside the adapter boundary", async () => {
     const fakeProvider = await startFakeProvider({
       tokenResponse: {

@@ -146,6 +146,10 @@ DANO_OAUTH_CREDENTIAL_KEY
 DANO_OAUTH_CREDENTIAL_KEY_VERSION
 ```
 
+`DANO_OAUTH_CLIENT_AUTH_METHOD` is optional and defaults to
+`client_secret_post`. Set it to `client_secret_basic` when the provider requires
+HTTP Basic client authentication at the token endpoint.
+
 If the provider requires fixed transport headers, configure them as a JSON
 object in `DANO_OAUTH_PROVIDER_HEADERS_JSON`. Dano applies them only inside the
 server-side OAuth provider adapter; protocol-generated headers take precedence.
