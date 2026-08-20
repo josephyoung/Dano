@@ -189,11 +189,12 @@ User data defaults to 24 hours idle with hourly cleanup.
 
 When the OAuth provider is relayed through the same nginx origin, set
 `DANO_OAUTH_RELAY_ORIGIN` to the provider origin and configure the public OAuth
-endpoints below `/admin-api/`. Nginx strips `/admin-api` before forwarding and
+endpoints below `/admin-api/`. Nginx preserves `/admin-api/` when forwarding and
 rewrites provider `/assets/`, logo, and favicon references back into that
 isolated namespace. The origin is deployment configuration and is never
-hardcoded in the shipped nginx files. Run `pnpm run deploy:check-oauth-relay`
-before a switch.
+hardcoded in the shipped nginx files. The contract checker asks nginx to parse
+the rendered configuration before inspecting active directives. Run
+`pnpm run deploy:check-oauth-relay` before a switch.
 
 Release Build runs `node ./dist/server/main.js --validate-config` inside the
 new image with the container entrypoint bypassed before replacing containers.

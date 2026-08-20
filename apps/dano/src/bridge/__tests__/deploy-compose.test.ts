@@ -37,6 +37,10 @@ const oauthRelayChecker = new URL(
   "../../../../../scripts/check-oauth-relay-contract.mjs",
   import.meta.url,
 ).pathname;
+const deployEnvScript = new URL(
+  "../../../../../scripts/deploy-env-file.mjs",
+  import.meta.url,
+).pathname;
 const bashAcceptanceScript = new URL(
   "../../../../../scripts/check-bash-acceptance.mjs",
   import.meta.url,
@@ -188,7 +192,7 @@ function runRelease(
   mkdirSync(buildParent);
   writeFileSync(
     join(fakeRepo, "docker-compose.yml"),
-    "services:\n  app:\n  nginx:\n    environment:\n      DANO_OAUTH_RELAY_ORIGIN: ${DANO_OAUTH_RELAY_ORIGIN:-http://127.0.0.1:9}\n",
+    "services:\n  app:\n  nginx:\n    environment:\n      DANO_OAUTH_RELAY_ORIGIN: ${DANO_OAUTH_RELAY_ORIGIN:-}\n",
   );
   writeFileSync(
     join(fakeRepo, "deploy/compose/http.yml"),
@@ -228,6 +232,7 @@ function runRelease(
   );
   cpSync(releaseSwitchScript, join(fakeRepo, "scripts/deploy-switch.mjs"));
   cpSync(oauthRelayChecker, join(fakeRepo, "scripts/check-oauth-relay-contract.mjs"));
+  cpSync(deployEnvScript, join(fakeRepo, "scripts/deploy-env-file.mjs"));
   writeFileSync(
     join(fakeRepo, "scripts/smoke-dano-deploy.mjs"),
     `import { appendFileSync } from "node:fs";
@@ -246,11 +251,15 @@ if (args[0] === "clone") cpSync(process.env.DANO_FAKE_REPO, args.at(-1), { recur
   writeFileSync(
     join(fakeBin, "compose"),
     `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(args) + "\\n");
 if (args.includes("ps") && args.includes("-q")) process.stdout.write("app-container-id\\n");
 if (args[0] === "inspect") process.stdout.write("healthy\\n");
+if (args.includes("-T")) {
+  const proxy = readFileSync("nginx/shared/proxy-server.conf", "utf8");
+  process.stdout.write('server {\\n  set $dano_oauth_relay_origin "' + process.env.DANO_OAUTH_RELAY_ORIGIN + '";\\n' + proxy + '\\n}\\n');
+}
 if (process.env.DANO_FAKE_SWITCH_MARKER && args.includes("up")) {
   appendFileSync(process.env.DANO_FAKE_SWITCH_MARKER, "up\\n");
 }
@@ -1310,7 +1319,22 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "./dist/server/main.js",
       "--validate-config",
     ]);
-    expect(JSON.parse(logLines[4])).toEqual([
+    expect(JSON.parse(logLines[3])).toEqual([
+      "compose",
+      "-f",
+      "docker-compose.yml",
+      "-f",
+      "docker-compose.exposure.yml",
+      "--env-file",
+      ".env",
+      "run",
+      "--rm",
+      "--no-deps",
+      "nginx",
+      "nginx",
+      "-T",
+    ]);
+    expect(JSON.parse(logLines[5])).toEqual([
       "compose",
       "-f",
       "docker-compose.yml",
@@ -1322,7 +1346,7 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "-q",
       "app",
     ]);
-    expect(JSON.parse(logLines[3])).toEqual([
+    expect(JSON.parse(logLines[4])).toEqual([
       "compose",
       "-f",
       "docker-compose.yml",
@@ -1336,13 +1360,13 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "--no-deps",
       "app",
     ]);
-    expect(JSON.parse(logLines[5])).toEqual([
+    expect(JSON.parse(logLines[6])).toEqual([
       "inspect",
       "--format",
       "{{.State.Health.Status}}",
       "app-container-id",
     ]);
-    expect(JSON.parse(logLines[6])).toEqual([
+    expect(JSON.parse(logLines[7])).toEqual([
       "compose",
       "-f",
       "docker-compose.yml",
@@ -1356,7 +1380,7 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "--no-deps",
       "nginx",
     ]);
-    expect(logLines[7]).toBe("smoke");
+    expect(logLines[8]).toBe("smoke");
     expect(readFileSync(releaseScript, "utf8")).not.toContain(
       "render-system-prompt.mjs",
     );

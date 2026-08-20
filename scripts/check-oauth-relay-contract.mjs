@@ -1,66 +1,123 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { readEnvValues } from "./deploy-env-file.mjs";
 
-const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const deployRoot = process.env.DANO_DEPLOY_DIR || process.cwd();
-const deployedCompose = join(deployRoot, "docker-compose.yml");
-const composePath = existsSync(deployedCompose)
-  ? deployedCompose
-  : join(sourceRoot, "docker-compose.yml");
-const sharedDir =
-  process.env.DANO_NGINX_SHARED_DIR ||
-  (existsSync(join(deployRoot, "nginx/shared"))
-    ? join(deployRoot, "nginx/shared")
-    : join(sourceRoot, "deploy/nginx/shared"));
-const configuredTemplate =
-  process.env.DANO_NGINX_CONF || join(deployRoot, "nginx/default.conf.template");
-const templatePaths = existsSync(configuredTemplate)
-  ? [configuredTemplate]
-  : ["http", "https", "both", "both-no-redirect-http"].map(mode =>
-      join(sourceRoot, `deploy/nginx/${mode}.conf.template`),
-    );
+const composeBin = process.env.DANO_COMPOSE || "docker";
+const exposureFile = existsSync(join(deployRoot, "docker-compose.exposure.yml"))
+  ? "docker-compose.exposure.yml"
+  : `deploy/compose/${process.env.DANO_EXPOSURE_MODE?.trim() || "http"}.yml`;
+const envFileArgs = existsSync(join(deployRoot, ".env"))
+  ? ["--env-file", ".env"]
+  : [];
+const probeOrigin = "https://oauth-relay-contract.invalid";
+const fileEnv = envFileArgs.length
+  ? readEnvValues(readFileSync(join(deployRoot, ".env"), "utf8"))
+  : new Map();
+const envValue = name => process.env[name] ?? fileEnv.get(name);
+const relayRequired = [
+  "DANO_OAUTH_AUTHORIZATION_ENDPOINT",
+  "DANO_OAUTH_TOKEN_ENDPOINT",
+  "DANO_OAUTH_IDENTITY_ENDPOINT",
+].some(name => hasRelayPath(envValue(name)));
+if (relayRequired && !envValue("DANO_OAUTH_RELAY_ORIGIN")?.trim()) {
+  fail("DANO_OAUTH_RELAY_ORIGIN is required for /admin-api/ OAuth endpoints");
+}
 
-const compose = readFileSync(composePath, "utf8");
-const proxy = readFileSync(join(sharedDir, "proxy-server.conf"), "utf8");
-const relayStart = proxy.indexOf("location ^~ /admin-api/");
-const relayEnd = proxy.indexOf("\n}\n", relayStart);
-if (relayStart < 0 || relayEnd < 0) fail("missing /admin-api/ relay location");
-const relay = proxy.slice(relayStart, relayEnd + 2);
-
-requireText(
-  compose,
-  "DANO_OAUTH_RELAY_ORIGIN: ${DANO_OAUTH_RELAY_ORIGIN:-http://127.0.0.1:9}",
-  "Compose relay origin",
+// Let nginx parse the rendered configuration before inspecting active
+// directives. This keeps comments and source formatting out of the contract.
+const parsed = spawnSync(
+  composeBin,
+  [
+    "compose",
+    "-f",
+    "docker-compose.yml",
+    "-f",
+    exposureFile,
+    ...envFileArgs,
+    "run",
+    "--rm",
+    "--no-deps",
+    "nginx",
+    "nginx",
+    "-T",
+  ],
+  {
+    cwd: deployRoot,
+    encoding: "utf8",
+    env: { ...process.env, DANO_OAUTH_RELAY_ORIGIN: probeOrigin },
+  },
 );
-for (const path of templatePaths) {
+if (parsed.error || parsed.status !== 0) {
+  fail("nginx rejected the rendered relay configuration");
+}
+
+const config = stripComments(parsed.stdout);
+requireText(
+  normalizeWhitespace(config),
+  `set $dano_oauth_relay_origin "${probeOrigin}";`,
+  "domain-independent relay origin injection",
+);
+const relayBlocks = [
+  ...config.matchAll(/location\s+\^~\s+\/admin-api\/\s*\{([^{}]*)\}/gs),
+].map(match => match[1]);
+if (relayBlocks.length === 0) fail("missing /admin-api/ relay location");
+
+for (const relay of relayBlocks) {
+  const normalized = normalizeWhitespace(relay);
+  if (/\brewrite\b/.test(relay)) {
+    fail("/admin-api/ relay must preserve its upstream path");
+  }
+  requireText(normalized, "proxy_pass $dano_oauth_relay_origin;", "relay upstream");
   requireText(
-    readFileSync(path, "utf8"),
-    'set $dano_oauth_relay_origin "${DANO_OAUTH_RELAY_ORIGIN}";',
-    "nginx relay origin injection",
+    normalized,
+    'proxy_set_header Accept-Encoding "";',
+    "uncompressed rewriting",
   );
-}
-requireText(relay, "rewrite ^/admin-api(/.*)$ $1 break;", "prefix stripping");
-requireText(relay, "proxy_pass $dano_oauth_relay_origin;", "relay upstream");
-requireText(
-  relay,
-  'proxy_set_header Accept-Encoding "";',
-  "uncompressed rewriting",
-);
-requireText(relay, "sub_filter_once off;", "dynamic resource rewriting");
-for (const marker of [
-  "sub_filter '/assets/' '/admin-api/assets/';",
-  "/admin-api/logo",
-  "/admin-api/favicon",
-]) {
-  requireText(relay, marker, "isolated resource rewriting");
-}
-if (/https?:\/\//.test(relay)) {
-  fail("relay location must not hardcode an OAuth provider origin");
+  requireText(normalized, "sub_filter_once off;", "dynamic resource rewriting");
+  for (const marker of [
+    "sub_filter '/assets/' '/admin-api/assets/';",
+    "sub_filter '\"/logo' '\"/admin-api/logo';",
+    `sub_filter "'/logo" "'/admin-api/logo";`,
+    "sub_filter '(/logo' '(/admin-api/logo';",
+    "sub_filter '`/logo' '`/admin-api/logo';",
+    "sub_filter '=/logo' '=/admin-api/logo';",
+    "sub_filter '\"/favicon' '\"/admin-api/favicon';",
+    `sub_filter "'/favicon" "'/admin-api/favicon";`,
+    "sub_filter '(/favicon' '(/admin-api/favicon';",
+    "sub_filter '`/favicon' '`/admin-api/favicon';",
+    "sub_filter '=/favicon' '=/admin-api/favicon';",
+  ]) {
+    requireText(normalized, marker, "isolated resource rewriting");
+  }
+  if (/proxy_pass\s+https?:\/\//.test(relay)) {
+    fail("relay location must not hardcode an OAuth provider origin");
+  }
 }
 
 console.log("[oauth-relay-contract] valid");
+
+function stripComments(content) {
+  return content
+    .split("\n")
+    .map(line => line.replace(/#.*/, ""))
+    .join("\n");
+}
+
+function hasRelayPath(value) {
+  if (!value?.trim()) return false;
+  try {
+    return new URL(value).pathname.startsWith("/admin-api/");
+  } catch {
+    return false;
+  }
+}
+
+function normalizeWhitespace(content) {
+  return content.replace(/\s+/g, " ").trim();
+}
 
 function requireText(content, marker, contract) {
   if (!content.includes(marker)) fail(`missing ${contract}`);

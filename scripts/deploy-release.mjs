@@ -137,6 +137,10 @@ try {
     join(buildDir, "scripts/check-oauth-relay-contract.mjs"),
     join(deployScriptsDir, "check-oauth-relay-contract.mjs"),
   );
+  cpSync(
+    join(buildDir, "scripts/deploy-env-file.mjs"),
+    join(deployScriptsDir, "deploy-env-file.mjs"),
+  );
   updateEnvFile(envPath, {
     DANO_IMAGE: image,
     DANO_RUNTIME_DIR: runtimeDir,

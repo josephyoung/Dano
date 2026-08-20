@@ -29,7 +29,7 @@ The app/nginx release and rollback order that keeps the current nginx online, re
 _Avoid_: Aggregate Compose up, full-stack restart
 
 **OAuth Relay Namespace**:
-The `/admin-api/` browser namespace that nginx strips before forwarding to a deployment-configured OAuth provider origin. Provider asset, logo, and favicon references are rewritten back into the namespace.
+The `/admin-api/` browser and upstream namespace forwarded unchanged to a deployment-configured OAuth provider origin. Provider asset, logo, and favicon references are rewritten back into the namespace.
 _Avoid_: Hardcoded provider origin, root `/assets/`
 
 **Agent Skill Seed**:
