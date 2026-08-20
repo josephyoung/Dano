@@ -512,42 +512,42 @@ describe("Dano main", () => {
     );
   });
 
-  it("requires an explicit opt-in for HTTP server endpoints on a trusted relay", () => {
-    const insecureRelay = {
+  it("requires an explicit opt-in for plaintext HTTP server endpoints", () => {
+    const insecureProvider = {
       DANO_OAUTH_ISSUER: "http://provider.example.test",
-      DANO_OAUTH_TOKEN_ENDPOINT: "http://relay.internal/token",
-      DANO_OAUTH_IDENTITY_ENDPOINT: "http://relay.internal/identity",
-      DANO_OAUTH_API_ORIGIN: "http://relay.internal",
+      DANO_OAUTH_TOKEN_ENDPOINT: "http://provider.example.test/token",
+      DANO_OAUTH_IDENTITY_ENDPOINT: "http://provider.example.test/identity",
+      DANO_OAUTH_API_ORIGIN: "http://provider.example.test",
       DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
-      DANO_OAUTH_REVOCATION_ENDPOINT: "http://relay.internal/revoke",
+      DANO_OAUTH_REVOCATION_ENDPOINT: "http://provider.example.test/revoke",
     };
 
     expect(() =>
       parseDanoServerOptions([], {
         NODE_ENV: "production",
-        ...oauthEnvironment(insecureRelay),
+        ...oauthEnvironment(insecureProvider),
       }),
     ).toThrow("OAuth issuer must use HTTPS");
 
     const options = parseDanoServerOptions([], {
       NODE_ENV: "production",
       ...oauthEnvironment({
-        ...insecureRelay,
+        ...insecureProvider,
         DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS: "true",
       }),
     });
 
     expect(options.oauthAuthentication).toMatchObject({
-      providerApiOrigin: "http://relay.internal",
+      providerApiOrigin: "http://provider.example.test",
       allowInsecureProviderApiOrigin: true,
       provider: {
         issuer: "http://provider.example.test/",
-        tokenEndpoint: "http://relay.internal/token",
-        identityEndpoint: "http://relay.internal/identity",
+        tokenEndpoint: "http://provider.example.test/token",
+        identityEndpoint: "http://provider.example.test/identity",
         allowInsecureProviderEndpoints: true,
         revocation: {
           transport: "rfc7009",
-          endpoint: "http://relay.internal/revoke",
+          endpoint: "http://provider.example.test/revoke",
         },
       },
     });
@@ -563,7 +563,7 @@ describe("Dano main", () => {
       parseDanoServerOptions([], {
         NODE_ENV: "production",
         ...oauthEnvironment({
-          ...insecureRelay,
+          ...insecureProvider,
           DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS: "true",
           DANO_OAUTH_REDIRECT_URI:
             "http://dano.example.test/api/auth/callback",

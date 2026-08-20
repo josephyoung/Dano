@@ -155,13 +155,12 @@ or callback endpoints. Do not replace the provider origin with a Dano same-origi
 proxy: provider redirects such as `/login` must continue to resolve against the
 provider's origin.
 
-When an operator-managed relay is available only on a trusted host-local or
-container network, keep the provider's issuer and set token, identity,
-revocation, and API URLs to that HTTP relay, then explicitly opt in with
-`DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS=true`. This exception never applies
-to the Dano callback, which remains trusted HTTPS. Do not use the exception for
-an Internet-facing provider endpoint, publish the relay through nginx, or route
-the browser authorization UI through it.
+If the provider exposes its issuer, token, identity, revocation, or API endpoint
+only over HTTP, set each endpoint to the provider's real URL and explicitly opt
+in with `DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS=true`. This accepts
+plaintext server-to-provider transport; it does not add a proxy, relay, or
+alternate network path. The Dano callback remains trusted HTTPS, and the browser
+authorization UI must continue to use the provider's real origin.
 
 `DANO_OAUTH_CLIENT_AUTH_METHOD` is optional and defaults to
 `client_secret_post`. Set it to `client_secret_basic` when the provider requires
