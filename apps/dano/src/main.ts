@@ -431,7 +431,11 @@ function readOAuthClientAuthMethod(
 ): OAuth2ProviderAdapterOptions["clientAuthMethod"] {
   const method = value?.trim();
   if (!method) return undefined;
-  if (method === "client_secret_post" || method === "client_secret_basic") {
+  if (
+    method === "client_secret_post" ||
+    method === "client_secret_basic" ||
+    method === "client_secret_basic_raw"
+  ) {
     return method;
   }
   throw new Error("OAuth client authentication method is unsupported");
