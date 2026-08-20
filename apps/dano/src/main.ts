@@ -107,6 +107,7 @@ export interface DanoServerOptions {
     appOrigin: string;
     redirectUri: string;
     providerApiOrigin: string;
+    allowInsecureProviderApiOrigin?: boolean;
     provider: Omit<
       OAuth2ProviderAdapterOptions,
       "allowInsecureRequests" | "timeoutMs"
@@ -285,6 +286,11 @@ function readOAuthAuthentication(
       env.DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT,
       "DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT",
     ) ?? false;
+  const allowInsecureServerEndpoints =
+    readOptionalBoolean(
+      env.DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS,
+      "DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS",
+    ) ?? false;
   const authorizationEndpoint = new URL(
     values.DANO_OAUTH_AUTHORIZATION_ENDPOINT!,
   );
@@ -310,13 +316,23 @@ function readOAuthAuthentication(
       ? [["revocation endpoint", new URL(revocation.endpoint)] as const]
       : []),
   ] as const;
+  const optedInHttpServerEndpoints = providerUrls.some(
+    ([name, url]) =>
+      name !== "authorization endpoint" &&
+      url.protocol === "http:" &&
+      allowInsecureServerEndpoints,
+  );
   for (const [name, url] of providerUrls) {
     if (url.username || url.password || url.hash) {
       throw new Error(`OAuth ${name} is not trusted`);
     }
     const allowedProtocol =
       url.protocol === "https:" ||
-      (name === "authorization endpoint" && optedInHttpAuthorizationEndpoint);
+      (url.protocol === "http:" &&
+        ((name === "authorization endpoint" &&
+          optedInHttpAuthorizationEndpoint) ||
+          (name !== "authorization endpoint" &&
+            allowInsecureServerEndpoints)));
     if (!allowedProtocol) {
       throw new Error(`OAuth ${name} must use HTTPS`);
     }
@@ -378,6 +394,9 @@ function readOAuthAuthentication(
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
     providerApiOrigin: providerApiUrl.origin,
+    ...(providerApiUrl.protocol === "http:" && allowInsecureServerEndpoints
+      ? { allowInsecureProviderApiOrigin: true }
+      : {}),
     provider: {
       issuer: new URL(values.DANO_OAUTH_ISSUER!).href,
       authorizationEndpoint: authorizationEndpoint.href,
@@ -394,6 +413,9 @@ function readOAuthAuthentication(
         : {}),
       ...(optedInHttpAuthorizationEndpoint
         ? { allowInsecureAuthorizationEndpoint: true }
+        : {}),
+      ...(optedInHttpServerEndpoints
+        ? { allowInsecureProviderEndpoints: true }
         : {}),
     },
     credentialEncryptionKey: {
@@ -993,6 +1015,9 @@ async function runDanoServer(
     oauthAuthentication && options.oauthAuthentication
       ? new CredentialBroker({
           providerApiOrigin: options.oauthAuthentication.providerApiOrigin,
+          ...(options.oauthAuthentication.allowInsecureProviderApiOrigin
+            ? { allowInsecureProviderApiOrigin: true }
+            : {}),
           readCredential: loginSessionId =>
             oauthAuthentication.readProviderCredential(loginSessionId),
           refreshCredential: loginSessionId =>
