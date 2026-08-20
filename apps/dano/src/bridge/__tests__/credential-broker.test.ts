@@ -105,11 +105,11 @@ describe("Credential Broker", () => {
     ).toThrow("Provider API origin must use HTTPS");
   });
 
-  it("accepts an HTTP provider API origin only for an explicitly trusted relay", () => {
+  it("accepts an HTTP provider API origin only with an explicit opt-in", () => {
     expect(
       () =>
         new CredentialBroker({
-          providerApiOrigin: "http://relay.internal",
+          providerApiOrigin: "http://provider.test",
           allowInsecureProviderApiOrigin: true,
           readCredential: async () => null,
         }),

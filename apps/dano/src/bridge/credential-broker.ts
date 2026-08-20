@@ -106,7 +106,7 @@ interface ProviderRequestIssue {
 
 export interface CredentialBrokerOptions {
   readonly providerApiOrigin: string;
-  /** Explicit deployment opt-in for an HTTP origin on a trusted relay. */
+  /** Explicit deployment opt-in for a plaintext HTTP provider API origin. */
   readonly allowInsecureProviderApiOrigin?: boolean;
   readonly readCredential: (
     loginSessionId: string,

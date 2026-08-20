@@ -63,7 +63,7 @@ export interface OAuth2ProviderAdapterOptions {
   readonly timeoutMs?: number;
   /** Explicit deployment opt-in for a browser-facing HTTP authorization URL. */
   readonly allowInsecureAuthorizationEndpoint?: boolean;
-  /** Explicit deployment opt-in for HTTP provider endpoints on a trusted relay. */
+  /** Explicit deployment opt-in for plaintext HTTP provider endpoints. */
   readonly allowInsecureProviderEndpoints?: boolean;
   /** Test-only escape hatch for a loopback fake provider. */
   readonly allowInsecureRequests?: boolean;
