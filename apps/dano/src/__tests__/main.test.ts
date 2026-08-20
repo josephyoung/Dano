@@ -512,6 +512,66 @@ describe("Dano main", () => {
     );
   });
 
+  it("requires an explicit opt-in for HTTP server endpoints on a trusted relay", () => {
+    const insecureRelay = {
+      DANO_OAUTH_ISSUER: "http://provider.example.test",
+      DANO_OAUTH_TOKEN_ENDPOINT: "http://relay.internal/token",
+      DANO_OAUTH_IDENTITY_ENDPOINT: "http://relay.internal/identity",
+      DANO_OAUTH_API_ORIGIN: "http://relay.internal",
+      DANO_OAUTH_REVOCATION_TRANSPORT: "rfc7009",
+      DANO_OAUTH_REVOCATION_ENDPOINT: "http://relay.internal/revoke",
+    };
+
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment(insecureRelay),
+      }),
+    ).toThrow("OAuth issuer must use HTTPS");
+
+    const options = parseDanoServerOptions([], {
+      NODE_ENV: "production",
+      ...oauthEnvironment({
+        ...insecureRelay,
+        DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS: "true",
+      }),
+    });
+
+    expect(options.oauthAuthentication).toMatchObject({
+      providerApiOrigin: "http://relay.internal",
+      allowInsecureProviderApiOrigin: true,
+      provider: {
+        issuer: "http://provider.example.test/",
+        tokenEndpoint: "http://relay.internal/token",
+        identityEndpoint: "http://relay.internal/identity",
+        allowInsecureProviderEndpoints: true,
+        revocation: {
+          transport: "rfc7009",
+          endpoint: "http://relay.internal/revoke",
+        },
+      },
+    });
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS: "sometimes",
+      }),
+    ).toThrow(
+      "DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS must be true or false",
+    );
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment({
+          ...insecureRelay,
+          DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS: "true",
+          DANO_OAUTH_REDIRECT_URI:
+            "http://dano.example.test/api/auth/callback",
+        }),
+      }),
+    ).toThrow("OAuth redirect URI must use trusted HTTPS");
+  });
+
   it("rejects a partially configured OAuth client", () => {
     expect(() =>
       parseDanoServerOptions([], {
