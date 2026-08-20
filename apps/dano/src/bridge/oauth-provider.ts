@@ -56,10 +56,7 @@ export interface OAuth2ProviderAdapterOptions {
     | { readonly transport: "delete-query-basic"; readonly endpoint?: string };
   readonly clientId: string;
   readonly clientSecret: string;
-  readonly clientAuthMethod?:
-    | "client_secret_post"
-    | "client_secret_basic"
-    | "client_secret_basic_raw";
+  readonly clientAuthMethod?: "client_secret_post" | "client_secret_basic";
   readonly scope: string;
   readonly requestHeaders?: Readonly<Record<string, string>>;
   readonly sendStateToTokenEndpoint?: boolean;
@@ -83,10 +80,10 @@ export function createOAuth2ProviderAdapter(
   const tokenExchangeState = new AsyncLocalStorage<string>();
   const clientId = required(options.clientId, "OAuth client ID");
   const clientSecret = required(options.clientSecret, "OAuth client secret");
-  const clientAuthentication = clientAuthenticationFor(
-    options.clientAuthMethod,
-    clientSecret,
-  );
+  const clientAuthentication =
+    options.clientAuthMethod === "client_secret_basic"
+      ? oauth.ClientSecretBasic(clientSecret)
+      : oauth.ClientSecretPost(clientSecret);
   const serverMetadata = {
     issuer: new URL(options.issuer).href,
     authorization_endpoint: new URL(options.authorizationEndpoint).href,
@@ -227,27 +224,6 @@ export function createOAuth2ProviderAdapter(
     ...adapter,
     ...(revokeCredential ? { revokeCredential } : {}),
   };
-}
-
-function clientAuthenticationFor(
-  method: OAuth2ProviderAdapterOptions["clientAuthMethod"],
-  clientSecret: string,
-): oauth.ClientAuth {
-  if (method === "client_secret_basic") {
-    return oauth.ClientSecretBasic(clientSecret);
-  }
-  if (method === "client_secret_basic_raw") {
-    return (_server, client, _body, headers) => {
-      if (client.client_id.includes(":")) {
-        throw new Error("OAuth raw Basic client ID must not contain a colon");
-      }
-      headers.set(
-        "authorization",
-        `Basic ${Buffer.from(`${client.client_id}:${clientSecret}`).toString("base64")}`,
-      );
-    };
-  }
-  return oauth.ClientSecretPost(clientSecret);
 }
 
 async function fetchExternalIdentity(

@@ -587,12 +587,6 @@ describe("Dano main", () => {
         DANO_OAUTH_CLIENT_AUTH_METHOD: " client_secret_post ",
       }).oauthAuthentication?.provider.clientAuthMethod,
     ).toBe("client_secret_post");
-    expect(
-      parseDanoServerOptions([], {
-        ...oauthEnvironment(),
-        DANO_OAUTH_CLIENT_AUTH_METHOD: "client_secret_basic_raw",
-      }).oauthAuthentication?.provider.clientAuthMethod,
-    ).toBe("client_secret_basic_raw");
     expect(() =>
       parseDanoServerOptions([], {
         ...oauthEnvironment(),
