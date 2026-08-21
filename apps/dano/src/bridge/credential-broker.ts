@@ -106,6 +106,8 @@ interface ProviderRequestIssue {
 
 export interface CredentialBrokerOptions {
   readonly providerApiOrigin: string;
+  /** Explicit deployment opt-in for a plaintext HTTP provider API origin. */
+  readonly allowInsecureProviderApiOrigin?: boolean;
   readonly readCredential: (
     loginSessionId: string,
   ) => Promise<ProviderCredential | null>;
@@ -184,7 +186,13 @@ export class CredentialBroker {
 
   constructor(private readonly options: CredentialBrokerOptions) {
     const providerApiOrigin = new URL(options.providerApiOrigin);
-    if (providerApiOrigin.protocol !== "https:") {
+    if (
+      providerApiOrigin.protocol !== "https:" &&
+      !(
+        providerApiOrigin.protocol === "http:" &&
+        options.allowInsecureProviderApiOrigin
+      )
+    ) {
       throw new Error("Provider API origin must use HTTPS");
     }
     this.providerApiOrigin = providerApiOrigin.origin;

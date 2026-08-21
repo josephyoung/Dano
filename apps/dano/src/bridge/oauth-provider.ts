@@ -63,6 +63,8 @@ export interface OAuth2ProviderAdapterOptions {
   readonly timeoutMs?: number;
   /** Explicit deployment opt-in for a browser-facing HTTP authorization URL. */
   readonly allowInsecureAuthorizationEndpoint?: boolean;
+  /** Explicit deployment opt-in for plaintext HTTP provider endpoints. */
+  readonly allowInsecureProviderEndpoints?: boolean;
   /** Test-only escape hatch for a loopback fake provider. */
   readonly allowInsecureRequests?: boolean;
 }
@@ -99,6 +101,7 @@ export function createOAuth2ProviderAdapter(
   configuration.timeout = timeoutMs / 1000;
   if (
     options.allowInsecureAuthorizationEndpoint ||
+    options.allowInsecureProviderEndpoints ||
     options.allowInsecureRequests
   ) {
     oauth.allowInsecureRequests(configuration);

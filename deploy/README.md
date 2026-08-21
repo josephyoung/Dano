@@ -155,6 +155,13 @@ or callback endpoints. Do not replace the provider origin with a Dano same-origi
 proxy: provider redirects such as `/login` must continue to resolve against the
 provider's origin.
 
+If the provider exposes its issuer, token, identity, revocation, or API endpoint
+only over HTTP, set each endpoint to the provider's real URL and explicitly opt
+in with `DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS=true`. This accepts
+plaintext server-to-provider transport; it does not add a proxy, relay, or
+alternate network path. The Dano callback remains trusted HTTPS, and the browser
+authorization UI must continue to use the provider's real origin.
+
 `DANO_OAUTH_CLIENT_AUTH_METHOD` is optional and defaults to
 `client_secret_post`. Set it to `client_secret_basic` when the provider requires
 HTTP Basic client authentication at the token endpoint.

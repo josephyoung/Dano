@@ -105,6 +105,17 @@ describe("Credential Broker", () => {
     ).toThrow("Provider API origin must use HTTPS");
   });
 
+  it("accepts an HTTP provider API origin only with an explicit opt-in", () => {
+    expect(
+      () =>
+        new CredentialBroker({
+          providerApiOrigin: "http://provider.test",
+          allowInsecureProviderApiOrigin: true,
+          readCredential: async () => null,
+        }),
+    ).not.toThrow();
+  });
+
   it("forwards a generic request to the configured provider origin", async () => {
     const providerFetch = vi.fn(async () =>
       new Response('{"ok":true}', {
