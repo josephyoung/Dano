@@ -121,7 +121,7 @@ HTTP status：
 - `200`：`authenticated` 或 `authorization_required`；两者都是已完成的确定性协调结果。
 - `400`：trigger/returnTo 非法。
 - `403`：Origin 非法。
-- `503`：`indeterminate`。浏览器保留当前展示，不自动 logout，不立即跳转 authorization。
+- `503`：`indeterminate`。浏览器不自动 logout、不立即跳转 authorization；boot 进入 `authentication_unavailable` 且不启动 authenticated transport，focus 将现有 transport 限制为 receive-only，具体见第 9.3 节。
 
 `GET /api/auth/current` 保留为本地状态投影，不调用 OA。第一阶段实现后，浏览器启动顺序改为先 reconcile，再以结果启动 authenticated 或 Anonymous transport；其他调用者仍可用 `/api/auth/current` 获取纯本地状态。
 
@@ -156,7 +156,7 @@ stateDiagram-v2
     Reconciling --> AuthorizationRequired: no Dano Login Session or no Credential
     Reconciling --> Authenticated: check-token active and identity matches
     Reconciling --> Refreshing: check-token deterministically inactive and refresh token exists
-    Reconciling --> Indeterminate: timeout / network / 5xx / malformed contract
+    Reconciling --> Indeterminate: timeout / network / client auth / malformed contract
     Refreshing --> Authenticated: refresh succeeds, re-check active, identity matches
     Refreshing --> AuthorizationRequired: refresh rejected or re-check inactive
     Refreshing --> Indeterminate: refresh or re-check transport failure
@@ -169,7 +169,7 @@ stateDiagram-v2
     Authenticated --> Anonymous: Dano logout
 ```
 
-确定性失效只包括：OA 明确报告 token 不存在/过期、refresh 明确返回 invalid grant，或 refresh 后重新 check 仍 inactive。网络错误、超时、OA 5xx、非预期 HTML/JSON 和无法解析的 envelope 都属于 `indeterminate`。
+确定性失效只包括：OA 经过成功 client authentication 后，以已验证的 token-error envelope 明确报告目标 token 不存在/过期、refresh 明确返回 invalid grant，或 refresh 后重新 check 仍 inactive。HTTP 401 或 envelope 数字 `code: 401` 本身不是充分证据，因为它也可能表示 client secret、Basic 认证或网关失败。无法唯一归因到目标 token 的 401/403、网络错误、超时、OA 5xx、非预期 HTML/JSON 和无法解析的 envelope 都属于 `indeterminate`。
 
 ## 7. 协调算法
 
@@ -181,7 +181,7 @@ stateDiagram-v2
 6. active 但 identity 不同：按安全故障处理，清除当前 Login Session、尽力撤销其 Credential、断开该会话的 Bridge Clients，并返回 `authorization_required/credential_inactive`；记录不含用户标识和 token 的结构化错误计数。
 7. inactive 且有 refresh token：进入该 Login Session 的 refresh single-flight；成功后必须再次 `checkCredential` 并再次比较 identity，只有两者都通过才原子替换加密 Credential。
 8. inactive 且无 refresh token，或 refresh 被 provider 确定性拒绝：原子删除当前 Login Session，尽力撤销旧 Credential，断开对应 Bridge Clients，清除 login Cookie，返回 `authorization_required/credential_inactive`。
-9. 任一步发生传输或契约不确定错误：不删除、不 touch 成“已验证”、不重定向，返回 `503 indeterminate`。下一次 eligible trigger 才重试。
+9. 任一步发生传输、client authentication 或契约不确定错误：不删除、不 touch 成“已验证”、不重定向，将当前 Login Session 置于非持久化的 reconciliation gate，返回 `503 indeterminate`。下一次 eligible trigger 才重试；只有 active 结果才能解除 gate。
 
 先 refresh 后 reauthorize 的目的不是延长已被明确撤销的授权，而是处理正常 access-token expiry。refresh 后必须重新 check，不能仅因 token endpoint 返回 200 就宣称会话有效。
 
@@ -236,6 +236,14 @@ sequenceDiagram
 - `loginError`、OAuth error callback、超过 pending transaction 上限或刚从 OA `/login` 返回都必须抑制即时重定向。用户显式点击“登录/重新登录”可以绕过自动 cooldown。
 - focus retry 使用服务端 `retryAfterMs` 与有界指数退避；刷新页面代表一次新的显式协调机会，但仍受服务端 pending transaction 上限保护。
 
+### 9.3 `indeterminate` 时的 Bridge 行为
+
+- load/refresh 在协调完成前保持 `checking`，不创建 authenticated Bridge Client、不打开其 SSE，也不投影旧 `currentUser`。
+- load/refresh 得到 `indeterminate` 后进入 `authentication_unavailable` 展示；Dano Server 保留 Login Session 与 encrypted Credential，但 reconciliation gate 拒绝该 Login Session 的新 Bridge command 和 provider request。
+- focus 开始协调时立即 gate 新 command。已经被服务端接受的 Assistant Turn 可以完成，现有 SSE 只用于接收该 Turn 的结果；不得开始新的 Assistant Turn 或 provider request。
+- focus 得到 `indeterminate` 后保持 receive-only/gated 状态并显示非敏感的暂不可用提示。后续 active 协调解除 gate 并恢复交互；确定性 inactive 仍按第 7 节清理和 reauthorize。
+- gate 只属于目标 Dano Login Session，不影响同一 User 的其他 Login Session。它不是持久化认证状态；进程重启后，浏览器仍必须先完成 boot reconciliation 才能建立 authenticated transport。
+
 ## 10. Dano logout 契约
 
 继续使用现有：
@@ -251,7 +259,7 @@ Cookie: dano_login=<opaque>
 1. 校验 same-origin `Origin`；
 2. 原子摘除当前 Dano Login Session，使后续请求不能再取得 Credential；
 3. 断开只属于该 Login Session 的 Bridge Clients；
-4. 在服务端尽力撤销该 Login Session 的 OAuth access token/grant；OA 当前删除 token 的实现会连带删除对应 refresh token；
+4. 在服务端尽力撤销该 Login Session 的 OAuth access token/grant；公开 OA 实现会在删除 access token 时按其关联字段删除 refresh token，但生产等价环境必须通过 refresh-rejection contract test 后才能把它作为部署保证；
 5. 无论 provider revocation 成功、失败或超时，都清除 Dano HttpOnly Cookie 并返回 `{ "status": "anonymous" }`。
 
 浏览器不直接调用 OA token、check-token 或 auth logout endpoint。Dano logout 不导航到 OA，不读取 OA 页面 Bearer Token，也不声称 OA 页面已经退出。
@@ -273,8 +281,9 @@ Cookie: dano_login=<opaque>
 | check-token 明确 active 且 identity 匹配 | 确定有效 | 保持并 touch session | 保持登录，启动/保持 transport |
 | check-token 明确 token 不存在或过期 | 确定失效 | 有 refresh 则单次 refresh；否则清理 | 最终进入 authorization |
 | refresh invalid grant / refresh 后仍 inactive | 确定失效 | 清理 session 与 Credential | 顶层 authorization |
-| check/refresh timeout、DNS、连接失败、HTTP 5xx | 不确定 | 保留原状态，不写“已验证”时间 | 显示现状，退避到下次 trigger |
-| HTTP 200 但 OA envelope/identity 不符合契约 | 不确定且可观测 | 保留 session；不迁移 User | 不自动 logout/redirect；报告通用暂不可用 |
+| check/refresh timeout、DNS、连接失败、HTTP 5xx | 不确定 | 保留 session/Credential，设置 reconciliation gate，不写“已验证”时间 | boot 不启动 transport；focus 进入 receive-only，退避到下次 trigger |
+| HTTP 401/403、envelope `code: 401` 但不能唯一归因到目标 token | 不确定 | 保留 session/Credential，设置 gate | 不自动 logout/redirect；报告通用暂不可用 |
+| HTTP 200 但 OA envelope/identity 不符合契约 | 不确定且可观测 | 保留 session/Credential，设置 gate；不迁移 User | 不自动 logout/redirect；报告通用暂不可用 |
 | identity 与 Dano User 不同 | 安全故障 | 清理当前 session，尽力 revoke | authorization required |
 | callback state 无效、重复或过期 | 拒绝 | 不建立 session | 返回安全路径并显示通用登录失败 |
 | authorization 用户取消/拒绝 | 用户终止 | Anonymous / 原 session 已失效 | cooldown，禁止立即循环跳转 |
@@ -301,8 +310,9 @@ Cookie: dano_login=<opaque>
 
 - check-token 使用 POST、form `token`、标准 `client_secret_basic` 和固定 provider headers。
 - OA `{code: 0, data: ...}` active envelope 正确归一化并输出 External Identity。
-- HTTP/envelope 401、token missing/expired 归类 inactive。
-- timeout、5xx、HTML、malformed JSON、缺字段归类 contract/transport error，不归类 inactive。
+- 只有从 OA `checkAccessToken` token-missing/token-expired 路径捕获并固定的完整 provider envelope 才归类 inactive；bare HTTP 401 或数字 `code: 401` 不足以判定。
+- client secret/Basic 认证失败、网关 401/403、timeout、5xx、HTML、malformed JSON、缺字段归类 contract/transport error，不归类 inactive。
+- 生产等价 OA 的 Dano revocation endpoint 返回成功后，以服务端 test harness 使用旧 refresh token 请求 refresh；必须得到确定性拒绝，且 harness 不打印或快照 access/refresh token。
 - URL、redirect、HTTP opt-in、timeout 与 secret/token redaction 继承现有 adapter 安全断言。
 
 ### 14.2 Authentication Reconciliation HTTP
@@ -313,6 +323,9 @@ Cookie: dano_login=<opaque>
 - refresh invalid / re-check inactive：删除当前 session、清 Cookie、只断开当前 session Clients。
 - identity mismatch：fail closed，不把当前 User 替换成 provider 返回的 User。
 - network/5xx/malformed：503 indeterminate，session 文件和 encrypted Credential 保持不变。
+- ambiguous 401/403：设置 reconciliation gate 而不删除 session；active retry 解除 gate。
+- boot indeterminate：不创建 authenticated Bridge Client/SSE，不投影旧 currentUser。
+- focus indeterminate：已接受 Turn 可完成，现有 SSE receive-only；新的 command/provider request 被服务端 gate 拒绝。
 - 同一 session 并发 reconcile：一次 check/refresh chain；不同 session 相互隔离。
 - same-User 多 session：只协调 Cookie 指定的 session，不共享或撤销 peer Credential。
 - invalid Origin/returnTo：403/400，provider 零调用。
@@ -324,7 +337,7 @@ Cookie: dano_login=<opaque>
 - visible focus 满足阈值才触发；hidden、重复 focus 和 in-flight focus 不触发。
 - authorization_required 只产生一次顶层 navigation。
 - callback error/loginError 进入 cooldown，不形成 OA ↔ Dano redirect loop。
-- indeterminate 不改成 Anonymous，不立即 authorization，并按 retryAfterMs 退避。
+- indeterminate 不改成 Anonymous，不立即 authorization；boot 显示 `authentication_unavailable` 且不连接，focus 进入 receive-only，并按 retryAfterMs 退避。
 - 显式登录继续使用现有 `/api/auth/login`，不受自动 cooldown 永久阻断。
 
 ## 15. Codex 内置浏览器验收矩阵
@@ -339,8 +352,8 @@ Cookie: dano_login=<opaque>
 | B4 | Dano token 被 OA 明确撤销，OA 浏览器仍登录 | 刷新/聚焦 Dano | Dano 清理旧 session，authorization 自动回 code 并建立新 session |
 | B5 | OA 与 Dano 都已登录 | 在 OA 页面 logout，再回 Dano 聚焦 | 联合记录 OA 页面回 `/login` 与 Dano reconcile 结果；若 check 仍 active，明确判定“OA logout 不传播” |
 | B6 | OA 未登录，Dano 无 session | 打开 Dano | 顶层到 OA login；取消/返回后不发生 redirect loop，显式登录仍可用 |
-| B7 | Dano 与 OA 都已登录 | Dano logout | Dano 变 Anonymous，旧 Dano session 不能复用；OA 页面是否仍登录被单独记录，不能据此改变声明 |
-| B8 | Dano 已登录 | 在测试环境让 check-token timeout/5xx | Dano 不误删 session、不跳 OA；页面给出非敏感暂不可用状态，后续聚焦可恢复 |
+| B7 | Dano 与 OA 都已登录 | Dano logout | Dano 变 Anonymous，旧 Dano session 不能复用；服务端 acceptance probe 证明旧 refresh token 被拒绝且不输出 token；OA 页面状态单独记录 |
+| B8 | Dano 已登录 | 在测试环境让 check-token timeout/5xx/ambiguous 401 | Dano 不误删 session、不跳 OA；boot 不建立 authenticated transport，focus 只允许既有 Turn 收尾；active retry 后恢复 |
 | B9 | 同一 User 两个独立 Dano Login Session | 仅一个窗口 logout 或 token 失效 | 只影响目标 session，另一个窗口继续有效 |
 
 B5 是“OA logout → Dano 有限同步”声明的发布门槛。只有生产等价 OA 明确使 `danoProduction` token inactive，且 Dano 在下一次规定 trigger 清理 session，才能在发布文档中声称有限同步；否则必须保留“不传播”的结论。
@@ -373,6 +386,7 @@ DANO_OAUTH_CHECK_TOKEN_ENDPOINT=http://h5.dianshixinxi.com:90/admin-api/system/o
 - 所有第 14 节测试通过，`pnpm run check`、`pnpm test`、`pnpm run build` 通过。
 - 在非生产或生产等价环境完成 B1-B9；生产最终验收仍需另行明确部署授权。
 - 确认 OA OAuth client redirect URI、scope auto-approve 和 token/check/revocation contract 未漂移。
+- 生产等价 OA 的 logout contract test 证明 Dano 撤销 access token 后，关联 refresh token 不能再换取 access token；若失败则阻止部署并将“撤销 access/refresh grant”降级为未满足需求。
 - 确认 nginx 继续转发 Dano `/api/auth/*` Cookie/Origin，callback query 不记录日志。
 - 对 B5 给出“token inactive”或“token remains active”的明确证据，并据此收窄发布声明。
 

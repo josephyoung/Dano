@@ -93,6 +93,8 @@ The source observations below are pinned to ruoyi-vue-pro `master` commit [`2bbe
 
 The [`DELETE /token` implementation](https://github.com/YunaiV/ruoyi-vue-pro/blob/2bbe79b34ab8c9c7b0148300599dc8d4881c8db1/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/controller/admin/oauth2/OAuth2OpenController.java#L144-L156) is described as “删除访问令牌”. It authenticates the OAuth client and calls `revokeToken(clientId, token)`. It returns an API result; it is not a user-agent navigation endpoint and has no post-logout redirect contract.
 
+The corresponding public service implementation first verifies that the access token belongs to the authenticated OAuth client. Its `removeAccessToken` operation deletes both that access-token record and the refresh-token record referenced by it. This is source-level evidence that the public implementation revokes the linked grant when Dano submits the access token; it is not proof that a private production fork behaves identically. A production-equivalent acceptance test must verify that the old refresh token can no longer mint an access token without logging or snapshotting either token.
+
 A repository-wide search of this pinned public source returned no implementation references for `end_session_endpoint`, `post_logout_redirect_uri`, `id_token_hint`, or `.well-known/openid-configuration`.
 
 ### Application authentication logout is a Bearer-token API
