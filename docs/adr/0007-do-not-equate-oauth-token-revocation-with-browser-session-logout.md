@@ -22,9 +22,11 @@ The currently verified OA contract is OAuth 2.0 rather than OpenID Connect. It
 offers Authorization Code, refresh, a provider-specific token check, and a
 provider-specific authenticated token deletion endpoint. It does not expose
 OpenID Provider discovery, ID Tokens, session state, an end-session endpoint,
-front-channel logout, or back-channel logout. OA browser logout deletes the OA
-browser's own token; it does not revoke Dano's independently issued Provider
-Credential.
+front-channel logout, or back-channel logout. The public OA implementation
+deletes only the Bearer token presented by its browser logout request; no
+verified contract says that operation also revokes Dano's independently issued
+Provider Credential. A production black-box check is still required before
+claiming even next-visit logout synchronization.
 
 ## Decision
 
@@ -51,7 +53,9 @@ as browser-session logout.
   Login Session.
 - Dano login through OA can establish both systems' login state because the
   browser visits OA's authorization origin.
-- OA browser logout does not end an existing Dano Login Session.
+- OA browser logout does not notify Dano or directly end an existing Dano Login
+  Session. A later Dano token check can detect it only if OA also revoked that
+  Provider Credential, which remains a production acceptance condition.
 - Dano logout removes its Login Session and revokes its Provider Credential when
   configured, but it does not end the OA browser's independent login state.
 - Full bidirectional logout requires OA to implement a standard session/logout

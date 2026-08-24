@@ -207,11 +207,14 @@ For an OAuth-only provider, the supported semantics are narrower:
 - Dano logout removes only the current Dano Login Session and may revoke only
   its Provider Credential;
 - provider browser login does not passively create a Dano Login Session;
-- provider browser logout does not notify Dano.
+- provider browser logout does not notify Dano; a later provider-token check
+  can detect it only if the provider also revoked that token, which must be
+  established by production-equivalent browser evidence before being claimed.
 
 Do not fill these gaps with authorization-page polling, copied browser tokens,
 client secrets in browser code, or a Dano same-origin provider proxy. See
-[`ADR 0007`](../docs/adr/0007-do-not-equate-oauth-token-revocation-with-browser-session-logout.md).
+[`ADR 0007`](../docs/adr/0007-do-not-equate-oauth-token-revocation-with-browser-session-logout.md)
+and the [phase-one authentication reconciliation Spec](../docs/specs/phase-1-oauth-authentication-reconciliation.md).
 
 The redirect URI must be the fixed `/api/auth/callback` URL. Provider
 server-to-server endpoints, the API origin, and the production callback must
