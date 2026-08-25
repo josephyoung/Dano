@@ -79,7 +79,7 @@ describe("AppHeader", () => {
     }
   });
 
-  it("shows the authenticated User and logout in the existing Menu", async () => {
+  it("asks for confirmation before logging out the authenticated User", async () => {
     const onLogout = vi.fn();
     const { component, target } = await renderHeader({
       authentication: {
@@ -103,6 +103,32 @@ describe("AppHeader", () => {
       expect(menu.querySelector(".header-user-summary")?.textContent).toContain("Alice");
       expect(menu.querySelector(".login-menu-item")).toBeNull();
       menu.querySelector<HTMLButtonElement>(".logout-menu-item")!.click();
+      await tick();
+      expect(onLogout).not.toHaveBeenCalled();
+      expect(document.querySelector('.header-menu[data-state="open"]')).toBeNull();
+
+      const confirmation = document.querySelector<HTMLElement>(
+        '[data-slot="alert-dialog-content"]',
+      )!;
+      expect(confirmation.textContent).toContain("退出登录");
+      expect(confirmation.textContent).toContain("取消");
+      expect(confirmation.textContent).toContain("确认");
+      confirmation
+        .querySelector<HTMLButtonElement>('[data-slot="alert-dialog-cancel"]')!
+        .click();
+      await tick();
+      expect(onLogout).not.toHaveBeenCalled();
+      expect(
+        document.querySelector('[data-slot="alert-dialog-content"][data-state="open"]'),
+      ).toBeNull();
+
+      target.querySelector<HTMLButtonElement>(".menu-button")!.click();
+      await tick();
+      document.querySelector<HTMLButtonElement>(".logout-menu-item")!.click();
+      await tick();
+      document
+        .querySelector<HTMLButtonElement>(".logout-confirm-action")!
+        .click();
       await tick();
       expect(onLogout).toHaveBeenCalledOnce();
       expect(menu.querySelector<HTMLImageElement>(".header-user-avatar")?.src).toBe(
