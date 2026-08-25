@@ -5,6 +5,7 @@
   import Menu from "@lucide/svelte/icons/menu";
   import Palette from "@lucide/svelte/icons/palette";
   import SquarePen from "@lucide/svelte/icons/square-pen";
+  import * as AlertDialog from "../components/ui/alert-dialog";
   import { Button } from "../components/ui/button";
   import * as Popover from "../components/ui/popover";
   import type {
@@ -39,6 +40,7 @@
 
   let menuOpen = $state(false);
   let failedAvatarUrl = $state<string | null>(null);
+  let logoutConfirmationOpen = $state(false);
   let logoutPending = $state(false);
   const currentUser = $derived(
     authentication.status === "authenticated" ? authentication.user : undefined,
@@ -72,14 +74,20 @@
     onLogin?.();
   }
 
-  async function logout() {
+  function requestLogout() {
+    menuOpen = false;
+    logoutConfirmationOpen = true;
+  }
+
+  async function logout(event: MouseEvent) {
+    event.preventDefault();
     if (logoutPending) return;
     logoutPending = true;
     try {
       await onLogout?.();
     } finally {
       logoutPending = false;
-      menuOpen = false;
+      logoutConfirmationOpen = false;
     }
   }
 </script>
@@ -132,7 +140,7 @@
             variant="ghost"
             type="button"
             disabled={logoutPending}
-            onclick={logout}
+            onclick={requestLogout}
           >
             <LogOut data-icon="inline-start" aria-hidden="true" />
             <span>{t("appHeader.logout")}</span>
@@ -180,6 +188,29 @@
     {/if}
   </div>
 </header>
+
+<AlertDialog.Root bind:open={logoutConfirmationOpen}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>{t("appHeader.logoutConfirmation.title")}</AlertDialog.Title>
+      <AlertDialog.Description>
+        {t("appHeader.logoutConfirmation.description")}
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel disabled={logoutPending}>
+        {t("appHeader.logoutConfirmation.cancel")}
+      </AlertDialog.Cancel>
+      <AlertDialog.Action
+        class="logout-confirm-action"
+        disabled={logoutPending}
+        onclick={logout}
+      >
+        {t("appHeader.logoutConfirmation.confirm")}
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
 
 <style>
   .app-header {
