@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -226,11 +227,17 @@ if (args[0] === "clone") cpSync(process.env.DANO_FAKE_REPO, args.at(-1), { recur
   writeFileSync(
     join(fakeBin, "compose"),
     `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(args) + "\\n");
 if (process.env.DANO_FAKE_SWITCH_MARKER && args.includes("up")) {
   appendFileSync(process.env.DANO_FAKE_SWITCH_MARKER, "up\\n");
+}
+if (process.env.DANO_FAKE_REQUIRE_OAUTH_CREDENTIAL_PAIR && args.includes("--validate-config")) {
+  const env = readFileSync(".env", "utf8");
+  const key = env.match(/^DANO_OAUTH_CREDENTIAL_KEY=([A-Za-z0-9_-]+)$/m)?.[1];
+  const version = env.match(/^DANO_OAUTH_CREDENTIAL_KEY_VERSION=([^\\r\\n]+)$/m)?.[1];
+  if (!key || Buffer.from(key, "base64url").byteLength !== 32 || !version) process.exit(2);
 }
 if (process.env.DANO_FAKE_CONFIG_INVALID && args.includes("--validate-config")) {
   process.exit(1);
@@ -263,8 +270,9 @@ appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(["chown", ...process
     }
   }
 
-  execFileSync(process.execPath, [releaseScript], {
+  const output = execFileSync(process.execPath, [releaseScript], {
     cwd,
+    encoding: "utf8",
     env: {
       ...process.env,
       ...options.env,
@@ -303,6 +311,7 @@ appendFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(["chown", ...process
     nginxConf,
     tlsCertPath,
     tlsKeyPath,
+    output,
     logLines: readFileSync(logPath, "utf8").trim().split("\n"),
   };
 }
@@ -1287,6 +1296,73 @@ writeFileSync(process.env.DANO_TEST_APP_STARTED, "started");
       "--no-build",
     ]);
     expect(logLines[5]).toBe("smoke");
+  });
+
+  it("initializes Dano-owned OAuth credential encryption before the production gate", () => {
+    const markerRoot = mkdtempSync(join(tmpdir(), "dano-release-oauth-key-"));
+    tempDirs.push(markerRoot);
+    const deployDir = join(markerRoot, "deploy");
+    mkdirSync(deployDir);
+    writeFileSync(join(deployDir, ".env"), "DANO_OPERATOR_VALUE=preserve-me\n", {
+      mode: 0o600,
+    });
+
+    const firstRelease = runRelease({
+      deployDir,
+      env: { DANO_FAKE_REQUIRE_OAUTH_CREDENTIAL_PAIR: "1" },
+    });
+
+    const firstEnv = readFileSync(join(deployDir, ".env"), "utf8");
+    const key = firstEnv.match(
+      /^DANO_OAUTH_CREDENTIAL_KEY=([A-Za-z0-9_-]+)$/m,
+    )?.[1];
+    expect(Buffer.from(key ?? "", "base64url")).toHaveLength(32);
+    expect(firstEnv).toContain(
+      "DANO_OAUTH_CREDENTIAL_KEY_VERSION=dano-deploy-v1",
+    );
+    expect(firstEnv).toContain("DANO_OPERATOR_VALUE=preserve-me");
+    expect(statSync(join(deployDir, ".env")).mode & 0o777).toBe(0o600);
+    expect(firstRelease.output).toContain(
+      "initialized Dano-owned OAuth credential encryption material",
+    );
+    expect(firstRelease.output).not.toContain(key);
+
+    const secondRelease = runRelease({
+      deployDir,
+      env: { DANO_FAKE_REQUIRE_OAUTH_CREDENTIAL_PAIR: "1" },
+    });
+    const secondEnv = readFileSync(join(deployDir, ".env"), "utf8");
+    const credentialLines = (env: string) =>
+      env
+        .split("\n")
+        .filter(line => line.startsWith("DANO_OAUTH_CREDENTIAL_KEY"));
+    expect(credentialLines(secondEnv)).toEqual(credentialLines(firstEnv));
+    expect(secondEnv).toContain(`DANO_OAUTH_CREDENTIAL_KEY=${key}`);
+    expect(secondEnv).toContain(
+      "DANO_OAUTH_CREDENTIAL_KEY_VERSION=dano-deploy-v1",
+    );
+    expect(secondRelease.output).toContain(
+      "preserved Dano-owned OAuth credential encryption material",
+    );
+    expect(secondRelease.output).not.toContain(key);
+  });
+
+  it.each([
+    [
+      "key",
+      `DANO_OAUTH_CREDENTIAL_KEY=${Buffer.alloc(32, 7).toString("base64url")}\n`,
+    ],
+    ["version", "DANO_OAUTH_CREDENTIAL_KEY_VERSION=operator-v7\n"],
+  ])("fails closed when only the OAuth credential %s exists", (_field, content) => {
+    const markerRoot = mkdtempSync(join(tmpdir(), "dano-release-oauth-partial-"));
+    tempDirs.push(markerRoot);
+    const deployDir = join(markerRoot, "deploy");
+    mkdirSync(deployDir);
+    writeFileSync(join(deployDir, ".env"), content, { mode: 0o600 });
+
+    expect(() => runRelease({ deployDir })).toThrow(/must be configured together/);
+    expect(readFileSync(join(deployDir, ".env"), "utf8")).toContain(content.trim());
+    expect(statSync(join(deployDir, ".env")).mode & 0o777).toBe(0o600);
   });
 
   it("stops a release before switching containers when configuration validation fails", () => {

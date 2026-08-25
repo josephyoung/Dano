@@ -1,16 +1,23 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveDeploymentExposure } from "./deploy-exposure.mjs";
-import { removeEnvFileValues, updateEnvFile } from "./deploy-env-file.mjs";
+import {
+  readEnvValues,
+  removeEnvFileValues,
+  updateEnvFile,
+} from "./deploy-env-file.mjs";
 
 const composeBin = process.env.DANO_COMPOSE || "docker";
 const composeArgs = composeBin === "podman" ? ["compose"] : ["compose"];
@@ -26,6 +33,9 @@ const envPath = join(deployDir, ".env");
 const exposure = resolveDeploymentExposure(process.env, { baseDir: deployDir });
 const runtimeOwner = "1000:1000";
 const defaultNpmRegistry = "https://mirrors.cloud.tencent.com/npm/";
+const oauthCredentialKeyName = "DANO_OAUTH_CREDENTIAL_KEY";
+const oauthCredentialKeyVersionName = "DANO_OAUTH_CREDENTIAL_KEY_VERSION";
+const defaultOAuthCredentialKeyVersion = "dano-deploy-v1";
 const npmRegistry =
   process.env.NPM_REGISTRY ||
   process.env.NPM_CONFIG_REGISTRY ||
@@ -86,6 +96,34 @@ function prepareRuntimeDir() {
   run("chown", ["-R", runtimeOwner, runtimeDir]);
 }
 
+function ensureOAuthCredentialEncryption() {
+  const values = existsSync(envPath)
+    ? readEnvValues(readFileSync(envPath, "utf8"))
+    : new Map();
+  const hasKey = Boolean(values.get(oauthCredentialKeyName)?.trim());
+  const hasVersion = Boolean(values.get(oauthCredentialKeyVersionName)?.trim());
+
+  if (hasKey !== hasVersion) {
+    throw new Error(
+      `${oauthCredentialKeyName} and ${oauthCredentialKeyVersionName} must be configured together`,
+    );
+  }
+  if (hasKey) {
+    console.log(
+      "[deploy-release] preserved Dano-owned OAuth credential encryption material",
+    );
+    return;
+  }
+
+  updateEnvFile(envPath, {
+    [oauthCredentialKeyName]: randomBytes(32).toString("base64url"),
+    [oauthCredentialKeyVersionName]: defaultOAuthCredentialKeyVersion,
+  });
+  console.log(
+    "[deploy-release] initialized Dano-owned OAuth credential encryption material",
+  );
+}
+
 try {
   const repoUrl = requireValue(
     "DANO_REPO_URL",
@@ -136,6 +174,7 @@ try {
     DANO_EXPOSURE_MODE: exposure.mode,
     ...exposure.tlsEnv,
   });
+  ensureOAuthCredentialEncryption();
 
   // Validate the exact production image and Compose environment before the
   // running stack is changed. The server's production parser is the single

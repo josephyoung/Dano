@@ -142,9 +142,14 @@ DANO_OAUTH_CLIENT_ID
 DANO_OAUTH_CLIENT_SECRET
 DANO_OAUTH_SCOPE
 DANO_OAUTH_REDIRECT_URI
-DANO_OAUTH_CREDENTIAL_KEY
-DANO_OAUTH_CREDENTIAL_KEY_VERSION
 ```
+
+The Release Build initializes Dano-owned OAuth Credential Encryption Material
+before the Production Authentication Gate. It writes one 32-byte base64url key
+and the matching `dano-deploy-v1` version to the Deploy Control Directory
+`.env`, then preserves both values on every normal redeploy. A partial existing
+pair stops the release instead of silently replacing either value. Manual
+Compose deployments must provide the complete pair explicitly.
 
 All server-to-server provider endpoints, the API origin, and the callback must
 use trusted HTTPS. If the provider exposes only its browser-facing authorization
