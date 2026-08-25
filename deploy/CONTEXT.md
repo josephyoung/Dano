@@ -35,3 +35,7 @@ _Avoid_: Sidecar, public search endpoint
 **Production Authentication Gate**:
 The configuration-only server entrypoint executed directly against the exact Release Build image before Compose replaces running containers. It applies the server's production parser, actively validates every provider TLS origin's certificate chain and hostname, and exits without Agent Config initialization, Local Search Daemon startup, Runtime loading, or a listener. A failed gate leaves the running deployment unchanged.
 _Avoid_: Demo authentication initialization, smoke-only configuration check
+
+**OAuth Credential Encryption Material**:
+The Dano-owned key and stable version pair used to encrypt Provider Credentials. A Release Build initializes a missing pair once in the Deploy Control Directory `.env` before the Production Authentication Gate and preserves it on redeploy; it never silently fills or replaces only one side of a partial pair.
+_Avoid_: OAuth provider configuration, Client Secret, automatic key rotation
