@@ -24,6 +24,7 @@ import {
   DANO_LLM_SERVICE_ERROR,
   DANO_LLM_TIMEOUT_ERROR,
   DANO_LLM_UNKNOWN_ERROR,
+  DANO_SESSION_PERSISTENCE_ERROR,
 } from "@dano/types/protocol";
 import { t } from "../i18n";
 
@@ -216,6 +217,8 @@ export function errorMessageText(msg: TranscriptEntryLike): string {
       return t("chatTranscript.llmError.incomplete");
     case DANO_LLM_UNKNOWN_ERROR:
       return t("chatTranscript.llmError.unknown");
+    case DANO_SESSION_PERSISTENCE_ERROR:
+      return t("store.error.sessionPersistenceFailed");
     default:
       return msg.errorMessage ?? "";
   }

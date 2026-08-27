@@ -960,6 +960,7 @@ async function postEnvelope(msg: ClientMessage): Promise<void> {
     throw new Error(bridgeServerErrorMessage(detail, {
       staleClient: t("store.error.staleClient"),
       fallback: t("store.error.sendBridgeMessageFailed"),
+      sessionPersistence: t("store.error.sessionPersistenceFailed"),
     }));
   }
 }
@@ -1903,6 +1904,7 @@ function reportPromptDispatchFailure(error: unknown) {
     message = bridgeServerErrorMessage(error.detail, {
       staleClient: t("store.error.staleClient"),
       fallback: t("store.error.sendBridgeMessageFailed"),
+      sessionPersistence: t("store.error.sessionPersistenceFailed"),
     });
   } else {
     message = summarizeErrorMessage(
@@ -2737,7 +2739,10 @@ function handleEvent(payload: RpcBridgeEvent) {
       clearPromptPending();
       const message = bridgeCommandErrorNotificationMessage(
         payload,
-        t("store.error.sendBridgeMessageFailed"),
+        {
+          fallback: t("store.error.sendBridgeMessageFailed"),
+          sessionPersistence: t("store.error.sessionPersistenceFailed"),
+        },
       );
       if (message) pushNotification(message, "error");
       break;

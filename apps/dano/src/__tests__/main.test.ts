@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import {
   resolveDanoDevWatchPath,
 } from "../dev-reload.js";
 import {
+  assertRuntimePersistenceWritable,
   initializeDanoAgentSettings,
   parseDanoServerOptions,
   readDanoPackageInfo,
@@ -43,6 +45,86 @@ function oauthEnvironment(
 }
 
 describe("Dano main", () => {
+  it("prepares writable Runtime Workspace and session roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "dano-persistence-"));
+    const runtimeRootPath = join(root, "runtime");
+    const defaultWorkspacePath = join(root, "workspace");
+    const sessionsRootPath = join(root, "sessions");
+
+    try {
+      assertRuntimePersistenceWritable({
+        defaultWorkspacePath,
+        runtimeRootPath,
+        sessionsRootPath,
+      });
+
+      expect(existsSync(join(runtimeRootPath, "users"))).toBe(true);
+      expect(existsSync(defaultWorkspacePath)).toBe(true);
+      expect(existsSync(sessionsRootPath)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unusable session persistence before server startup", () => {
+    const root = mkdtempSync(join(tmpdir(), "dano-persistence-blocked-"));
+    const blockedPath = join(root, "blocked");
+    writeFileSync(blockedPath, "not a directory");
+
+    try {
+      expect(() =>
+        assertRuntimePersistenceWritable({
+          defaultWorkspacePath: join(blockedPath, "workspace"),
+          runtimeRootPath: join(root, "runtime"),
+          sessionsRootPath: join(root, "sessions"),
+        }),
+      ).toThrow("Dano needs write access for workspace session files");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits before listening when the configured default workspace is unusable", () => {
+    const root = mkdtempSync(join(tmpdir(), "dano-startup-blocked-"));
+    const blockedWorkspacePath = join(root, "blocked-workspace");
+    writeFileSync(blockedWorkspacePath, "not a directory");
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "jiti/register",
+          "./src/main.ts",
+          "--port",
+          "0",
+          "--default-workspace",
+          blockedWorkspacePath,
+        ],
+        {
+          cwd: resolve("apps/dano"),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DANO_PRODUCT_NAME: "Dano test",
+            DANO_RUNTIME_DIR: join(root, "runtime"),
+            NODE_ENV: "test",
+            PI_CODING_AGENT_DIR: join(root, "agent"),
+          },
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        `Dano needs write access for workspace session files at ${blockedWorkspacePath}`,
+      );
+      expect(`${result.stdout}${result.stderr}`).not.toContain("Server URL:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("ships bash with pinned Heimdall guards", () => {
     const runtimeDefaultsDir = resolve("deploy/runtime-defaults");
     const appPackage = JSON.parse(
@@ -910,16 +992,13 @@ describe("Dano main", () => {
     );
   });
 
-  it("accepts deprecated default workspace flags without selecting the Runtime Workspace", () => {
+  it("lets the command line select the default workspace", () => {
     const options = parseDanoServerOptions(
       ["--default-workspace", "/tmp/cli-dano"],
       { DANO_DEFAULT_WORKSPACE_PATH: "/tmp/env-dano" },
     );
 
-    expect(options.defaultWorkspacePath).toMatch(
-      /^\/opt\/dano\/runtime-data\/workspaces\/ws_[0-9a-f-]{36}$/,
-    );
-    expect(options.defaultWorkspacePath).not.toBe("/tmp/cli-dano");
+    expect(options.defaultWorkspacePath).toBe("/tmp/cli-dano");
     expect(options.sessionsRootPath).toBe(
       "/opt/dano/runtime-data/.dano/sessions",
     );

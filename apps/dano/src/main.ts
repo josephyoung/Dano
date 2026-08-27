@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -138,7 +139,7 @@ Usage:
 Options:
   --host <host>              Host to bind (default: ${DEFAULT_DANO_HOST})
   --port <number>            Port to bind (default: ${DEFAULT_DANO_PORT})
-  --default-workspace <path> Deprecated; new sessions use DANO_RUNTIME_DIR/workspaces/ws_<random>
+  --default-workspace <path> Workspace path checked before startup (default: DANO_RUNTIME_DIR/workspaces/ws_<random>)
   --sessions-root <path>     Base directory for per-User session roots (env: DANO_SESSIONS_ROOT, default: DANO_RUNTIME_DIR/${DEFAULT_DANO_SESSIONS_DIR})
   --empty-state-text <text>  Empty transcript text (env: DANO_EMPTY_STATE_TEXT, default: ${DEFAULT_EMPTY_STATE.content})
   --empty-state-html <html>  Empty transcript HTML (env: DANO_EMPTY_STATE_HTML)
@@ -198,6 +199,40 @@ function readRuntimeRootPath(env: Record<string, string | undefined>): string {
 
 function readDefaultWorkspacePath(runtimeRootPath: string): string {
   return join(runtimeRootPath, "workspaces", `ws_${randomUUID()}`);
+}
+
+function assertWritableDirectory(directoryPath: string): void {
+  const probePath = join(directoryPath, `.dano-write-test-${randomUUID()}`);
+  let probeCreated = false;
+  try {
+    mkdirSync(directoryPath, { recursive: true, mode: 0o700 });
+    writeFileSync(probePath, "dano", { flag: "wx", mode: 0o600 });
+    probeCreated = true;
+    unlinkSync(probePath);
+    probeCreated = false;
+  } catch (error) {
+    if (probeCreated) {
+      try {
+        unlinkSync(probePath);
+      } catch {
+        // Preserve the original persistence failure.
+      }
+    }
+    throw new Error(
+      `Dano needs write access for workspace session files at ${directoryPath}`,
+      { cause: error },
+    );
+  }
+}
+
+export function assertRuntimePersistenceWritable(options: {
+  defaultWorkspacePath: string;
+  runtimeRootPath: string;
+  sessionsRootPath: string;
+}): void {
+  assertWritableDirectory(join(options.runtimeRootPath, "users"));
+  assertWritableDirectory(options.defaultWorkspacePath);
+  assertWritableDirectory(options.sessionsRootPath);
 }
 
 function readAgentConfigDir(
@@ -734,6 +769,7 @@ export function parseDanoServerOptions(
   let host = readHost(env);
   let port = readPort(env);
   const runtimeRootPath = readRuntimeRootPath(env);
+  let defaultWorkspacePath: string | undefined;
   let sessionsRootPath = readSessionsRootPath(env, runtimeRootPath);
   const productName = resolveProductName(
     env.DANO_PRODUCT_NAME,
@@ -797,6 +833,7 @@ export function parseDanoServerOptions(
         if (!next || next.startsWith("--")) {
           throw new Error("Missing value for --default-workspace");
         }
+        defaultWorkspacePath = next;
         index++;
         continue;
       }
@@ -834,9 +871,9 @@ export function parseDanoServerOptions(
 
   const cwd = process.cwd();
   const resolvedRuntimeRootPath = resolve(cwd, runtimeRootPath);
-  const resolvedDefaultWorkspacePath = readDefaultWorkspacePath(
-    resolvedRuntimeRootPath,
-  );
+  const resolvedDefaultWorkspacePath = defaultWorkspacePath
+    ? resolve(cwd, defaultWorkspacePath)
+    : readDefaultWorkspacePath(resolvedRuntimeRootPath);
   return {
     cwd,
     runtimeRootPath: resolvedRuntimeRootPath,
@@ -1131,7 +1168,7 @@ async function runDanoMain(): Promise<number> {
   const packageInfo = readDanoPackageInfo(options.cwd);
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
-  const defaultWorkspacePath = undefined;
+  assertRuntimePersistenceWritable(options);
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }
@@ -1146,7 +1183,7 @@ async function runDanoMain(): Promise<number> {
       ...runtime.DEFAULT_BRIDGE_CONFIG,
       host: options.host,
       port: options.port,
-      defaultWorkspacePath,
+      defaultWorkspacePath: options.defaultWorkspacePath,
       productName: options.productName,
       emptyState: options.emptyState,
       upload: options.upload,
