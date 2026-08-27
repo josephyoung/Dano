@@ -4416,10 +4416,8 @@ describe("BridgeRpcAdapter", () => {
       ).mockReturnValue(sessionFile);
 
       const sessionWriteError = Object.assign(
-        new Error(
-          `EPERM: operation not permitted, open '${path.join(tmpDir, "private-session.jsonl")}'`,
-        ),
-        { code: "EPERM" },
+        new Error(`ENOSPC: no space left on device, write '${sessionFile}'`),
+        { code: "ENOSPC", syscall: "write" },
       );
       const consoleError = vi
         .spyOn(console, "error")

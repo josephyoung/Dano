@@ -31,7 +31,7 @@ describe("normalizeLlmErrorMessage", () => {
     ["fetch failed: socket hang up", DANO_LLM_NETWORK_ERROR],
     [
       "EPERM: operation not permitted, open '/private/runtime/session.jsonl'",
-      DANO_SESSION_PERSISTENCE_ERROR,
+      DANO_LLM_UNKNOWN_ERROR,
     ],
     ["provider returned EPERM", DANO_LLM_UNKNOWN_ERROR],
     ["provider leaked Authorization: Bearer secret", DANO_LLM_UNKNOWN_ERROR],

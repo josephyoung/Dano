@@ -114,7 +114,10 @@ import {
   normalizeLlmErrorMessage,
   normalizeLlmTranscriptMessage,
 } from "./llm-error.js";
-import { commandErrorMessage } from "./session-persistence-error.js";
+import {
+  commandErrorMessage,
+  wrapSessionPersistenceError,
+} from "./session-persistence-error.js";
 import { projectRpcModel } from "./pi-protocol-projector.js";
 
 type RpcTranscriptToolCallBlock = Extract<
@@ -6183,7 +6186,13 @@ export class BridgeRpcAdapter {
         this.sendSelectedSessionQueueUpdate();
       }
     } catch (err) {
-      const error = commandErrorMessage(command.type, err);
+      const surfacedError = command.type === "prompt"
+        ? wrapSessionPersistenceError(
+            err,
+            this.sessionRuntime.currentTranscriptSessionPath(),
+          )
+        : err;
+      const error = commandErrorMessage(surfacedError);
       console.error(
         `BridgeRpcAdapter[${this.client.id}]: Command error (${command.type}):`,
         err,
@@ -6416,8 +6425,12 @@ export class BridgeRpcAdapter {
             promptOperation = startedPrompt
               .catch(error => {
                 this.cancelQueuedAssistantTurn(binding);
-                const message = commandErrorMessage("prompt", error);
                 const sessionPath = session.sessionFile ?? null;
+                const surfacedError = wrapSessionPersistenceError(
+                  error,
+                  sessionPath,
+                );
+                const message = commandErrorMessage(surfacedError);
                 console.error(
                   `BridgeRpcAdapter[${this.client.id}]: Detached prompt failed:`,
                   error,

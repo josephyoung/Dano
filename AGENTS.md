@@ -20,6 +20,8 @@ This project is the Dano P0 browser-only LLM chat app.
 
 ## Code review
 
+- When invoking the `code-review` skill without a user-specified fixed point,
+  use `upstream/main`; an explicitly supplied fixed point takes precedence.
 - When an implementation under review looks ad hoc, suspiciously fragile, or
   vulnerability-prone, do not accept it at face value. Ask whether an
   industry-standard solution or mature open-source implementation already

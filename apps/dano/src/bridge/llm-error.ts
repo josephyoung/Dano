@@ -9,7 +9,6 @@ import {
   DANO_LLM_UNKNOWN_ERROR,
   DANO_SESSION_PERSISTENCE_ERROR,
 } from "./types.js";
-import { isSessionPersistenceError } from "./session-persistence-error.js";
 
 export {
   DANO_LLM_AUTHENTICATION_ERROR,
@@ -67,9 +66,6 @@ export function normalizeLlmErrorMessage(
   if (hasPartialOutput(message.content)) return DANO_LLM_INCOMPLETE_ERROR;
 
   const error = message.errorMessage;
-  if (isSessionPersistenceError(error)) {
-    return DANO_SESSION_PERSISTENCE_ERROR;
-  }
   if (/timed?\s*out|timeout|deadline exceeded/i.test(error)) {
     return DANO_LLM_TIMEOUT_ERROR;
   }
