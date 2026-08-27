@@ -114,6 +114,7 @@ import {
   normalizeLlmErrorMessage,
   normalizeLlmTranscriptMessage,
 } from "./llm-error.js";
+import { commandErrorMessage } from "./session-persistence-error.js";
 import { projectRpcModel } from "./pi-protocol-projector.js";
 
 type RpcTranscriptToolCallBlock = Extract<
@@ -6182,10 +6183,10 @@ export class BridgeRpcAdapter {
         this.sendSelectedSessionQueueUpdate();
       }
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const error = commandErrorMessage(command.type, err);
       console.error(
         `BridgeRpcAdapter[${this.client.id}]: Command error (${command.type}):`,
-        error,
+        err,
       );
 
       this.emitEvent({
@@ -6415,12 +6416,11 @@ export class BridgeRpcAdapter {
             promptOperation = startedPrompt
               .catch(error => {
                 this.cancelQueuedAssistantTurn(binding);
-                const message =
-                  error instanceof Error ? error.message : String(error);
+                const message = commandErrorMessage("prompt", error);
                 const sessionPath = session.sessionFile ?? null;
                 console.error(
                   `BridgeRpcAdapter[${this.client.id}]: Detached prompt failed:`,
-                  message,
+                  error,
                 );
                 this.emitEvent({
                   type: "command_error",

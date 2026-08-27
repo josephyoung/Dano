@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DANO_SESSION_PERSISTENCE_ERROR } from "../../../types/protocol";
 import {
   bridgeCommandErrorNotificationMessage,
   bridgeServerErrorMessage,
@@ -13,6 +14,7 @@ describe("bridge error helpers", () => {
       bridgeServerErrorMessage("Client was not found", {
         staleClient: "连接已过期，请刷新页面后重试",
         fallback: "发送 bridge 消息失败",
+        sessionPersistence: "会话保存失败",
       }),
     ).toBe("连接已过期，请刷新页面后重试");
   });
@@ -22,12 +24,14 @@ describe("bridge error helpers", () => {
       bridgeServerErrorMessage("bad request", {
         staleClient: "连接已过期",
         fallback: "发送 bridge 消息失败",
+        sessionPersistence: "会话保存失败",
       }),
     ).toBe("bad request");
     expect(
       bridgeServerErrorMessage("", {
         staleClient: "连接已过期",
         fallback: "发送 bridge 消息失败",
+        sessionPersistence: "会话保存失败",
       }),
     ).toBe("发送 bridge 消息失败");
   });
@@ -39,7 +43,10 @@ describe("bridge error helpers", () => {
           type: "command_error",
           error: "No API key found for xiaomi-token-plan-cn.\nUse /login",
         },
-        "发送 bridge 消息失败",
+        {
+          fallback: "发送 bridge 消息失败",
+          sessionPersistence: "会话保存失败",
+        },
       ),
     ).toBe("No API key found for xiaomi-token-plan-cn.");
 
@@ -49,8 +56,31 @@ describe("bridge error helpers", () => {
           type: "transcript_delta",
           error: "not a command error",
         },
-        "发送 bridge 消息失败",
+        {
+          fallback: "发送 bridge 消息失败",
+          sessionPersistence: "会话保存失败",
+        },
       ),
     ).toBeNull();
+  });
+
+  it("maps session persistence failures without exposing local details", () => {
+    const labels = {
+      fallback: "发送 bridge 消息失败",
+      sessionPersistence: "会话保存失败，请重试",
+    };
+
+    expect(
+      bridgeCommandErrorNotificationMessage(
+        { type: "command_error", error: DANO_SESSION_PERSISTENCE_ERROR },
+        labels,
+      ),
+    ).toBe("会话保存失败，请重试");
+    expect(
+      bridgeServerErrorMessage(DANO_SESSION_PERSISTENCE_ERROR, {
+        ...labels,
+        staleClient: "连接已过期",
+      }),
+    ).toBe("会话保存失败，请重试");
   });
 });

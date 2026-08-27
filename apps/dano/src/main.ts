@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -198,6 +199,38 @@ function readRuntimeRootPath(env: Record<string, string | undefined>): string {
 
 function readDefaultWorkspacePath(runtimeRootPath: string): string {
   return join(runtimeRootPath, "workspaces", `ws_${randomUUID()}`);
+}
+
+function assertWritableDirectory(directoryPath: string): void {
+  const probePath = join(directoryPath, `.dano-write-test-${randomUUID()}`);
+  let probeCreated = false;
+  try {
+    mkdirSync(directoryPath, { recursive: true, mode: 0o700 });
+    writeFileSync(probePath, "dano", { flag: "wx", mode: 0o600 });
+    probeCreated = true;
+    unlinkSync(probePath);
+    probeCreated = false;
+  } catch (error) {
+    if (probeCreated) {
+      try {
+        unlinkSync(probePath);
+      } catch {
+        // Preserve the original persistence failure.
+      }
+    }
+    throw new Error(
+      `Dano needs write access for workspace session files at ${directoryPath}`,
+      { cause: error },
+    );
+  }
+}
+
+export function assertRuntimePersistenceWritable(options: {
+  runtimeRootPath: string;
+  sessionsRootPath: string;
+}): void {
+  assertWritableDirectory(join(options.runtimeRootPath, "users"));
+  assertWritableDirectory(options.sessionsRootPath);
 }
 
 function readAgentConfigDir(
@@ -1132,6 +1165,7 @@ async function runDanoMain(): Promise<number> {
   process.env.DANO_PACKAGE_NAME ??= packageInfo.name;
   process.env.DANO_VERSION ??= packageInfo.version;
   const defaultWorkspacePath = undefined;
+  assertRuntimePersistenceWritable(options);
   if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
     process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
   }

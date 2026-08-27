@@ -1,3 +1,11 @@
+import { DANO_SESSION_PERSISTENCE_ERROR } from "../../../types/protocol";
+
+interface BridgeErrorLabels {
+  fallback: string;
+  sessionPersistence: string;
+  staleClient: string;
+}
+
 export function isStaleBridgeClientError(message: string): boolean {
   const normalized = message.trim();
   return normalized === "Client was not found" || normalized === "RECONNECT_REQUIRED";
@@ -5,9 +13,13 @@ export function isStaleBridgeClientError(message: string): boolean {
 
 export function bridgeServerErrorMessage(
   message: string,
-  labels: { staleClient: string; fallback: string },
+  labels: BridgeErrorLabels,
 ): string {
-  return isStaleBridgeClientError(message) ? labels.staleClient : (message || labels.fallback);
+  if (isStaleBridgeClientError(message)) return labels.staleClient;
+  if (message.trim() === DANO_SESSION_PERSISTENCE_ERROR) {
+    return labels.sessionPersistence;
+  }
+  return message || labels.fallback;
 }
 
 export function summarizeErrorMessage(message: string, fallback: string): string {
@@ -21,11 +33,14 @@ export function summarizeErrorMessage(message: string, fallback: string): string
 
 export function bridgeCommandErrorNotificationMessage(
   event: { type?: unknown; error?: unknown },
-  fallback: string,
+  labels: Pick<BridgeErrorLabels, "fallback" | "sessionPersistence">,
 ): string | null {
   if (event.type !== "command_error") return null;
+  if (event.error === DANO_SESSION_PERSISTENCE_ERROR) {
+    return labels.sessionPersistence;
+  }
   return summarizeErrorMessage(
     typeof event.error === "string" ? event.error : "",
-    fallback,
+    labels.fallback,
   );
 }

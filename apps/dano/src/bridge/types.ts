@@ -21,6 +21,7 @@ export {
   DANO_LLM_SERVICE_ERROR,
   DANO_LLM_TIMEOUT_ERROR,
   DANO_LLM_UNKNOWN_ERROR,
+  DANO_SESSION_PERSISTENCE_ERROR,
 } from "../../types/protocol.js";
 
 // ============================================================================

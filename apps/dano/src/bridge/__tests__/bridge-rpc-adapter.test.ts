@@ -93,6 +93,7 @@ vi.mock("../detached-session.js", () => ({
 }));
 import { BridgeEventBus } from "../bridge-event-bus.js";
 import {
+  DANO_SESSION_PERSISTENCE_ERROR,
   DEFAULT_BRIDGE_CONFIG,
   type RpcCommand,
   type RpcExtensionUIResponse,
@@ -4414,6 +4415,15 @@ describe("BridgeRpcAdapter", () => {
         context.state.sessionManager.getSessionFile as ReturnType<typeof vi.fn>
       ).mockReturnValue(sessionFile);
 
+      const sessionWriteError = Object.assign(
+        new Error(
+          `EPERM: operation not permitted, open '${path.join(tmpDir, "private-session.jsonl")}'`,
+        ),
+        { code: "EPERM" },
+      );
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       createAgentSessionMock.mockResolvedValue({
         session: {
           sessionFile,
@@ -4421,7 +4431,7 @@ describe("BridgeRpcAdapter", () => {
           isStreaming: false,
           bindExtensions: vi.fn().mockResolvedValue(undefined),
           subscribe: vi.fn().mockReturnValue(() => {}),
-          prompt: vi.fn().mockRejectedValue(new Error("Session write failed")),
+          prompt: vi.fn().mockRejectedValue(sessionWriteError),
           sessionManager,
         },
       });
@@ -4466,7 +4476,7 @@ describe("BridgeRpcAdapter", () => {
           client,
           commandType: "prompt",
           correlationId: "cmd-prompt-fail",
-          error: "Session write failed",
+          error: DANO_SESSION_PERSISTENCE_ERROR,
         }),
       );
       expect(
@@ -4478,9 +4488,18 @@ describe("BridgeRpcAdapter", () => {
               call.payload.type === "command_error" &&
               call.payload.commandType === "prompt" &&
               call.payload.correlationId === "cmd-prompt-fail" &&
-              call.payload.error === "Session write failed",
+              call.payload.error === DANO_SESSION_PERSISTENCE_ERROR,
           ),
       ).toBe(true);
+      const commandErrorPayload = ws.send.mock.calls
+        .map(call => JSON.parse(call[0] as string).payload)
+        .find(payload => payload.type === "command_error");
+      expect(JSON.stringify(commandErrorPayload)).not.toContain(tmpDir);
+      expect(JSON.stringify(commandErrorPayload)).not.toContain(".jsonl");
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("Detached prompt failed"),
+        sessionWriteError,
+      );
       expect(
         ws.send.mock.calls
           .map(call => JSON.parse(call[0] as string))
@@ -4492,6 +4511,7 @@ describe("BridgeRpcAdapter", () => {
           ),
       ).toBe(true);
 
+      consoleError.mockRestore();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
   });

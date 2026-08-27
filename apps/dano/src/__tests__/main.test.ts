@@ -15,6 +15,7 @@ import {
   resolveDanoDevWatchPath,
 } from "../dev-reload.js";
 import {
+  assertRuntimePersistenceWritable,
   initializeDanoAgentSettings,
   parseDanoServerOptions,
   readDanoPackageInfo,
@@ -43,6 +44,38 @@ function oauthEnvironment(
 }
 
 describe("Dano main", () => {
+  it("prepares writable Runtime Workspace and session roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "dano-persistence-"));
+    const runtimeRootPath = join(root, "runtime");
+    const sessionsRootPath = join(root, "sessions");
+
+    try {
+      assertRuntimePersistenceWritable({ runtimeRootPath, sessionsRootPath });
+
+      expect(existsSync(join(runtimeRootPath, "users"))).toBe(true);
+      expect(existsSync(sessionsRootPath)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unusable session persistence before server startup", () => {
+    const root = mkdtempSync(join(tmpdir(), "dano-persistence-blocked-"));
+    const blockedPath = join(root, "blocked");
+    writeFileSync(blockedPath, "not a directory");
+
+    try {
+      expect(() =>
+        assertRuntimePersistenceWritable({
+          runtimeRootPath: join(root, "runtime"),
+          sessionsRootPath: join(blockedPath, "sessions"),
+        }),
+      ).toThrow("Dano needs write access for workspace session files");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("ships bash with pinned Heimdall guards", () => {
     const runtimeDefaultsDir = resolve("deploy/runtime-defaults");
     const appPackage = JSON.parse(

@@ -2,6 +2,7 @@ import {
   DANO_LLM_AUTHENTICATION_ERROR,
   DANO_LLM_INCOMPLETE_ERROR,
   DANO_LLM_TIMEOUT_ERROR,
+  DANO_SESSION_PERSISTENCE_ERROR,
 } from "@dano/types/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorMessageText } from "./transcript";
@@ -32,6 +33,12 @@ describe("LLM error messages", () => {
         errorMessage: DANO_LLM_INCOMPLETE_ERROR,
       }),
     ).toBe("模型响应中断；已保留收到的内容。请重试或切换模型。");
+    expect(
+      errorMessageText({
+        role: "assistant",
+        errorMessage: DANO_SESSION_PERSISTENCE_ERROR,
+      }),
+    ).toBe("会话保存失败，请重试；若仍失败，请联系管理员。");
   });
 
   it("uses the configured English locale", () => {

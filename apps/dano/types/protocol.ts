@@ -906,6 +906,7 @@ export const DANO_LLM_SERVICE_ERROR = "DANO_LLM_SERVICE";
 export const DANO_LLM_NETWORK_ERROR = "DANO_LLM_NETWORK";
 export const DANO_LLM_INCOMPLETE_ERROR = "DANO_LLM_INCOMPLETE";
 export const DANO_LLM_UNKNOWN_ERROR = "DANO_LLM_UNKNOWN";
+export const DANO_SESSION_PERSISTENCE_ERROR = "DANO_SESSION_PERSISTENCE";
 
 export interface RpcTranscriptMessage {
   transcriptKey?: string;

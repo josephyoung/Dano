@@ -8,6 +8,7 @@ import {
   DANO_LLM_SERVICE_ERROR,
   DANO_LLM_TIMEOUT_ERROR,
   DANO_LLM_UNKNOWN_ERROR,
+  DANO_SESSION_PERSISTENCE_ERROR,
   normalizeLlmErrorMessage,
 } from "../llm-error.js";
 
@@ -28,6 +29,11 @@ describe("normalizeLlmErrorMessage", () => {
     ["insufficient_quota: available balance 0", DANO_LLM_QUOTA_ERROR],
     ["503 Service Unavailable", DANO_LLM_SERVICE_ERROR],
     ["fetch failed: socket hang up", DANO_LLM_NETWORK_ERROR],
+    [
+      "EPERM: operation not permitted, open '/private/runtime/session.jsonl'",
+      DANO_SESSION_PERSISTENCE_ERROR,
+    ],
+    ["provider returned EPERM", DANO_LLM_UNKNOWN_ERROR],
     ["provider leaked Authorization: Bearer secret", DANO_LLM_UNKNOWN_ERROR],
   ])("classifies and sanitizes %s", (raw, expected) => {
     expect(normalizeLlmErrorMessage(assistantError(raw))).toBe(expected);
