@@ -594,6 +594,29 @@ describe("Dano main", () => {
     );
   });
 
+  it("allows a SPA Hash route only for the browser authorization endpoint", () => {
+    const options = parseDanoServerOptions([], {
+      NODE_ENV: "production",
+      ...oauthEnvironment({
+        DANO_OAUTH_AUTHORIZATION_ENDPOINT:
+          "https://provider.example.test/web/#/auth/sso-login",
+      }),
+    });
+
+    expect(options.oauthAuthentication?.provider.authorizationEndpoint).toBe(
+      "https://provider.example.test/web/#/auth/sso-login",
+    );
+    expect(() =>
+      parseDanoServerOptions([], {
+        NODE_ENV: "production",
+        ...oauthEnvironment({
+          DANO_OAUTH_TOKEN_ENDPOINT:
+            "https://provider.example.test/token#fragment",
+        }),
+      }),
+    ).toThrow("OAuth token endpoint is not trusted");
+  });
+
   it("requires an explicit opt-in for plaintext HTTP server endpoints", () => {
     const insecureProvider = {
       DANO_OAUTH_ISSUER: "http://provider.example.test",

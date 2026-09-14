@@ -72,6 +72,12 @@ export interface OAuth2ProviderAdapterOptions {
 export function createOAuth2ProviderAdapter(
   options: OAuth2ProviderAdapterOptions,
 ): OAuthProviderAdapter {
+  const authorizationEndpoint = new URL(options.authorizationEndpoint);
+  const protocolAuthorizationEndpoint = new URL(authorizationEndpoint);
+  if (authorizationEndpoint.hash) {
+    protocolAuthorizationEndpoint.search = "";
+    protocolAuthorizationEndpoint.hash = "";
+  }
   const tokenEndpoint = new URL(options.tokenEndpoint);
   const revocationEndpoint = options.revocation
     ? new URL(options.revocation.endpoint ?? tokenEndpoint)
@@ -86,7 +92,7 @@ export function createOAuth2ProviderAdapter(
       : oauth.ClientSecretPost(clientSecret);
   const serverMetadata = {
     issuer: new URL(options.issuer).href,
-    authorization_endpoint: new URL(options.authorizationEndpoint).href,
+    authorization_endpoint: protocolAuthorizationEndpoint.href,
     token_endpoint: tokenEndpoint.href,
     ...(options.revocation?.transport === "rfc7009" && revocationEndpoint
       ? { revocation_endpoint: revocationEndpoint.href }
@@ -129,11 +135,14 @@ export function createOAuth2ProviderAdapter(
 
   const adapter: OAuthProviderAdapter = {
     authorizationUrl({ state, redirectUri }) {
-      return oauth.buildAuthorizationUrl(configuration, {
+      const url = oauth.buildAuthorizationUrl(configuration, {
         redirect_uri: redirectUri,
         scope,
         state,
       });
+      return authorizationEndpoint.hash
+        ? authorizationUrlWithFragmentRoute(authorizationEndpoint, url)
+        : url;
     },
 
     async exchangeAuthorizationCode({ code, state, redirectUri }) {
@@ -224,6 +233,25 @@ export function createOAuth2ProviderAdapter(
     ...adapter,
     ...(revokeCredential ? { revokeCredential } : {}),
   };
+}
+
+function authorizationUrlWithFragmentRoute(
+  endpoint: URL,
+  protocolUrl: URL,
+): URL {
+  const url = new URL(endpoint);
+  const fragment = url.hash.slice(1);
+  const queryIndex = fragment.indexOf("?");
+  const route = queryIndex === -1 ? fragment : fragment.slice(0, queryIndex);
+  const parameters = new URLSearchParams(
+    queryIndex === -1 ? "" : fragment.slice(queryIndex + 1),
+  );
+  for (const [name, value] of protocolUrl.searchParams) {
+    parameters.set(name, value);
+  }
+  const query = parameters.toString();
+  url.hash = query ? `${route}?${query}` : route;
+  return url;
 }
 
 async function fetchExternalIdentity(
