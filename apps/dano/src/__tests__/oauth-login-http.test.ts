@@ -469,6 +469,42 @@ describe("OAuth authentication over HTTP", () => {
     expect(authorizationUrl.pathname).toBe("/system/oauth2/authorize");
   });
 
+  it("places OAuth parameters inside a SPA Hash authorization route", () => {
+    const provider = createOAuth2ProviderAdapter({
+      issuer: "https://provider.example.test",
+      authorizationEndpoint:
+        "https://provider.example.test/web/?brand=dano#/auth/sso-login?ui=compact&scope=old",
+      tokenEndpoint: "https://provider.example.test/token",
+      identityEndpoint: "https://provider.example.test/identity",
+      clientId: "hash-client",
+      clientSecret: "fake-client-secret",
+      scope: "user.read offline_access",
+    });
+
+    const authorizationUrl = provider.authorizationUrl({
+      state: "state-1",
+      redirectUri: "https://dano.example.test/api/auth/callback",
+    });
+    const fragmentUrl = new URL(
+      authorizationUrl.hash.slice(1),
+      "https://fragment.invalid",
+    );
+
+    expect(authorizationUrl.searchParams.get("brand")).toBe("dano");
+    expect(authorizationUrl.searchParams.has("client_id")).toBe(false);
+    expect(fragmentUrl.pathname).toBe("/auth/sso-login");
+    expect(fragmentUrl.searchParams.get("ui")).toBe("compact");
+    expect(fragmentUrl.searchParams.get("response_type")).toBe("code");
+    expect(fragmentUrl.searchParams.get("client_id")).toBe("hash-client");
+    expect(fragmentUrl.searchParams.get("redirect_uri")).toBe(
+      "https://dano.example.test/api/auth/callback",
+    );
+    expect(fragmentUrl.searchParams.get("scope")).toBe(
+      "user.read offline_access",
+    );
+    expect(fragmentUrl.searchParams.get("state")).toBe("state-1");
+  });
+
   it("uses openid-client for the confidential Authorization Code exchange without PKCE", async () => {
     const identityFixture = JSON.parse(
       fs.readFileSync(

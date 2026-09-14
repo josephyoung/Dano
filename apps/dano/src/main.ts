@@ -358,7 +358,11 @@ function readOAuthAuthentication(
       allowInsecureServerEndpoints,
   );
   for (const [name, url] of providerUrls) {
-    if (url.username || url.password || url.hash) {
+    if (
+      url.username ||
+      url.password ||
+      (name !== "authorization endpoint" && url.hash)
+    ) {
       throw new Error(`OAuth ${name} is not trusted`);
     }
     const allowedProtocol =
