@@ -51,6 +51,7 @@ export interface OAuth2ProviderAdapterOptions {
   readonly authorizationEndpoint: string;
   readonly tokenEndpoint: string;
   readonly identityEndpoint: string;
+  readonly identityTransport?: "bearer-get" | "token-introspection";
   readonly revocation?:
     | { readonly transport: "rfc7009"; readonly endpoint: string }
     | { readonly transport: "delete-query-basic"; readonly endpoint?: string };
@@ -94,6 +95,9 @@ export function createOAuth2ProviderAdapter(
     issuer: new URL(options.issuer).href,
     authorization_endpoint: protocolAuthorizationEndpoint.href,
     token_endpoint: tokenEndpoint.href,
+    ...(options.identityTransport === "token-introspection"
+      ? { introspection_endpoint: new URL(options.identityEndpoint).href }
+      : {}),
     ...(options.revocation?.transport === "rfc7009" && revocationEndpoint
       ? { revocation_endpoint: revocationEndpoint.href }
       : {}),
@@ -127,8 +131,17 @@ export function createOAuth2ProviderAdapter(
           ? tokenBodyWithState(init.body, tokenExchangeState.getStore())
           : init.body,
     });
-    if (new URL(url).href !== tokenEndpoint.href) return response;
-    return normalizeTokenEndpointResponse(response);
+    const responseUrl = new URL(url).href;
+    if (responseUrl === tokenEndpoint.href) {
+      return normalizeTokenEndpointResponse(response);
+    }
+    if (
+      options.identityTransport === "token-introspection" &&
+      responseUrl === identityEndpoint.href
+    ) {
+      return normalizeIntrospectionEndpointResponse(response);
+    }
+    return response;
   };
   const identityEndpoint = new URL(options.identityEndpoint);
   const scope = required(options.scope, "OAuth scope");
@@ -161,6 +174,7 @@ export function createOAuth2ProviderAdapter(
         tokens.access_token,
         tokens.token_type,
         identityEndpoint,
+        options.identityTransport,
       );
       const expiresIn = tokens.expiresIn();
       return {
@@ -192,6 +206,7 @@ export function createOAuth2ProviderAdapter(
         credential.accessToken,
         credential.tokenType,
         identityEndpoint,
+        options.identityTransport,
       );
     },
 
@@ -259,7 +274,13 @@ async function fetchExternalIdentity(
   accessToken: string,
   tokenType: string | undefined,
   identityEndpoint: URL,
+  identityTransport: OAuth2ProviderAdapterOptions["identityTransport"],
 ): Promise<ExternalIdentity> {
+  if (identityTransport === "token-introspection") {
+    const identity = await oauth.tokenIntrospection(configuration, accessToken);
+    if (!identity.active) throw new OAuthProviderContractError();
+    return parseExternalIdentity(identity);
+  }
   if (tokenType && tokenType.trim().toLowerCase() !== "bearer") {
     throw new Error("Provider access token type is unsupported");
   }
@@ -339,7 +360,9 @@ function parseExternalIdentity(value: unknown): ExternalIdentity {
   if (!identity) {
     throw new OAuthProviderContractError();
   }
-  const userId = normalizedIdentifier(identity.userId ?? identity.id);
+  const userId = normalizedIdentifier(
+    identity.userId ?? identity.user_id ?? identity.id,
+  );
   if (!userId) {
     throw new OAuthProviderContractError();
   }
@@ -375,6 +398,44 @@ async function normalizeTokenEndpointResponse(
     statusText: response.statusText,
     headers,
   });
+  Object.defineProperty(normalized, "url", { value: response.url });
+  return normalized;
+}
+
+async function normalizeIntrospectionEndpointResponse(
+  response: Response,
+): Promise<Response> {
+  let value: unknown;
+  try {
+    value = await response.clone().json();
+  } catch {
+    return response;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return response;
+  }
+  const record = value as Record<string, unknown>;
+  if (!("code" in record)) return response;
+  const successful = record.code === 0 || record.code === "0";
+  const data =
+    successful &&
+    record.data &&
+    typeof record.data === "object" &&
+    !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : {};
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  const normalized = new Response(
+    JSON.stringify({ active: successful, ...data }),
+    {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    },
+  );
   Object.defineProperty(normalized, "url", { value: response.url });
   return normalized;
 }

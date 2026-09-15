@@ -62,7 +62,7 @@ Redirect URI 必须逐字符一致，包括：
 | --- | --- |
 | 浏览器授权页 | `<OA_BROWSER_ORIGIN>/sso` |
 | Token 接口 | `<OA_API_ORIGIN>/admin-api/system/oauth2/token` |
-| 当前用户身份 | `<OA_API_ORIGIN>/admin-api/system/oauth2/user/get` |
+| 当前用户身份 | 对 `<OA_API_ORIGIN>/admin-api/system/oauth2/check-token` 执行 token introspection |
 | Token 撤销 | 对 Token 接口发送 `DELETE`，token 放在 query 中，Client 使用 HTTP Basic 认证 |
 | 固定 Provider Header | `{"tenant-id":"1"}` |
 | Code 换 Token | 除 code 和 Redirect URI 外，需要再次提交本次 callback state |
@@ -72,7 +72,7 @@ Redirect URI 必须逐字符一致，包括：
 
 `tenant-id` 在这里仅是 OA 接口要求的固定传输 Header，不进入 Dano 用户身份，也不表示 Dano 支持多租户。
 
-OA 身份响应的 `data` 中必须包含非空且稳定的 `userId` 或 `id`。Dano 可选读取 `displayName`、`nickname`、`name`、`username` 之一作为显示名，以及 `avatarUrl` 或 `avatar` 作为头像。
+OA 身份响应的 `data` 中必须包含非空且稳定的 `userId`、`user_id` 或 `id`。Dano 可选读取 `displayName`、`nickname`、`name`、`username` 之一作为显示名，以及 `avatarUrl` 或 `avatar` 作为头像。当前 OA 的用户资料接口会对部分可正常获得 OAuth Token 的账号返回业务失败，因此使用 token introspection 直接取得稳定用户标识。
 
 如果生产 OA 的 Client 契约与上表不同，应修改 Dano 环境变量匹配真实契约，而不是复制测试环境值后猜测。
 
@@ -90,7 +90,8 @@ DANO_OAUTH_ALLOW_INSECURE_AUTHORIZATION_ENDPOINT=true
 
 # 仅由 Dano 服务端访问。
 DANO_OAUTH_TOKEN_ENDPOINT=<OA_API_ORIGIN>/admin-api/system/oauth2/token
-DANO_OAUTH_IDENTITY_ENDPOINT=<OA_API_ORIGIN>/admin-api/system/oauth2/user/get
+DANO_OAUTH_IDENTITY_ENDPOINT=<OA_API_ORIGIN>/admin-api/system/oauth2/check-token
+DANO_OAUTH_IDENTITY_TRANSPORT=token-introspection
 DANO_OAUTH_API_ORIGIN=<OA_API_ORIGIN>
 DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS=true
 

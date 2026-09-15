@@ -132,11 +132,15 @@ async function startFakeProvider(options: {
   tokenResponse?: unknown | ((request: URLSearchParams) => unknown);
   identityStatus?: number;
   identity?: unknown;
+  introspectionStatus?: number;
+  introspectionResponse?: unknown;
 } = {}) {
   const tokenRequests: URLSearchParams[] = [];
   const tokenRequestHeaders: http.IncomingHttpHeaders[] = [];
   const identityAuthorization: string[] = [];
   const identityRequestHeaders: http.IncomingHttpHeaders[] = [];
+  const introspectionRequests: URLSearchParams[] = [];
+  const introspectionRequestHeaders: http.IncomingHttpHeaders[] = [];
   const revocationRequests: Array<{
     method: string;
     token: string | null;
@@ -199,6 +203,27 @@ async function startFakeProvider(options: {
       );
       return;
     }
+    if (req.method === "POST" && req.url === "/introspect") {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", chunk => (body += chunk));
+      req.on("end", () => {
+        introspectionRequestHeaders.push(req.headers);
+        introspectionRequests.push(new URLSearchParams(body));
+        res.writeHead(options.introspectionStatus ?? 200, {
+          "Content-Type": "application/json",
+        });
+        res.end(
+          JSON.stringify(
+            options.introspectionResponse ?? {
+              active: true,
+              user_id: "fake-provider-user",
+            },
+          ),
+        );
+      });
+      return;
+    }
     res.writeHead(404).end();
   });
   await new Promise<void>((resolve, reject) => {
@@ -216,6 +241,8 @@ async function startFakeProvider(options: {
     tokenRequestHeaders,
     identityAuthorization,
     identityRequestHeaders,
+    introspectionRequests,
+    introspectionRequestHeaders,
     revocationRequests,
   };
 }
@@ -612,6 +639,120 @@ describe("OAuth authentication over HTTP", () => {
     expect(fakeProvider.tokenRequestHeaders[0]?.authorization).toBe(
       `Basic ${Buffer.from("basicclient:basicsecret").toString("base64")}`,
     );
+  });
+
+  it("uses token introspection as a configured identity source", async () => {
+    const fakeProvider = await startFakeProvider({
+      introspectionResponse: {
+        code: 0,
+        data: {
+          user_id: "snake-case-user",
+          username: "Introspected User",
+        },
+      },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/introspect`,
+      identityTransport: "token-introspection",
+      clientId: "introspection-client",
+      clientSecret: "introspection-secret",
+      clientAuthMethod: "client_secret_basic",
+      scope: "user.read",
+      requestHeaders: { "x-provider-context": "tenant-a" },
+      allowInsecureRequests: true,
+    });
+    const { origin } = await startOAuthServer(provider);
+    const started = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fake-code&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.status).toBe(303);
+    expect(fakeProvider.identityAuthorization).toEqual([]);
+    expect(fakeProvider.introspectionRequests).toHaveLength(2);
+    expect(
+      fakeProvider.introspectionRequests.every(
+        request => request.get("token") === "fake-access-token",
+      ),
+    ).toBe(true);
+    expect(
+      fakeProvider.introspectionRequestHeaders.every(
+        headers => headers["x-provider-context"] === "tenant-a",
+      ),
+    ).toBe(true);
+    expect(fakeProvider.introspectionRequestHeaders[0]?.authorization).toBe(
+      `Basic ${Buffer.from("introspection%2Dclient:introspection%2Dsecret").toString("base64")}`,
+    );
+    const current = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: cookieFrom(callback, "dano_login") },
+    });
+    expect(await current.json()).toEqual({
+      status: "authenticated",
+      user: {
+        id: expect.stringMatching(/^oauth_[a-f0-9]{64}$/),
+        username: "Introspected User",
+      },
+    });
+  });
+
+  it("rejects an introspection provider business failure without leaking its payload", async () => {
+    const fakeProvider = await startFakeProvider({
+      introspectionResponse: {
+        code: 500,
+        data: null,
+        msg: "failure includes token-secret-value",
+      },
+    });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/introspect`,
+      identityTransport: "token-introspection",
+      clientId: "introspection-client",
+      clientSecret: "introspection-secret",
+      clientAuthMethod: "client_secret_basic",
+      scope: "user.read",
+      allowInsecureRequests: true,
+    });
+    const { origin } = await startOAuthServer(provider);
+    const started = await fetch(`${origin}/api/auth/login?returnTo=/failure`, {
+      redirect: "manual",
+    });
+    const state = new URL(started.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+    const callback = await fetch(
+      `${origin}/api/auth/callback?code=fake-code&state=${encodeURIComponent(state)}`,
+      {
+        headers: { Cookie: cookieFrom(started, "dano_oauth_flow") },
+        redirect: "manual",
+      },
+    );
+
+    expect(callback.status).toBe(303);
+    expect(callback.headers.get("location")).toBe("/failure");
+    const current = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: cookieFrom(callback, "dano_auth_error") },
+    });
+    const currentBody = await current.json();
+    expect(currentBody).toEqual({
+      status: "anonymous",
+      loginError: { code: "provider_identity_invalid" },
+    });
+    expect(JSON.stringify(currentBody)).not.toContain("token-secret-value");
   });
 
   it("normalizes a provider data envelope inside the adapter boundary", async () => {
