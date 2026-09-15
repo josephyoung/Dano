@@ -49,6 +49,7 @@ const providerOptions = (clientSecret: string) => ({
   authorizationEndpoint: required("DANO_OAUTH_AUTHORIZATION_ENDPOINT"),
   tokenEndpoint,
   identityEndpoint: required("DANO_OAUTH_IDENTITY_ENDPOINT"),
+  profileEndpoint: process.env.DANO_OAUTH_PROFILE_ENDPOINT?.trim() || undefined,
   identityTransport:
     process.env.DANO_OAUTH_IDENTITY_TRANSPORT?.trim() === "token-introspection"
       ? ("token-introspection" as const)

@@ -52,6 +52,8 @@ export interface OAuth2ProviderAdapterOptions {
   readonly tokenEndpoint: string;
   readonly identityEndpoint: string;
   readonly identityTransport?: "bearer-get" | "token-introspection";
+  /** Optional Bearer GET profile source; never establishes or changes identity. */
+  readonly profileEndpoint?: string;
   readonly revocation?:
     | { readonly transport: "rfc7009"; readonly endpoint: string }
     | { readonly transport: "delete-query-basic"; readonly endpoint?: string };
@@ -145,6 +147,37 @@ export function createOAuth2ProviderAdapter(
   };
   const identityEndpoint = new URL(options.identityEndpoint);
   const scope = required(options.scope, "OAuth scope");
+  const profileEndpoint = options.profileEndpoint
+    ? new URL(options.profileEndpoint)
+    : undefined;
+
+  async function resolveIdentity(
+    accessToken: string,
+    tokenType: string | undefined,
+  ): Promise<ExternalIdentity> {
+    const identity = await fetchExternalIdentity(
+      configuration,
+      accessToken,
+      tokenType,
+      identityEndpoint,
+      options.identityTransport,
+    );
+    if (!profileEndpoint) return identity;
+    try {
+      const profile = await fetchExternalIdentity(
+        configuration,
+        accessToken,
+        tokenType,
+        profileEndpoint,
+        "bearer-get",
+      );
+      if (profile.userId !== identity.userId) return identity;
+      return { ...identity, ...profile };
+    } catch {
+      // Profile availability must not invalidate an independently verified identity.
+      return identity;
+    }
+  }
 
   const adapter: OAuthProviderAdapter = {
     authorizationUrl({ state, redirectUri }) {
@@ -169,12 +202,9 @@ export function createOAuth2ProviderAdapter(
           { expectedState: state },
         ),
       );
-      const identity = await fetchExternalIdentity(
-        configuration,
+      const identity = await resolveIdentity(
         tokens.access_token,
         tokens.token_type,
-        identityEndpoint,
-        options.identityTransport,
       );
       const expiresIn = tokens.expiresIn();
       return {
@@ -201,12 +231,9 @@ export function createOAuth2ProviderAdapter(
     },
 
     async validateCredential(credential) {
-      return fetchExternalIdentity(
-        configuration,
+      return resolveIdentity(
         credential.accessToken,
         credential.tokenType,
-        identityEndpoint,
-        options.identityTransport,
       );
     },
 

@@ -346,6 +346,9 @@ function readOAuthAuthentication(
     ["authorization endpoint", authorizationEndpoint],
     ["token endpoint", new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!)],
     ["identity endpoint", new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!)],
+    ...(env.DANO_OAUTH_PROFILE_ENDPOINT?.trim()
+      ? [["profile endpoint", new URL(env.DANO_OAUTH_PROFILE_ENDPOINT.trim())] as const]
+      : []),
     ["API origin", new URL(values.DANO_OAUTH_API_ORIGIN!)],
     ...(revocation?.endpoint
       ? [["revocation endpoint", new URL(revocation.endpoint)] as const]
@@ -385,7 +388,7 @@ function readOAuthAuthentication(
   if (redirectUri.protocol !== "https:" && !localHttpCallback) {
     throw new Error("OAuth redirect URI must use trusted HTTPS");
   }
-  const providerApiUrl = providerUrls[4][1];
+  const providerApiUrl = new URL(values.DANO_OAUTH_API_ORIGIN!);
   if (providerApiUrl.pathname !== "/" || providerApiUrl.search) {
     throw new Error("OAuth API origin must not include a path or query");
   }
@@ -444,6 +447,9 @@ function readOAuthAuthentication(
       authorizationEndpoint: authorizationEndpoint.href,
       tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
       identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
+      ...(env.DANO_OAUTH_PROFILE_ENDPOINT?.trim()
+        ? { profileEndpoint: new URL(env.DANO_OAUTH_PROFILE_ENDPOINT.trim()).href }
+        : {}),
       ...(identityTransport ? { identityTransport } : {}),
       ...(revocation ? { revocation } : {}),
       clientId: values.DANO_OAUTH_CLIENT_ID!,

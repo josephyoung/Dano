@@ -707,6 +707,32 @@ describe("OAuth authentication over HTTP", () => {
     });
   });
 
+  it.each([
+    { label: "matching profile", profile: { code: 0, data: { id: "fake-provider-user", nickname: "Actual Name" } }, status: 200, expected: "Actual Name" },
+    { label: "profile business failure", profile: { code: 500, data: null }, status: 200, expected: "已登录用户" },
+    { label: "profile HTTP failure", profile: {}, status: 503, expected: "已登录用户" },
+    { label: "different user", profile: { id: "another-user", nickname: "Wrong Name" }, status: 200, expected: "已登录用户" },
+  ])("enriches introspection login safely: $label", async ({ profile, status, expected }) => {
+    const fakeProvider = await startFakeProvider({ identity: profile, identityStatus: status });
+    const provider = createOAuth2ProviderAdapter({
+      issuer: fakeProvider.origin,
+      authorizationEndpoint: `${fakeProvider.origin}/authorize`,
+      tokenEndpoint: `${fakeProvider.origin}/token`,
+      identityEndpoint: `${fakeProvider.origin}/introspect`,
+      identityTransport: "token-introspection",
+      profileEndpoint: `${fakeProvider.origin}/identity`,
+      clientId: "client", clientSecret: "secret", scope: "user.read",
+      requestHeaders: { "x-provider-context": "profile-context" },
+      allowInsecureRequests: true,
+    });
+    const { origin } = await startOAuthServer(provider);
+    const loginCookie = await completeLogin(origin);
+    const current = await fetch(`${origin}/api/auth/current`, { headers: { Cookie: loginCookie } });
+    expect(await current.json()).toMatchObject({ status: "authenticated", user: { username: expected } });
+    expect(fakeProvider.identityAuthorization).toContain("Bearer fake-access-token");
+    expect(fakeProvider.identityRequestHeaders[0]?.["x-provider-context"]).toBe("profile-context");
+  });
+
   it("rejects an introspection provider business failure without leaking its payload", async () => {
     const fakeProvider = await startFakeProvider({
       introspectionResponse: {
