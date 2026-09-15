@@ -509,6 +509,7 @@ describe("Dano main", () => {
       DANO_OAUTH_TOKEN_ENDPOINT: "https://provider.example.test/token",
       DANO_OAUTH_IDENTITY_ENDPOINT:
         "https://provider.example.test/identity",
+      DANO_OAUTH_IDENTITY_TRANSPORT: "token-introspection",
       DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
       DANO_OAUTH_CLIENT_ID: "dano-client",
       DANO_OAUTH_CLIENT_SECRET: "client-secret",
@@ -535,6 +536,7 @@ describe("Dano main", () => {
         authorizationEndpoint: "https://provider.example.test/authorize",
         tokenEndpoint: "https://provider.example.test/token",
         identityEndpoint: "https://provider.example.test/identity",
+        identityTransport: "token-introspection",
         revocation: {
           transport: "delete-query-basic",
           endpoint: "https://provider.example.test/revoke",
@@ -556,6 +558,15 @@ describe("Dano main", () => {
         cleanupIntervalMs: 60 * 60 * 1000,
       },
     });
+  });
+
+  it("rejects an unsupported OAuth identity transport", () => {
+    expect(() =>
+      parseDanoServerOptions([], {
+        ...oauthEnvironment(),
+        DANO_OAUTH_IDENTITY_TRANSPORT: "provider-specific-mode",
+      }),
+    ).toThrow("OAuth identity transport is unsupported");
   });
 
   it("requires an explicit opt-in for an HTTP authorization endpoint", () => {

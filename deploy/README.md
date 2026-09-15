@@ -130,7 +130,7 @@ or registry settings remain separate from these runtime network settings.
 ## Production Authentication
 
 Production runs one OAuth confidential client and does not inject a fixed User
-or authentication Cookie. The required deployment values are:
+or authentication Cookie. The deployment values are:
 
 For the production OA client, exact endpoint mapping, `.env` template,
 deployment gate, and browser acceptance procedure, see
@@ -141,12 +141,19 @@ DANO_OAUTH_ISSUER
 DANO_OAUTH_AUTHORIZATION_ENDPOINT
 DANO_OAUTH_TOKEN_ENDPOINT
 DANO_OAUTH_IDENTITY_ENDPOINT
+DANO_OAUTH_IDENTITY_TRANSPORT
 DANO_OAUTH_API_ORIGIN
 DANO_OAUTH_CLIENT_ID
 DANO_OAUTH_CLIENT_SECRET
 DANO_OAUTH_SCOPE
 DANO_OAUTH_REDIRECT_URI
 ```
+
+`DANO_OAUTH_IDENTITY_TRANSPORT` is optional and defaults to `bearer-get`, which
+requests the configured identity endpoint with the Provider access token. Set
+it to `token-introspection` for an RFC 7662-style endpoint authenticated with
+the configured OAuth Client. Provider `{code,data}` envelopes are normalized at
+the adapter boundary, and `user_id` is accepted as a stable external identity.
 
 The Release Build initializes Dano-owned OAuth Credential Encryption Material
 before the Production Authentication Gate. It writes one 32-byte base64url key

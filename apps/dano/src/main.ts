@@ -429,6 +429,9 @@ function readOAuthAuthentication(
   const clientAuthMethod = readOAuthClientAuthMethod(
     env.DANO_OAUTH_CLIENT_AUTH_METHOD,
   );
+  const identityTransport = readOAuthIdentityTransport(
+    env.DANO_OAUTH_IDENTITY_TRANSPORT,
+  );
   return {
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
@@ -441,6 +444,7 @@ function readOAuthAuthentication(
       authorizationEndpoint: authorizationEndpoint.href,
       tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
       identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
+      ...(identityTransport ? { identityTransport } : {}),
       ...(revocation ? { revocation } : {}),
       clientId: values.DANO_OAUTH_CLIENT_ID!,
       clientSecret: values.DANO_OAUTH_CLIENT_SECRET!,
@@ -474,6 +478,17 @@ function readOAuthClientAuthMethod(
     return method;
   }
   throw new Error("OAuth client authentication method is unsupported");
+}
+
+function readOAuthIdentityTransport(
+  value: string | undefined,
+): OAuth2ProviderAdapterOptions["identityTransport"] {
+  const transport = value?.trim();
+  if (!transport) return undefined;
+  if (transport === "bearer-get" || transport === "token-introspection") {
+    return transport;
+  }
+  throw new Error("OAuth identity transport is unsupported");
 }
 
 function readOAuthRevocation(
