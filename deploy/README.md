@@ -130,19 +130,40 @@ or registry settings remain separate from these runtime network settings.
 ## Production Authentication
 
 Production runs one OAuth confidential client and does not inject a fixed User
-or authentication Cookie. The required deployment values are:
+or authentication Cookie. The deployment values are:
+
+For the production OA client, exact endpoint mapping, `.env` template,
+deployment gate, and browser acceptance procedure, see
+[`生产环境 OA OAuth2 登录配置`](./生产环境-OA-OAuth2-登录配置.md).
 
 ```text
 DANO_OAUTH_ISSUER
 DANO_OAUTH_AUTHORIZATION_ENDPOINT
 DANO_OAUTH_TOKEN_ENDPOINT
 DANO_OAUTH_IDENTITY_ENDPOINT
+DANO_OAUTH_IDENTITY_TRANSPORT
 DANO_OAUTH_API_ORIGIN
 DANO_OAUTH_CLIENT_ID
 DANO_OAUTH_CLIENT_SECRET
 DANO_OAUTH_SCOPE
 DANO_OAUTH_REDIRECT_URI
 ```
+
+`DANO_OAUTH_IDENTITY_TRANSPORT` is optional and defaults to `bearer-get`, which
+requests the configured identity endpoint with the Provider access token. Set
+it to `token-introspection` for an RFC 7662-style endpoint authenticated with
+the configured OAuth Client. Provider `{code,data}` envelopes are normalized at
+the adapter boundary. Introspection accepts the standard `sub` field as well as
+the supported `userId`, `user_id`, and `id` fields as a stable external identity.
+
+When introspection omits display information, optionally set
+`DANO_OAUTH_PROFILE_ENDPOINT` to the Provider's user profile endpoint. Dano uses
+the same access token and configured headers for a Bearer GET and adopts the
+name/avatar only when the profile identifies the same user. An unavailable or
+invalid profile (including a failed business-code envelope with nonempty data)
+leaves the verified login usable. Its HTTPS origin participates in the same
+deployment TLS check as the other provider endpoints. Existing Login Sessions gain
+the display information on the next login; their conversation ownership is unchanged.
 
 The Release Build initializes Dano-owned OAuth Credential Encryption Material
 before the Production Authentication Gate. It writes one 32-byte base64url key

@@ -346,6 +346,9 @@ function readOAuthAuthentication(
     ["authorization endpoint", authorizationEndpoint],
     ["token endpoint", new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!)],
     ["identity endpoint", new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!)],
+    ...(env.DANO_OAUTH_PROFILE_ENDPOINT?.trim()
+      ? [["profile endpoint", new URL(env.DANO_OAUTH_PROFILE_ENDPOINT.trim())] as const]
+      : []),
     ["API origin", new URL(values.DANO_OAUTH_API_ORIGIN!)],
     ...(revocation?.endpoint
       ? [["revocation endpoint", new URL(revocation.endpoint)] as const]
@@ -358,7 +361,11 @@ function readOAuthAuthentication(
       allowInsecureServerEndpoints,
   );
   for (const [name, url] of providerUrls) {
-    if (url.username || url.password || url.hash) {
+    if (
+      url.username ||
+      url.password ||
+      (name !== "authorization endpoint" && url.hash)
+    ) {
       throw new Error(`OAuth ${name} is not trusted`);
     }
     const allowedProtocol =
@@ -381,7 +388,7 @@ function readOAuthAuthentication(
   if (redirectUri.protocol !== "https:" && !localHttpCallback) {
     throw new Error("OAuth redirect URI must use trusted HTTPS");
   }
-  const providerApiUrl = providerUrls[4][1];
+  const providerApiUrl = new URL(values.DANO_OAUTH_API_ORIGIN!);
   if (providerApiUrl.pathname !== "/" || providerApiUrl.search) {
     throw new Error("OAuth API origin must not include a path or query");
   }
@@ -425,6 +432,9 @@ function readOAuthAuthentication(
   const clientAuthMethod = readOAuthClientAuthMethod(
     env.DANO_OAUTH_CLIENT_AUTH_METHOD,
   );
+  const identityTransport = readOAuthIdentityTransport(
+    env.DANO_OAUTH_IDENTITY_TRANSPORT,
+  );
   return {
     appOrigin: redirectUri.origin,
     redirectUri: redirectUri.href,
@@ -437,6 +447,10 @@ function readOAuthAuthentication(
       authorizationEndpoint: authorizationEndpoint.href,
       tokenEndpoint: new URL(values.DANO_OAUTH_TOKEN_ENDPOINT!).href,
       identityEndpoint: new URL(values.DANO_OAUTH_IDENTITY_ENDPOINT!).href,
+      ...(env.DANO_OAUTH_PROFILE_ENDPOINT?.trim()
+        ? { profileEndpoint: new URL(env.DANO_OAUTH_PROFILE_ENDPOINT.trim()).href }
+        : {}),
+      ...(identityTransport ? { identityTransport } : {}),
       ...(revocation ? { revocation } : {}),
       clientId: values.DANO_OAUTH_CLIENT_ID!,
       clientSecret: values.DANO_OAUTH_CLIENT_SECRET!,
@@ -470,6 +484,17 @@ function readOAuthClientAuthMethod(
     return method;
   }
   throw new Error("OAuth client authentication method is unsupported");
+}
+
+function readOAuthIdentityTransport(
+  value: string | undefined,
+): OAuth2ProviderAdapterOptions["identityTransport"] {
+  const transport = value?.trim();
+  if (!transport) return undefined;
+  if (transport === "bearer-get" || transport === "token-introspection") {
+    return transport;
+  }
+  throw new Error("OAuth identity transport is unsupported");
 }
 
 function readOAuthRevocation(
@@ -570,6 +595,7 @@ export async function validateOAuthProviderTls(
     config.provider.authorizationEndpoint,
     config.provider.tokenEndpoint,
     config.provider.identityEndpoint,
+    ...(config.provider.profileEndpoint ? [config.provider.profileEndpoint] : []),
     config.providerApiOrigin,
     ...(config.provider.revocation?.endpoint
       ? [config.provider.revocation.endpoint]

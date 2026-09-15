@@ -36,6 +36,7 @@ describe("production authentication deployment contract", () => {
       "DANO_OAUTH_ALLOW_INSECURE_SERVER_ENDPOINTS",
       "DANO_OAUTH_TOKEN_ENDPOINT",
       "DANO_OAUTH_IDENTITY_ENDPOINT",
+      "DANO_OAUTH_IDENTITY_TRANSPORT",
       "DANO_OAUTH_API_ORIGIN",
       "DANO_OAUTH_CLIENT_ID",
       "DANO_OAUTH_CLIENT_SECRET",

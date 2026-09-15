@@ -51,6 +51,9 @@ export interface OAuth2ProviderAdapterOptions {
   readonly authorizationEndpoint: string;
   readonly tokenEndpoint: string;
   readonly identityEndpoint: string;
+  readonly identityTransport?: "bearer-get" | "token-introspection";
+  /** Optional Bearer GET profile source; never establishes or changes identity. */
+  readonly profileEndpoint?: string;
   readonly revocation?:
     | { readonly transport: "rfc7009"; readonly endpoint: string }
     | { readonly transport: "delete-query-basic"; readonly endpoint?: string };
@@ -72,6 +75,12 @@ export interface OAuth2ProviderAdapterOptions {
 export function createOAuth2ProviderAdapter(
   options: OAuth2ProviderAdapterOptions,
 ): OAuthProviderAdapter {
+  const authorizationEndpoint = new URL(options.authorizationEndpoint);
+  const protocolAuthorizationEndpoint = new URL(authorizationEndpoint);
+  if (authorizationEndpoint.hash) {
+    protocolAuthorizationEndpoint.search = "";
+    protocolAuthorizationEndpoint.hash = "";
+  }
   const tokenEndpoint = new URL(options.tokenEndpoint);
   const revocationEndpoint = options.revocation
     ? new URL(options.revocation.endpoint ?? tokenEndpoint)
@@ -86,8 +95,11 @@ export function createOAuth2ProviderAdapter(
       : oauth.ClientSecretPost(clientSecret);
   const serverMetadata = {
     issuer: new URL(options.issuer).href,
-    authorization_endpoint: new URL(options.authorizationEndpoint).href,
+    authorization_endpoint: protocolAuthorizationEndpoint.href,
     token_endpoint: tokenEndpoint.href,
+    ...(options.identityTransport === "token-introspection"
+      ? { introspection_endpoint: new URL(options.identityEndpoint).href }
+      : {}),
     ...(options.revocation?.transport === "rfc7009" && revocationEndpoint
       ? { revocation_endpoint: revocationEndpoint.href }
       : {}),
@@ -121,19 +133,62 @@ export function createOAuth2ProviderAdapter(
           ? tokenBodyWithState(init.body, tokenExchangeState.getStore())
           : init.body,
     });
-    if (new URL(url).href !== tokenEndpoint.href) return response;
-    return normalizeTokenEndpointResponse(response);
+    const responseUrl = new URL(url).href;
+    if (responseUrl === tokenEndpoint.href) {
+      return normalizeTokenEndpointResponse(response);
+    }
+    if (
+      options.identityTransport === "token-introspection" &&
+      responseUrl === identityEndpoint.href
+    ) {
+      return normalizeIntrospectionEndpointResponse(response);
+    }
+    return response;
   };
   const identityEndpoint = new URL(options.identityEndpoint);
   const scope = required(options.scope, "OAuth scope");
+  const profileEndpoint = options.profileEndpoint
+    ? new URL(options.profileEndpoint)
+    : undefined;
+
+  async function resolveIdentity(
+    accessToken: string,
+    tokenType: string | undefined,
+  ): Promise<ExternalIdentity> {
+    const identity = await fetchExternalIdentity(
+      configuration,
+      accessToken,
+      tokenType,
+      identityEndpoint,
+      options.identityTransport,
+    );
+    if (!profileEndpoint) return identity;
+    try {
+      const profile = await fetchExternalIdentity(
+        configuration,
+        accessToken,
+        tokenType,
+        profileEndpoint,
+        "bearer-get",
+      );
+      if (profile.userId !== identity.userId) return identity;
+      return { ...identity, ...profile };
+    } catch {
+      // Profile availability must not invalidate an independently verified identity.
+      return identity;
+    }
+  }
 
   const adapter: OAuthProviderAdapter = {
     authorizationUrl({ state, redirectUri }) {
-      return oauth.buildAuthorizationUrl(configuration, {
+      const url = oauth.buildAuthorizationUrl(configuration, {
         redirect_uri: redirectUri,
         scope,
         state,
       });
+      return authorizationEndpoint.hash
+        ? authorizationUrlWithFragmentRoute(authorizationEndpoint, url)
+        : url;
     },
 
     async exchangeAuthorizationCode({ code, state, redirectUri }) {
@@ -147,11 +202,9 @@ export function createOAuth2ProviderAdapter(
           { expectedState: state },
         ),
       );
-      const identity = await fetchExternalIdentity(
-        configuration,
+      const identity = await resolveIdentity(
         tokens.access_token,
         tokens.token_type,
-        identityEndpoint,
       );
       const expiresIn = tokens.expiresIn();
       return {
@@ -178,11 +231,9 @@ export function createOAuth2ProviderAdapter(
     },
 
     async validateCredential(credential) {
-      return fetchExternalIdentity(
-        configuration,
+      return resolveIdentity(
         credential.accessToken,
         credential.tokenType,
-        identityEndpoint,
       );
     },
 
@@ -226,12 +277,41 @@ export function createOAuth2ProviderAdapter(
   };
 }
 
+function authorizationUrlWithFragmentRoute(
+  endpoint: URL,
+  protocolUrl: URL,
+): URL {
+  const url = new URL(endpoint);
+  const fragment = url.hash.slice(1);
+  const queryIndex = fragment.indexOf("?");
+  const route = queryIndex === -1 ? fragment : fragment.slice(0, queryIndex);
+  const parameters = new URLSearchParams(
+    queryIndex === -1 ? "" : fragment.slice(queryIndex + 1),
+  );
+  for (const [name, value] of protocolUrl.searchParams) {
+    url.searchParams.delete(name);
+    parameters.set(name, value);
+  }
+  const query = parameters.toString();
+  url.hash = query ? `${route}?${query}` : route;
+  return url;
+}
+
 async function fetchExternalIdentity(
   configuration: oauth.Configuration,
   accessToken: string,
   tokenType: string | undefined,
   identityEndpoint: URL,
+  identityTransport: OAuth2ProviderAdapterOptions["identityTransport"],
 ): Promise<ExternalIdentity> {
+  if (identityTransport === "token-introspection") {
+    const identity = await oauth.tokenIntrospection(configuration, accessToken);
+    if (!identity.active) throw new OAuthProviderContractError();
+    return parseExternalIdentity({
+      ...identity,
+      userId: identity.userId ?? identity.user_id ?? identity.id ?? identity.sub,
+    });
+  }
   if (tokenType && tokenType.trim().toLowerCase() !== "bearer") {
     throw new Error("Provider access token type is unsupported");
   }
@@ -311,7 +391,9 @@ function parseExternalIdentity(value: unknown): ExternalIdentity {
   if (!identity) {
     throw new OAuthProviderContractError();
   }
-  const userId = normalizedIdentifier(identity.userId ?? identity.id);
+  const userId = normalizedIdentifier(
+    identity.userId ?? identity.user_id ?? identity.id,
+  );
   if (!userId) {
     throw new OAuthProviderContractError();
   }
@@ -351,9 +433,48 @@ async function normalizeTokenEndpointResponse(
   return normalized;
 }
 
+async function normalizeIntrospectionEndpointResponse(
+  response: Response,
+): Promise<Response> {
+  let value: unknown;
+  try {
+    value = await response.clone().json();
+  } catch {
+    return response;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return response;
+  }
+  const record = value as Record<string, unknown>;
+  if (!("code" in record)) return response;
+  const successful = record.code === 0 || record.code === "0";
+  const data =
+    successful &&
+    record.data &&
+    typeof record.data === "object" &&
+    !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : {};
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  const normalized = new Response(
+    JSON.stringify({ active: successful, ...data }),
+    {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    },
+  );
+  Object.defineProperty(normalized, "url", { value: response.url });
+  return normalized;
+}
+
 function providerDataObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  if ("code" in record && record.code !== 0 && record.code !== "0") return null;
   if (
     !("userId" in record) &&
     !("id" in record) &&
