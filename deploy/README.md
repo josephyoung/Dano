@@ -155,6 +155,13 @@ it to `token-introspection` for an RFC 7662-style endpoint authenticated with
 the configured OAuth Client. Provider `{code,data}` envelopes are normalized at
 the adapter boundary, and `user_id` is accepted as a stable external identity.
 
+When introspection omits display information, optionally set
+`DANO_OAUTH_PROFILE_ENDPOINT` to the Provider's user profile endpoint. Dano uses
+the same access token and configured headers for a Bearer GET and adopts the
+name/avatar only when the profile identifies the same user. An unavailable or
+invalid profile leaves the verified login usable. Existing Login Sessions gain
+the display information on the next login; their conversation ownership is unchanged.
+
 The Release Build initializes Dano-owned OAuth Credential Encryption Material
 before the Production Authentication Gate. It writes one 32-byte base64url key
 and the matching `dano-deploy-v1` version to the Deploy Control Directory

@@ -510,6 +510,7 @@ describe("Dano main", () => {
       DANO_OAUTH_IDENTITY_ENDPOINT:
         "https://provider.example.test/identity",
       DANO_OAUTH_IDENTITY_TRANSPORT: "token-introspection",
+      DANO_OAUTH_PROFILE_ENDPOINT: "https://provider.example.test/profile",
       DANO_OAUTH_API_ORIGIN: "https://provider-api.example.test",
       DANO_OAUTH_CLIENT_ID: "dano-client",
       DANO_OAUTH_CLIENT_SECRET: "client-secret",
@@ -537,6 +538,7 @@ describe("Dano main", () => {
         tokenEndpoint: "https://provider.example.test/token",
         identityEndpoint: "https://provider.example.test/identity",
         identityTransport: "token-introspection",
+        profileEndpoint: "https://provider.example.test/profile",
         revocation: {
           transport: "delete-query-basic",
           endpoint: "https://provider.example.test/revoke",
@@ -626,6 +628,12 @@ describe("Dano main", () => {
         }),
       }),
     ).toThrow("OAuth token endpoint is not trusted");
+  });
+
+  it.each(["http://provider.example.test/profile", "https://provider.example.test/profile#fragment"])("validates the optional profile endpoint %s", profileEndpoint => {
+    expect(() => parseDanoServerOptions([], oauthEnvironment({
+      DANO_OAUTH_PROFILE_ENDPOINT: profileEndpoint,
+    }))).toThrow(/OAuth profile endpoint/);
   });
 
   it("requires an explicit opt-in for plaintext HTTP server endpoints", () => {
