@@ -101,6 +101,23 @@ See the [full acceptance contract](specs/oa-skill-transparent-login-token.md).
 The earlier adapted example has been removed because modifying the Skill did
 not satisfy that contract.
 
+## Truncated query output
+
+The bash byte/line budget can omit an entire oversized JSON line. In particular,
+`truncated=true` with `outputBytes=0` is not an empty OA response. The wrapper
+preserves truncation metadata and the sanitized output artifact, replaces the
+misleading `(no output)` label, and adds a bounded model-visible summary of
+observed provider HTTP outcomes, login binding, request errors and business codes.
+HTTP 2xx alone is not a business-success assertion; unobserved results stay unknown.
+Use the Skill's supported pagination or bounded reads of the saved output, never
+repeat a write or change authentication merely because the display is truncated.
+
+Generated query Skills should expose server pagination, avoid repeating all
+intermediate payloads in successful output, format JSON over multiple lines, and
+report explicit output omission when a single result still exceeds their budget.
+Changing a generated runtime Skill is a separate maintenance operation from the
+transparent authentication hook; regeneration must preserve these output rules.
+
 ## Why this interception boundary
 
 Installing a global default opener alone misses Skills that call `build_opener`

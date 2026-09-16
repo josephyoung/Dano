@@ -213,7 +213,8 @@ export function wrapProviderBash(
     ...tool,
     promptGuidelines: [
       ...(tool.promptGuidelines ?? []),
-      "Python urllib requests to the configured OA origin automatically use the initiating login during bash execution. Run existing Skill scripts unchanged: do not edit their source, token configuration or URLs, and do not replace them with provider_request calls. Other HTTP clients and Python -S/-I/-E are not covered. Never print token configuration or credentials.",
+      "Python urllib and standard HTTPX transport requests to the exact configured OA origin automatically use the initiating login during bash execution. Non-matching origins retain their original authentication. Run existing Skill scripts unchanged: do not edit their source, token configuration or URLs, and do not replace them with provider_request calls. Custom transports, other HTTP clients and Python -S/-I/-E are not covered. Never print token configuration or credentials.",
+      "When bash output is truncated, missing visible text does not mean an empty business result or a network/authentication failure. Use the reported provider request evidence to distinguish HTTP outcomes from business outcomes. Read the saved output in bounded pages or use the Skill's supported pagination; do not repeat writes or change authentication to recover truncated output.",
     ],
     async execute(id, params, signal, onUpdate, context) {
       const executionSignal =
@@ -270,8 +271,29 @@ export function wrapProviderBash(
                 await redactFile(path);
               }
             });
+          const safeResult = redact(result);
+          const truncation = (safeResult.details as {
+            truncation?: { truncated?: boolean; outputBytes?: number };
+          } | undefined)?.truncation;
+          if (truncation?.truncated) {
+            if (truncation.outputBytes === 0) {
+              for (const part of safeResult.content) {
+                if (part.type === "text")
+                  part.text = part.text.replace(/^\(no output\)/, "[Output omitted by truncation]");
+              }
+            }
+            const httpSuccess = requests.filter(r => r.status !== undefined && r.status >= 200 && r.status < 300).length;
+            const bound = requests.filter(r => r.loginSessionBound).length;
+            const businessSuccess = requests.filter(r => r.businessCode === 0).length;
+            const httpOther = requests.filter(r => r.status !== undefined && (r.status < 200 || r.status >= 300)).length;
+            const requestErrors = requests.filter(r => r.error !== undefined).length;
+            const businessOther = requests.filter(r => r.businessCode !== undefined && r.businessCode !== 0).length;
+            safeResult.content.push({ type: "text", text:
+              `[Dano output evidence: output was truncated, not empty. ${requests.length} provider requests observed; ${httpSuccess} HTTP 2xx; ${bound} bound to the initiating login; ${httpOther} non-2xx HTTP responses; ${requestErrors} request errors; ${businessSuccess} reported business code 0; ${businessOther} reported nonzero business codes. HTTP success alone does not establish business success. Missing outcomes remain unconfirmed. Read the saved full output in bounded pages or use supported query pagination. Do not infer network/authentication failure from missing output or retry writes.]`,
+            });
+          }
           return {
-            ...redact(result),
+            ...safeResult,
             details: {
               ...(redact(result.details) as object),
               providerRequests: requests,
