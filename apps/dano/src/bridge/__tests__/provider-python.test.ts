@@ -261,6 +261,40 @@ it("withholds live full-output artifacts and sanitizes them before publication",
   ).toBe(true);
 });
 
+it("explains a zero-byte truncated result using observed provider evidence without claiming business success", async () => {
+  const h = await pythonHarness();
+  h.session("user", "agent", "login-a");
+  const truncation = { truncated: true, truncatedBy: "bytes", totalLines: 1,
+    totalBytes: 358443, outputLines: 0, outputBytes: 0, maxLines: 2000, maxBytes: 51200 };
+  const base = createBashTool(h.cwd);
+  const wrapped = wrapProviderBash({ ...base, async execute(_id, params) {
+    await execute("bash", ["-c", (params as { command: string }).command]);
+    return { content: [{ type: "text", text: "(no output)\n\n[Output truncated]" }], details: { truncation } };
+  } } as ToolDefinition, { broker: h.broker, scope: "user", cwd: h.cwd });
+  const result = await wrapped.execute("query", {
+    command: `python3 - <<'PY'\nfrom urllib.request import urlopen\nfor path in ('/dict', '/seals', '/list'):\n with urlopen('${h.origin}' + path) as r: r.read()\nPY`,
+  }, undefined, undefined, { sessionManager: { getSessionId: () => "agent" }, cwd: h.cwd } as never);
+  const text = result.content.filter(p => p.type === "text").map(p => p.text).join("\n");
+  expect(text).not.toContain("(no output)");
+  expect(text).toContain("3 provider requests observed; 3 HTTP 2xx; 3 bound");
+  expect(text).toContain("HTTP success alone does not establish business success");
+  expect(text).not.toContain("token-a");
+  expect(result.details).toMatchObject({ truncation, providerRequests: expect.any(Array) });
+});
+
+it("marks oversized real bash output as truncated without inventing provider success", async () => {
+  const h = await pythonHarness();
+  const wrapped = wrapProviderBash(createBashTool(h.cwd) as ToolDefinition, { broker: h.broker, scope: "guest", cwd: h.cwd });
+  const result = await wrapped.execute("large", { command: "python3 -c 'print(\"x\" * 358443)'" }, undefined, undefined,
+    { sessionManager: SessionManager.inMemory(h.cwd), cwd: h.cwd } as never);
+  const details = result.details as { truncation: { truncated: boolean }; fullOutputPath: string };
+  cleanup.push(() => rm(details.fullOutputPath, { force: true }));
+  expect(details.truncation.truncated).toBe(true);
+  const text = result.content.filter(p => p.type === "text").map(p => p.text).join("\n");
+  expect(text).toContain("output was truncated, not empty");
+  expect(text).toContain("0 provider requests observed; 0 HTTP 2xx");
+});
+
 async function pythonHarness() {
   const observed: {
     auth?: string;
