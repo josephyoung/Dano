@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_BRIDGE_CONFIG,
   type ClientMessage,
@@ -12,6 +12,7 @@ import {
 } from "../bridge/types.js";
 import { createJwtUserContextResolver } from "../bridge/user-context.js";
 import { startDanoServer, type DanoServerController } from "../server.js";
+import type { ProtectedSessionTools } from "../bridge/protected-session-tools.js";
 
 const TEST_JWT_SECRET = "test-secret-that-is-long-enough";
 const controllers: DanoServerController[] = [];
@@ -205,6 +206,33 @@ async function executeCommand(
 }
 
 describe("User runtime isolation over HTTP/SSE", () => {
+  it("binds protected tools to authenticated HTTP owners and rejects a missing identity resolver", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-http-protected-tools-"));
+    runtimeRoots.push(root);
+    const setup = authenticatedServerSetup(root);
+    const owners: string[] = [];
+    const protectedToolsForUser = vi.fn(async (context: { user: { id: string }; folderPath: string }): Promise<ProtectedSessionTools> => {
+      owners.push(context.user.id);
+      const agentDir = path.join(context.folderPath, "trusted-agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      return { agentDir, trustedSkillPaths: [], resolveWorker: async workspace => ({
+        workspace, assertIsolated: async () => {},
+        execute: async () => ({ content: [{ type: "text", text: "isolated fixture" }] }),
+      }) };
+    });
+    await expect(startDanoServer(setup.config, { captureSigint: false, protectedToolsForUser }))
+      .rejects.toThrow("PROTECTED_TOOLS_USER_CONTEXT_REQUIRED");
+    expect(protectedToolsForUser).not.toHaveBeenCalled();
+    const controller = await startDanoServer(setup.config, {
+      captureSigint: false, userContextResolver: setup.resolver, protectedToolsForUser,
+    });
+    controllers.push(controller);
+    const origin = controller.getBridgeUrl()!;
+    await createClient(origin, signUser("protected-a", "Alice"));
+    await createClient(origin, signUser("protected-b", "Bob"));
+    expect(owners.sort()).toEqual(["protected-a", "protected-b"]);
+  });
+
   it("assigns each authenticated User an isolated default Runtime Workspace", async () => {
     const runtimeRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "dano-user-runtime-http-"),
@@ -790,4 +818,134 @@ describe("User runtime isolation over HTTP/SSE", () => {
     expect(fs.existsSync(aliceUpload.path)).toBe(true);
     expect(fs.existsSync(bobUpload.path)).toBe(true);
   });
+});
+
+it("authenticates memory settings, isolates owners and projects only safe status fields", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-memory-settings-http-"));
+  runtimeRoots.push(root);
+  const setup = authenticatedServerSetup(root);
+  const states = new Map<string, { enabled: boolean; fail: boolean }>();
+  const controller = await startDanoServer(setup.config, {
+    captureSigint: false, userContextResolver: setup.resolver,
+    protectedToolsForUser: async context => {
+      const state = { enabled: false, fail: false }; states.set(context.user.id, state);
+      const agentDir = path.join(root, "private", context.user.id);
+      fs.mkdirSync(agentDir, { recursive: true });
+      return { agentDir, trustedSkillPaths: [], resolveWorker: async workspace => ({
+        workspace, assertIsolated: async () => {}, execute: async () => ({}),
+      }), memory: {
+        async status() {
+          if (state.fail) throw new Error("SYNTHETIC_PRIVATE_ERROR");
+          return { enabled: state.enabled, automaticCollection: false, effectiveAt: "2026-09-18T00:00:00Z",
+            policyVersion: "v1", revision: 1, apiKey: "SYNTHETIC_PRIVATE_KEY", owner: "PRIVATE_OWNER" };
+        },
+        async setEnabled(enabled) { state.enabled = enabled; },
+        async operations() {
+          if (state.fail) throw new Error("SYNTHETIC_PRIVATE_ERROR");
+          return { items: [await this.operation(context.user.id)].filter(item => item !== undefined), nextCursor: null };
+        },
+        async content(id, index) {
+          if (state.fail) throw new Error("SYNTHETIC_PRIVATE_ERROR");
+          if (id !== context.user.id || index !== 0) return undefined;
+          return { operationId: id, index, total: 1, text: `Fact for ${context.user.id}`,
+            apiKey: "PRIVATE_KEY", uri: "PRIVATE_REMOTE_URI" };
+        },
+        async operation(id) {
+          if (state.fail) throw new Error("SYNTHETIC_PRIVATE_ERROR");
+          if (id !== context.user.id) return undefined;
+          return { id, phase: "processing" as const, createdAt: "2026-09-18T00:00:00Z", updatedAt: "2026-09-18T00:00:01Z",
+            source: { sessionId: "local-session", entryId: "local-entry", branchId: "local-branch", contentVersion: "PRIVATE_HASH" },
+            taskId: "PRIVATE_TASK", payload: "PRIVATE_PAYLOAD", apiKey: "PRIVATE_KEY" };
+        },
+      } };
+    },
+  });
+  controllers.push(controller);
+  const origin = controller.getBridgeUrl()!;
+  const aliceToken = signUser("alice", "Alice"), bobToken = signUser("bob", "Bob");
+  const alice = await createClient(origin, aliceToken), bob = await createClient(origin, bobToken);
+  const url = (client: TestClient) => `${origin}/api/clients/${client.client.id}/memory/settings`;
+  const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+  expect((await fetch(url(alice))).status).toBe(401);
+  expect((await fetch(url(alice), { headers: headers(bobToken) })).status).toBe(403);
+  const initial = await fetch(url(alice), { headers: headers(aliceToken) });
+  expect(initial.headers.get("cache-control")).toBe("no-store");
+  expect(await initial.json()).toEqual({ enabled: false, automaticCollection: false, effectiveAt: "2026-09-18T00:00:00Z", policyVersion: "v1", revision: 1 });
+  for (const body of [{ enabled: "false" }, { enabled: true, owner: "bob" }, { automaticCollection: true }]) {
+    expect((await fetch(url(alice), { method: "PUT", headers: headers(aliceToken), body: JSON.stringify(body) })).status).toBe(400);
+  }
+  const enabled = await fetch(url(alice), { method: "PUT", headers: headers(aliceToken), body: JSON.stringify({ enabled: true }) });
+  expect(enabled.status).toBe(200);
+  expect(await enabled.json()).toMatchObject({ enabled: true });
+  const peer = await fetch(url(bob), { headers: headers(bobToken) });
+  expect(await peer.json()).toMatchObject({ enabled: false });
+  expect((await fetch(url(alice), { method: "PUT", headers: headers(aliceToken), body: JSON.stringify({ enabled: false }) })).status).toBe(200);
+  expect([...states.values()].every(state => !state.enabled)).toBe(true);
+  const operationUrl = (client: TestClient, id: string) => `${origin}/api/clients/${client.client.id}/memory/operations/${id}`;
+  const listUrl = (client: TestClient) => `${origin}/api/clients/${client.client.id}/memory/operations`;
+  const contentUrl = (client: TestClient, id: string) => `${operationUrl(client, id)}/content/0`;
+  expect((await fetch(contentUrl(alice, "alice"))).status).toBe(401);
+  expect((await fetch(contentUrl(alice, "alice"), { headers: headers(bobToken) })).status).toBe(403);
+  expect((await fetch(contentUrl(bob, "alice"), { headers: headers(bobToken) })).status).toBe(404);
+  const content = await fetch(contentUrl(alice, "alice"), { headers: headers(aliceToken) });
+  expect(content.status).toBe(200);
+  expect(content.headers.get("cache-control")).toBe("no-store");
+  expect(await content.json()).toEqual({ operationId: "alice", index: 0, total: 1, text: "Fact for alice" });
+  expect((await fetch(listUrl(alice))).status).toBe(401);
+  expect((await fetch(listUrl(alice), { headers: headers(bobToken) })).status).toBe(403);
+  const list = await fetch(listUrl(alice), { headers: headers(aliceToken) });
+  expect(list.status).toBe(200);
+  expect(list.headers.get("cache-control")).toBe("no-store");
+  const listBody = await list.json() as { items: Array<{ id: string }> };
+  expect(listBody.items.map(item => item.id)).toEqual(["alice"]);
+  expect(JSON.stringify(listBody)).not.toContain("PRIVATE");
+  const peerList = await fetch(listUrl(bob), { headers: headers(bobToken) });
+  expect(await peerList.json()).toMatchObject({ items: [{ id: "bob" }] });
+  expect((await fetch(operationUrl(alice, "alice"))).status).toBe(401);
+  expect((await fetch(operationUrl(alice, "alice"), { headers: headers(bobToken) })).status).toBe(403);
+  expect((await fetch(operationUrl(bob, "alice"), { headers: headers(bobToken) })).status).toBe(404);
+  const receipt = await fetch(operationUrl(alice, "alice"), { headers: headers(aliceToken) });
+  expect(receipt.status).toBe(200);
+  expect(receipt.headers.get("cache-control")).toBe("no-store");
+  expect(await receipt.json()).toEqual({ id: "alice", phase: "processing",
+    createdAt: "2026-09-18T00:00:00Z", updatedAt: "2026-09-18T00:00:01Z",
+    source: { sessionId: "local-session", entryId: "local-entry", branchId: "local-branch" } });
+  for (const state of states.values()) state.fail = true;
+  const failedContent = await fetch(contentUrl(alice, "alice"), { headers: headers(aliceToken) });
+  expect(failedContent.status).toBe(503);
+  expect(await failedContent.text()).not.toContain("SYNTHETIC_PRIVATE");
+  const failedList = await fetch(listUrl(alice), { headers: headers(aliceToken) });
+  expect(failedList.status).toBe(503);
+  expect(await failedList.text()).not.toContain("SYNTHETIC_PRIVATE");
+  const failedReceipt = await fetch(operationUrl(alice, "alice"), { headers: headers(aliceToken) });
+  expect(failedReceipt.status).toBe(503);
+  expect(await failedReceipt.text()).not.toContain("SYNTHETIC_PRIVATE");
+  const failed = await fetch(url(alice), { headers: headers(aliceToken) });
+  expect(failed.status).toBe(503);
+  expect(await failed.text()).not.toContain("SYNTHETIC_PRIVATE");
+});
+
+it("rejects anonymous memory settings even when a host profile accidentally exposes controls", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-anonymous-memory-http-"));
+  runtimeRoots.push(root);
+  const read = vi.fn(async () => ({ enabled: false, automaticCollection: false, effectiveAt: "", policyVersion: "v1", revision: 0 }));
+  const controller = await startDanoServer(authenticatedServerSetup(root).config, {
+    captureSigint: false,
+    userContextResolver: { resolve: async () => ({ user: { id: "guest" }, folderPath: path.join(root, "users/guest") }) },
+    protectedToolsForUser: async () => {
+      const agentDir = path.join(root, "private"); fs.mkdirSync(agentDir);
+      return { agentDir, trustedSkillPaths: [], memory: { status: read, setEnabled: async () => {}, operation: async () => undefined,
+        operations: async () => ({ items: [], nextCursor: null }), content: async () => undefined },
+        resolveWorker: async workspace => ({ workspace, assertIsolated: async () => {}, execute: async () => ({}) }) };
+    },
+  });
+  controllers.push(controller);
+  const origin = controller.getBridgeUrl()!;
+  const client = await createClient(origin, "ignored-by-fixture-resolver");
+  const response = await fetch(`${origin}/api/clients/${client.client.id}/memory/settings`);
+  expect(response.status).toBe(401);
+  expect((await fetch(`${origin}/api/clients/${client.client.id}/memory/operations/anything`)).status).toBe(401);
+  expect((await fetch(`${origin}/api/clients/${client.client.id}/memory/operations`)).status).toBe(401);
+  expect((await fetch(`${origin}/api/clients/${client.client.id}/memory/operations/anything/content/0`)).status).toBe(401);
+  expect(read).not.toHaveBeenCalled();
 });

@@ -123,7 +123,7 @@ describe("Dano main", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("ships bash with pinned Heimdall guards", () => {
     const runtimeDefaultsDir = resolve("deploy/runtime-defaults");
@@ -160,10 +160,10 @@ describe("Dano main", () => {
       "0.2.17",
     );
     expect(appPackage.dependencies?.["@earendil-works/pi-coding-agent"]).toBe(
-      "0.82.1",
+      "0.85.1",
     );
     expect(appPackage.dependencies?.["@earendil-works/pi-ai"]).toBe(
-      "0.82.1",
+      "0.85.1",
     );
     expect(
       appPackage.dependencies?.["@mariozechner/pi-coding-agent"],

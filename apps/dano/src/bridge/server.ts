@@ -13,6 +13,7 @@ import * as http from "node:http";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { InvalidMemoryCursor, projectMemoryOperation } from "./memory-operation-page.js";
 import type { BridgeEventBus } from "./bridge-event-bus.js";
 import { getLanIps, isTailscaleIp } from "./network.js";
 import {
@@ -438,6 +439,102 @@ export class BridgeServer {
           res,
           decodeURIComponent(clientUserMatch[1]),
         );
+        return;
+      }
+
+      const memoryContentMatch = /^\/api\/clients\/([^/]+)\/memory\/operations\/([^/]+)\/content\/([0-9]+)$/.exec(pathname);
+      if (req.method === "GET" && memoryContentMatch) {
+        const clientId = decodeURIComponent(memoryContentMatch[1]!);
+        const user = this.clientUsers.get(clientId);
+        if (!user || !("username" in user.user)) throw new UserContextError(401, "请先登录后再使用长期记忆");
+        const operationId = decodeURIComponent(memoryContentMatch[2]!);
+        const index = Number(memoryContentMatch[3]);
+        if (!Number.isSafeInteger(index)) throw new HttpError(400, "记忆内容序号无效");
+        await this.withUserWrite(clientId, async () => {
+          let content;
+          try {
+            const runtime = await this.userRuntimeRegistry?.get(user);
+            if (!runtime?.memory) throw new Error("MEMORY_UNAVAILABLE");
+            content = await runtime.memory.content(operationId, index);
+          } catch { throw new HttpError(503, "记忆内容暂时不可用，请刷新后重试"); }
+          if (!content) throw new HttpError(404, "记忆内容不存在或尚未就绪");
+          writeJson(res, 200, { operationId: content.operationId, index: content.index,
+            total: content.total, text: content.text }, "no-store");
+        });
+        return;
+      }
+
+      const memoryOperationsMatch = /^\/api\/clients\/([^/]+)\/memory\/operations$/.exec(pathname);
+      if (req.method === "GET" && memoryOperationsMatch) {
+        const clientId = decodeURIComponent(memoryOperationsMatch[1]!);
+        const user = this.clientUsers.get(clientId);
+        if (!user || !("username" in user.user)) throw new UserContextError(401, "请先登录后再使用长期记忆");
+        const cursor = url.searchParams.get("cursor") ?? undefined;
+        await this.withUserWrite(clientId, async () => {
+          try {
+            const runtime = await this.userRuntimeRegistry?.get(user);
+            if (!runtime?.memory) throw new Error("MEMORY_UNAVAILABLE");
+            const page = await runtime.memory.operations(cursor);
+            writeJson(res, 200, { items: page.items.map(projectMemoryOperation), nextCursor: page.nextCursor }, "no-store");
+          } catch (error) {
+            if (error instanceof InvalidMemoryCursor) throw new HttpError(400, "记忆列表分页位置无效，请刷新");
+            throw new HttpError(503, "长期记忆暂时不可用，普通聊天可继续");
+          }
+        });
+        return;
+      }
+
+      const memoryOperationMatch = /^\/api\/clients\/([^/]+)\/memory\/operations\/([^/]+)$/.exec(pathname);
+      if (req.method === "GET" && memoryOperationMatch) {
+        const clientId = decodeURIComponent(memoryOperationMatch[1]!);
+        const operationId = decodeURIComponent(memoryOperationMatch[2]!);
+        const user = this.clientUsers.get(clientId);
+        if (!user || !("username" in user.user)) throw new UserContextError(401, "请先登录后再使用长期记忆");
+        await this.withUserWrite(clientId, async () => {
+          let operation;
+          try {
+            const runtime = await this.userRuntimeRegistry?.get(user);
+            if (!runtime?.memory) throw new Error("MEMORY_UNAVAILABLE");
+            operation = await runtime.memory.operation(operationId);
+          } catch { throw new HttpError(503, "长期记忆暂时不可用，普通聊天可继续"); }
+          if (!operation) throw new HttpError(404, "记忆投递记录不存在");
+          writeJson(res, 200, projectMemoryOperation(operation), "no-store");
+        });
+        return;
+      }
+
+      const memorySettingsMatch = /^\/api\/clients\/([^/]+)\/memory\/settings$/.exec(pathname);
+      if (memorySettingsMatch?.[1] && (req.method === "GET" || req.method === "PUT")) {
+        const clientId = decodeURIComponent(memorySettingsMatch[1]);
+        const user = this.clientUsers.get(clientId);
+        if (!user || !("username" in user.user)) {
+          throw new UserContextError(401, "请先登录后再使用长期记忆");
+        }
+        let enabled: boolean | undefined;
+        if (req.method === "PUT") {
+          if (req.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+            throw new HttpError(415, "记忆设置需要 JSON 请求");
+          }
+          let body: unknown;
+          try { body = await readJsonBody(req); }
+          catch { throw new HttpError(400, "记忆设置无效"); }
+          if (!body || typeof body !== "object" || Array.isArray(body)
+            || Object.keys(body).some(key => key !== "enabled")
+            || typeof (body as { enabled?: unknown }).enabled !== "boolean") {
+            throw new HttpError(400, "记忆设置无效");
+          }
+          enabled = (body as { enabled: boolean }).enabled;
+        }
+        await this.withUserWrite(clientId, async () => {
+          try {
+            const runtime = await this.userRuntimeRegistry?.get(user);
+            if (!runtime?.memory) throw new Error("MEMORY_UNAVAILABLE");
+            if (enabled !== undefined) await runtime.memory.setEnabled(enabled);
+            const status = await runtime.memory.status();
+            writeJson(res, 200, { enabled: status.enabled, automaticCollection: status.automaticCollection,
+              effectiveAt: status.effectiveAt, policyVersion: status.policyVersion, revision: status.revision }, "no-store");
+          } catch { throw new HttpError(503, "长期记忆暂时不可用，普通聊天可继续"); }
+        });
         return;
       }
 
@@ -1586,10 +1683,11 @@ function writeJson(
   res: http.ServerResponse,
   status: number,
   data: unknown,
+  cacheControl: "no-cache" | "no-store" = "no-cache",
 ): void {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-cache",
+    "Cache-Control": cacheControl,
   });
   res.end(JSON.stringify(data));
 }

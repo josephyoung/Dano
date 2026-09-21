@@ -8,10 +8,12 @@ import {
 import type { UserContext } from "./user-context.js";
 import { workspaceSessionDirectoryPath } from "./runtime-layout.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
+import type { ProtectedSessionTools } from "./protected-session-tools.js";
 
 export interface UserRuntimeContext {
   readonly userId: string;
   readonly backend: DanoBackend;
+  readonly memory?: ProtectedSessionTools["memory"];
   readonly defaultWorkspacePath: string;
   readonly sessionsRootPath: string;
   ownsSessionPath(candidatePath: string): boolean;
@@ -24,6 +26,7 @@ export type UserBackendFactory = (
 
 export interface UserRuntimeRegistryOptions {
   readonly sessionsRootPath?: string;
+  readonly protectedToolsForUser?: (context: UserContext) => Promise<ProtectedSessionTools>;
 }
 
 export interface UserOwnershipPathMap {
@@ -39,6 +42,12 @@ export class UserRuntimeRegistry {
     string,
     Promise<UserRuntimeContext>
   >();
+  private readonly failedCleanup: unknown[] = [];
+  private closed = false;
+  private closing?: Promise<void>;
+  private readonly retired = new Set<string>();
+  private readonly retirements = new Map<string, Promise<void>>();
+  private readonly disposers = new WeakMap<UserRuntimeContext, () => Promise<void>>();
   private readonly ownerLocks = new Map<string, Promise<void>>();
 
   constructor(
@@ -47,6 +56,9 @@ export class UserRuntimeRegistry {
   ) {}
 
   get(userContext: UserContext): Promise<UserRuntimeContext> {
+    if (this.closed || this.retired.has(userContext.user.id)) {
+      return Promise.reject(new Error("USER_RUNTIME_CLOSED"));
+    }
     const existing = this.contexts.get(userContext.user.id);
     if (existing) return existing;
 
@@ -58,15 +70,21 @@ export class UserRuntimeRegistry {
     return creating;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.closed = true;
     const contexts = [...this.contexts.values()];
     this.contexts.clear();
-    const settled = await Promise.allSettled(contexts);
-    await Promise.all(
-      settled.flatMap(result =>
-        result.status === "fulfilled" ? [result.value.backend.dispose()] : [],
-      ),
-    );
+    this.closing = (async () => {
+      const settled = await Promise.allSettled(contexts);
+      await settleCleanup([
+        ...settled.flatMap(result => result.status === "fulfilled"
+          ? [this.disposers.get(result.value)!()] : []),
+        ...this.retirements.values(),
+        ...this.failedCleanup.map(error => Promise.reject(error)),
+      ]);
+    })();
+    return this.closing;
   }
 
   async transferOwnership(
@@ -131,24 +149,25 @@ export class UserRuntimeRegistry {
     });
   }
 
-  async retireUser(userContext: UserContext): Promise<void> {
+  retireUser(userContext: UserContext): Promise<void> {
+    const previous = this.retirements.get(userContext.user.id);
+    if (previous) return previous;
+    this.retired.add(userContext.user.id);
     const creating = this.contexts.get(userContext.user.id);
     this.contexts.delete(userContext.user.id);
-    if (creating) {
-      const context = await creating;
-      await context.backend.dispose();
-    }
-    await fs.promises.rm(userContext.folderPath, {
-      recursive: true,
-      force: true,
-    });
-    const sessionsRootPath = this.sessionsRootPath(userContext);
-    if (!isPathInsideRoot(userContext.folderPath, sessionsRootPath)) {
-      await fs.promises.rm(sessionsRootPath, {
-        recursive: true,
-        force: true,
-      });
-    }
+    const retiring = (async () => {
+      if (creating) {
+        const context = await creating;
+        await this.disposers.get(context)!();
+      }
+      await fs.promises.rm(userContext.folderPath, { recursive: true, force: true });
+      const sessionsRootPath = this.sessionsRootPath(userContext);
+      if (!isPathInsideRoot(userContext.folderPath, sessionsRootPath)) {
+        await fs.promises.rm(sessionsRootPath, { recursive: true, force: true });
+      }
+    })();
+    this.retirements.set(userContext.user.id, retiring);
+    return retiring;
   }
 
   private async create(
@@ -175,17 +194,30 @@ export class UserRuntimeRegistry {
     await ensureSafeDirectory(sessionsRootPath, {
       unsafeDirectoryError: unsafeRuntimeDirectory,
     });
-    const backend = await this.createBackend({
-      cwd: defaultWorkspacePath,
-      credentialBrokerScope: userContext.user.id,
-      sessionDir: workspaceSessionDirectoryPath(
-        sessionsRootPath,
-        defaultWorkspacePath,
-      ),
-    });
-    return {
+    const protectedTools = await this.options.protectedToolsForUser?.(userContext);
+    let backend: DanoBackend;
+    try {
+      backend = await this.createBackend({
+        cwd: defaultWorkspacePath,
+        credentialBrokerScope: userContext.user.id,
+        protectedTools,
+        sessionDir: workspaceSessionDirectoryPath(
+          sessionsRootPath,
+          defaultWorkspacePath,
+        ),
+      });
+    } catch (error) {
+      try { await protectedTools?.dispose?.(); }
+      catch (cleanupError) {
+        this.failedCleanup.push(cleanupError);
+        throw new AggregateError([error, cleanupError], "USER_RUNTIME_INITIALIZATION_FAILED");
+      }
+      throw error;
+    }
+    const context: UserRuntimeContext = {
       userId: userContext.user.id,
       backend,
+      memory: protectedTools?.memory,
       defaultWorkspacePath,
       sessionsRootPath,
       ownsSessionPath: candidatePath =>
@@ -193,6 +225,14 @@ export class UserRuntimeRegistry {
       ownsWorkspacePath: candidatePath =>
         isOwnedRuntimePath(workspaceRootPath, candidatePath),
     };
+    let disposing: Promise<void> | undefined;
+    this.disposers.set(context, () => disposing ??= (async () => {
+      const errors: unknown[] = [];
+      try { await backend.dispose(); } catch (error) { errors.push(error); }
+      try { await protectedTools?.dispose?.(); } catch (error) { errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, "USER_RUNTIME_DISPOSAL_FAILED");
+    })());
+    return context;
   }
 
   private sessionsRootPath(userContext: UserContext): string {
@@ -507,4 +547,10 @@ function isPathInsideRoot(rootPath: string, candidatePath: string): boolean {
     candidatePath === rootPath ||
     candidatePath.startsWith(`${rootPath}${path.sep}`)
   );
+}
+
+async function settleCleanup(pending: Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(pending);
+  const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+  if (errors.length) throw new AggregateError(errors, "USER_RUNTIME_DISPOSAL_FAILED");
 }

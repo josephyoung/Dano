@@ -3,13 +3,392 @@
 Parent: [#465](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
 Gate: [#473](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/473)
 
+## Fresh isolated service check — 2026-09-20
+
+A newly installed OpenViking `0.4.20`, httpx `0.28.1` and locally compiled
+llama-cpp-python `0.3.35` started on loopback with API-key authentication.
+The BGE GGUF and pinned DeepSeek tokenizer/config files were downloaded again
+and matched the SHA-256 values recorded in this document and the tokenizer
+configuration evidence. Downloading through the existing host proxy succeeded;
+direct Hugging Face access failed at TLS negotiation.
+
+The first synthetic extraction failed because Python's initial trust bundle
+did not include the model gateway's system-trusted certificate chain. Exporting
+Node's default CA set with `--use-system-ca` produced 135 roots. Python then
+verified TLS and received HTTP 200 for the authenticated models request. The
+isolated service was restarted with this CA bundle; certificate verification
+remained enabled and no certificate obtained from the remote endpoint was
+added as a trust anchor.
+
+`fixtures/openviking-model-extraction.py` then completed extraction at the
+15.2-second polling sample. Search returned both synthetic facts: technical
+plans should state goals/non-goals, and use Simplified Chinese by default.
+A separate Bob credential in the same account received HTTP 403 for direct
+read, Alice-targeted search and content overwrite. Alice's content was unchanged
+after these attempts. Configuration, credentials and full results remain in
+the private temporary acceptance directory, outside the repository.
+
+This verifies one fresh real-service extraction/recall and cross-user API
+boundary sample. It does not establish Dano or standard-pi end-to-end behavior,
+browser acceptance, tokenizer equivalence for the gateway's model alias,
+aggregate quality/p95/cost, offline replay isolation or deletion non-resurrection.
+The #474–#477 release gates remain open.
+
 ## Current result
 
+### Standard Pi real-service acceptance — 2026-09-20
+
+The published `@josephyoung/pi-openviking@0.1.1` standard entry passed its
+ordinary Pi public RPC CLI flow in the Linux image
+`ce5fda72f0f76e1c387f2457637591d2072b855a052496c9027780543a2e0daf`:
+default-off status, interactive confirmation to enable, a model-triggered
+`memory_save`, background delivery reaching `ready`, `/memory show` displaying
+saved content and source, a new session recalling the synthetic title and
+language preference, and `/memory pause`. Automatic collection remained
+unapproved. The test found no memory API key in RPC events or captured stderr.
+The disposable container exited successfully and was configured for removal.
+
+The checked-in `fixtures/linux-cli-memory.mjs` and `fixtures/cli-memory-host.mjs`
+are the executed independent-repository fixtures adapted to installed-package
+ESM resolution and the repository image layout. Copy them under
+`/app/acceptance`, tokenizer assets under `/app/tokenizer`, and supply private
+model/USER-credential files as the two fixture arguments. They use a fresh
+`extension-test-*` account and write sanitized results to `/evidence/result.json`.
+The host callback rejects different model identities; the recall deadline is
+2 seconds. The gateway alias's tokenizer equivalence and aggregate token/cost
+quality still require separate verification.
+
+Connectivity used temporary SSH reverse forwards bound only to Podman VM
+loopback: the container connected to the existing loopback OpenViking service.
+This is standard Pi functional evidence, not Dano browser or clean Compose
+acceptance. The image predates the Dano host-model configuration fix; rebuilding
+the updated repository image continues separately.
+
 2026-09-18: **feasibility review passed for the selected Linux profile**;
-upstream PR merge and ticket closure remain pending. No memory runtime feature
+[PR #480](https://github.com/zhengchengqiaobusiness-arch/Dano/pull/480) merged as
+`eab2a9cb6e0d638e564e77cf957a233d531a0952` and #473 is closed. No memory runtime feature
 has been enabled. The decision covers the original #473 feasibility gate,
 not implementation or completion of #465. The host boundary and delivery
 obligations below are mandatory inputs to #474–477.
+
+## Implementation handoff
+
+#474 implementation now lives in the independent
+[pi-openviking repository](https://github.com/josephyoung/pi-openviking), with
+package name `@josephyoung/pi-openviking`. Version 0.1.1 is now published,
+but #474 acceptance is incomplete. The current Dano implementation
+branch starts from the merged gate on upstream/main.
+
+### 2026-09-18 patch publication checkpoint
+
+GitHub Actions [run 35336512204](https://github.com/josephyoung/pi-openviking/actions/runs/35336512204)
+published `0.1.1` from extension commit `32732f58e8ee89920c7793fe1351a53cd7f9e59e`
+using npm Trusted Publishing. The official registry version endpoint confirms
+the version, `pi-package`/`pi-extension` keywords and provenance attestation.
+Dano's exact dependency and lockfile integrity match the registry artifact:
+`sha512-8GKiWKSVNaib6DsTH9G/R5kukjqCCJPLvsMy2/CFU2qHfAue1vNw/RZnipnNCydW2NF4Z+h04CVeekIxgwtFkQ==`.
+This supersedes earlier unreleased/0.1.0 dependency checkpoints below. The patch
+includes the protected worker provider capability, asynchronous model-aware token
+counting and explicit delivery drain results. Publication and dependency locking
+do not establish protected-host startup wiring or real-browser #474 acceptance.
+
+Validation after the exact dependency upgrade: `pnpm run check` and
+`pnpm run build` pass; `vitest run --maxWorkers=2` passes all 131 files with
+1545 tests passed and one skipped. A built-server import also loads the published
+host/bootstrap entries and verifies `protectedWorkerProviderApiVersion === 1`.
+A delayed local receipt-write test confirms the user worker is retained until
+the active scheduler tick settles. No real-service/browser completion is inferred
+from these regression and module-loading checks.
+
+Dano's host-only owner registry now persists the stable authenticated user ID
+and a deterministic account-scoped SHA-256 mapping. Display-name changes do
+not change ownership; anonymous callers cannot create records. Six focused
+tests cover restart stability, normalization collisions, concurrent creation,
+private permissions and rejection of foreign, exposed or symlink records;
+server type checking also passes. This registry is not yet wired into runtime
+creation or credential provisioning. Its parent directory must remain inside
+the protected host-state root enforced by the eventual launcher.
+
+The management-only provisioning client checks ROOT or account-bound ADMIN
+identity before registration, resolves an existing exact user before creating
+one, and verifies the returned credential through authenticated `/health` as
+the exact account/user with USER role. Lost registration responses trigger a
+read reconciliation, never an automatic POST replay or key rotation. Existing
+hashed keys without a recoverable plaintext credential require explicit
+recovery. Transport redirects are rejected and upstream error bodies are not
+propagated. Nine targeted tests and server type checking pass. A real local
+OpenViking 0.4.20 run created Alice and Bob in synthetic account
+`provision-c965eeac55e3`; a recreated client retrieved Alice's unchanged key,
+and the two users had distinct keys with verified ownership/roles. This client
+handles management transport only; storage and startup composition follow below.
+
+The protected credential store and identity startup service now compose these
+pieces: USER keys are encrypted with AES-256-GCM, with account/user and key
+version authenticated as associated data. Reopening validates private file
+permissions, metadata and ciphertext before returning a key. Startup verifies
+the saved key without management access, shares concurrent initialization,
+requires live tool isolation before credential access and before handoff, and
+withholds the connection if durable persistence fails. Corrupt records or
+changed encryption configuration are not treated as missing credentials.
+All four identity modules have 26 focused passing tests and pass server type
+checking. Runtime/session wiring and Linux end-to-end isolation remain open;
+these unit tests do not prove the final Dano process boundary.
+
+Independent extension commit `a242afe` adds an unreleased protected
+`toolProviderModule` interface so Dano can preserve its tool policies inside
+the worker. Its 41 tests and real fixed-image Linux runs of both default and
+custom tool providers pass: UID/no_new_privs, private absolute/symlink access
+denial, no inherited credential, workspace I/O, streaming and cancellation.
+The interface is not in Dano's currently pinned npm 0.1.0 artifact. A separate
+Bubblewrap probe verified compatibility with no_new_privs using Dano's
+existing bound `/dev` and read-only `/proc` settings; fresh devpts mounting
+failed. This guides the upcoming Heimdall adapter, not proof it is complete.
+The two test containers and all seven layers created by this run were removed;
+the pre-existing base image was retained. Podman's general image listing
+reported a storage readlink error, but exact-ID cleanup succeeded after a
+separate container inventory confirmed no references. No shared-storage repair
+or broad prune was performed.
+
+Dano now builds a separate `dist/server/bridge/heimdall-worker-tools.js` entry
+for this provider interface. It loads the installed Heimdall 0.2.17 through
+pi 0.85.1's public extension runner with an in-memory credential store,
+project trust disabled, and executable resource discovery disabled. Native file
+tools run through its actual `tool_call` and `tool_result` handlers; model Bash
+and interactive Shell use its actual sandbox operations. Guard errors stop
+execution. The worker uses Dano's headless UI context because an active Heimdall
+sandbox renders a status with the theme API during initialization.
+
+Four new tests cover workspace I/O, `.env`/configuration protection, result
+filtering, untrusted extension suppression, cancellation before writes, closed
+providers and no unsandboxed Shell fallback. These and 14 existing Heimdall and
+session tests pass; server type checking and server build also pass.
+
+The actual built provider passed a disposable Linux/Node 22.23.2 run with the
+unreleased extension commit `a242afe`: distinct host/worker UIDs, kernel
+`NoNewPrivs: 1`, denied private absolute/symlink read/write/edit, absent inherited
+synthetic credential, successful file I/O, model Bash and interactive Shell,
+streaming, preserved exit code, `.env`/configuration rejection, and cancellation
+verified by absence of delayed file writes. This run used no network and the
+existing Compose capability/seccomp settings. It did not run Dano's server or
+prove its final multi-user launcher, provider-Python capability, or browser flow.
+
+Reproduction fixtures are `fixtures/heimdall-isolated-worker.mjs` and
+`fixtures/heimdall-worker-provider.mjs`. Copy them into the extension installation
+as `scripts/linux-worker.mjs` and `scripts/provider.mjs`, copy Dano's server build
+to `dano-server`, copy `apps/dano/src/bridge/worker-output-redaction.ts` to
+`scripts/worker-output-redaction.ts` (Node 22.23.2 strips its type-only syntax),
+and install the exact Heimdall peer. In the disposable root
+container, run `node scripts/linux-worker.mjs 1000 1000 10001 10001
+/app/memory-extension/scripts/provider.mjs`. IDs are fixture arguments, not
+production defaults. The fixture explicitly enables the sandbox and grants the
+canonical workspace write access: because the generic worker sets HOME to its
+workspace, Heimdall's automatically added absolute HOME read rule otherwise
+overrides the relative `.` write rule. The eventual trusted Dano launcher must
+provision this canonical policy and the required bubblewrap environment; the
+factory does not rewrite user policy or bypass guards. Protected configuration
+remains inaccessible. Cleanup of worker-owned files can require the container's
+root; removing the disposable container supplies that cleanup boundary.
+The final container inventory is empty, and all 18 image layers created by
+these fixture iterations were removed by exact ID; the pre-existing base was
+retained.
+
+The host runtime now accepts a `ProtectedSessionTools` profile supplied from
+the server's User Context. The same profile reaches the initial backend,
+new/resumed sessions, different-workspace resolution and forks. Each runtime
+resolves and checks its workspace worker before enabling the protected entry;
+native file and Bash definitions become the published extension's worker
+proxies. Host Heimdall is omitted in this mode because the actual guards run
+inside the worker. The existing provider-Python wrapper remains around the
+proxied model Bash tool. User Shell hooks supply isolated operations; Dano's
+browser RPC still rejects direct Bash execution commands.
+
+Protected resource loading disables workspace extension discovery/project
+trust and retains explicitly supplied trusted Skills. A per-runtime abort
+signal invalidates old tool references when sessions are replaced or disposed.
+The ordinary mode retains its existing behavior when no protected profile is
+supplied. The profile resolver remains a trusted server seam: the future
+launcher must validate ownership, protected agent/Skill paths and live kernel
+isolation; it is not a browser configuration object.
+
+Real pi runtime tests verify model-triggered Bash routing, file and interactive
+Shell routing, no workspace extension execution, initial/new/resumed/forked
+bindings, stale tool rejection, foreign workspace rejection, and trusted Skill
+reload without duplicate tool registration. These tests use an executor double
+to prove routing/lifecycle, not kernel isolation. A separate two-user registry
+test verifies distinct profile binding from server User Context. The latest
+full regression passes **111 files / 1442 tests**, with one existing skipped
+test; full type/Svelte checks and production build pass. Multi-user process
+allocation, provider-Python file permissions across UIDs, actual memory factory
+composition and browser acceptance still remain before this profile can be
+enabled for the final Dano integration.
+
+The protected profile now requires a trusted `providerPythonModuleDirectory`
+when a credential broker is present. Provider Python can use these installed
+read-only modules without creating a host-owned `0700` directory in the worker
+workspace. It validates absolute paths and regular module files, never deletes
+the shared installation, and retains the ordinary temporary-copy mode outside
+the protected profile. Actual Python/HTTP tests cover concurrent separate
+login capabilities against shared read-only modules, unchanged module content,
+failure cleanup and rejection of missing/relative module paths without fallback.
+The 39 provider/runtime tests, server type check and server build pass. This
+does not yet prove cross-UID output-file redaction or the final worker mount.
+
+A real disposable Linux probe also established a required process-information
+boundary: without procfs restrictions, another UID can read a synthetic Shell
+capability from `/proc/<pid>/cmdline`, including through a filesystem symlink.
+`fixtures/linux-proc-isolation.cjs` verifies that remounting the container's
+procfs with `hidepid=2,gid=<trusted-host-group>` denies both cross-worker paths
+while retaining same-UID access and trusted-host inspection. Worker groups must
+be distinct and must never include the exempt host group; otherwise this
+protection is bypassed. Host inspection is needed for live worker identity
+checks. Run only in a disposable root container, supplying host and two distinct
+worker identities as the last three arguments (the fixture uses no real keys).
+The probe used no network, its container was removed, and no image was created.
+The final multi-user launcher must establish and verify this boundary before
+loading credentials; the existing single-host worker feasibility test alone
+does not prove process-information isolation.
+
+`linux-process-privacy.ts` now provides the startup preparation and live worker
+check. The root launcher must call preparation inside a dedicated mount
+namespace before loading credentials. It remounts procfs if necessary, checks
+all procfs aliases, and uses a credential-free `setpriv` child to prove the
+configured host identity can inspect its root parent. The tool provider checks
+kernel metadata before initialization and on tool execution: consistent
+non-root identities, no foreign supplementary groups, zero permitted/effective/
+ambient capabilities, and `NoNewPrivs`. It also verifies that the worker cannot
+read its actual host parent's process status. Closing the provider during an
+asynchronous check prevents subsequent tool execution.
+
+The runtime check deliberately uses access tests rather than comparing raw
+procfs exemption GIDs with process-local GIDs. In the tested rootless Podman
+namespace, mounting with group 1000 reported `gid=100999` in mountinfo. The
+[kernel procfs documentation](https://docs.kernel.org/filesystems/proc.html)
+describes the group exemption, and [user_namespaces(7)](https://man7.org/linux/man-pages/man7/user_namespaces.7.html)
+describes identity mappings. This observed mapping was not hardcoded.
+
+The actual built privacy module passed `fixtures/linux-process-privacy-artifact.cjs`
+in a disposable Linux container: root was rejected, setup was idempotent, a
+distinct nonprivileged worker passed, the exempt group and missing NoNewPrivs
+were rejected, removing hidepid invalidated a subsequent check, and restoring
+the policy passed again. Parser/guard/lifecycle tests pass; their development-host
+Heimdall tests mock only the kernel check and do not claim Linux isolation.
+
+The updated full Heimdall fixture also passed with the new built privacy check
+enabled. It prepares procfs before privilege drop and uses distinct host and
+worker groups; the workspace is owned by the host with the worker's group
+allowed to access it. Workspace I/O, model/interactive Shell, streaming,
+cancellation and private-path denial still pass with live process privacy
+checks. The runtime Dockerfile explicitly installs `mount` and `util-linux`
+for the startup helper's commands. The 15 focused tests, server type check and server build pass. All test
+containers and the eight image layers created by this iteration were removed;
+the pre-existing base image remains. This is executable launcher preparation
+and worker protection, not the still-outstanding multi-user supervisor or Dano
+browser acceptance.
+
+With the published dependency installed, the host entry and native lock binding
+load successfully. Full type/Svelte checks report zero diagnostics and the
+production build passes. The full regression rerun passes 109 test files and
+1431 tests (one existing skipped test). The first run exposed a delayed dialog
+scroll-lock cleanup after happy-dom teardown; the lightbox fixture now awaits
+unmount and the actual scroll-lock release before teardown, and both its
+focused rerun and the full rerun pass without unhandled errors.
+
+At extension commit `fb7f2c7`, 38 automated tests pass: owner-bound private file
+state, eight concurrent processes, killed-writer recovery, durable source
+deduplication, response-loss reconciliation, concurrent delivery, pause,
+reconfirmation after enable, bounded recall and real pi 0.85.1 loading/reloading
+of both entry modules. No second pi kernel is bundled.
+
+The protected Linux CLI now invokes pi's public `main` with the standard
+extension factory after directory/code validation, worker startup and host
+UID/GID drop. A real model turn invoked Bash to write a synthetic file and
+read to retrieve it; filesystem ownership confirmed the separate tool UID.
+A planted workspace extension was not evaluated, and print mode exited
+normally. `no_new_privs` is verified from kernel metadata. Trusted host modules
+and optional Skills must remain in the protected installation; administrator
+profiles and ancestors cannot be group/other-writable. This run deliberately
+kept memory disabled; the separate enabled consent/save/recall run is recorded below.
+
+The standard pi CLI/RPC entry has now passed the real OpenViking path: default
+consent off, explicit confirmation, model-triggered save, background `ready`,
+content/source inspection, new-session recall and pause. Automatic collection
+remained unapproved, and captured RPC events/stderr contained no USER key. A
+fresh-account rerun passed on pi 0.85.1 after the earlier 0.82.1 run. The
+[extension acceptance record](https://github.com/josephyoung/pi-openviking/blob/fb7f2c7/docs/acceptance-2026-09-18.md)
+records both operations and tokenizer parity evidence. Interactive TUI evidence,
+Dano browser acceptance and product dual-user integration remain outstanding.
+
+The release candidate now pins pi 0.85.1: 0.82.1's bundled shrinkwrap retained
+vulnerable dependencies despite root overrides. The new exact install resolves
+undici 8.9.0 / brace-expansion 5.0.9 and currently has zero npm audit findings.
+The fixed-image Linux worker regression passed again. Dano's pi-ai and
+pi-coding-agent dependencies are now aligned to this same release. The root
+product version is 0.2.28. `pnpm run check` reports no diagnostics, the full
+build passes, and the final Vitest run with two workers reports 105 files /
+1405 tests passing and one existing skipped test. The local Python test PATH
+uses the isolated environment containing httpx. The Pi-owned default-model
+fixture now refreshes the complete availability snapshot before initial
+selection, while retaining its original default-model assertions.
+
+The 0.1.0 npm tarball includes both entry points, the CLI and Apache-2.0 text;
+its 33 files contain no bundled pi kernel, config credentials or test state.
+The user completed npm second-factor approval and publication succeeded.
+Registry metadata confirms version 0.1.0, and the downloaded registry tarball
+matches the inspected candidate byte digest. Dano now pins that exact registry
+version and integrity in its package manifest and pnpm lockfile. The native
+file-locking dependency compiles locally; the image build stage now includes
+its compiler prerequisites, with clean-image validation still pending.
+Package digest:
+`sha512-VFsiYHDA5lLJjz6nciIoJI/eR3QYQ3VlHQ6z59HdZqQB1lf+i59mQVMIHqaHUpZ5j7QJAUmdTxzrB6YDvpWvpQ==`.
+
+The actual extension adapter also saved a synthetic preference through real
+OpenViking 0.4.20 and SDK 0.1.0: the source-bearing archive, completed matching
+task, memory diff, current content and successful retrieval established `ready`
+in 22.8 seconds. Every delivery step recreated the adapter from durable state.
+This single run is functional evidence, not the PRD latency/quality benchmark.
+
+The owner-level background scheduler now persists backoff and attempt counts,
+recovers queued work on startup, bounds per-tick work and shutdown waits, and
+reports exhausted reconciliation as blocked without repeating a mutation.
+A fresh actual-service background run reached `ready` in 30.3 seconds; a
+subsequent query retrieved the preference without foreground delivery calls.
+These are functional samples, not completion of the release benchmark.
+
+The resource-profile helper disables project trust before package resolution,
+disables automatic extension discovery, and retains explicitly supplied trusted
+Skills. Real pi reload tests show that a workspace extension is suppressed;
+the same fixture executes when project trust is enabled as a positive control.
+The launcher must apply this profile and protect all supplied installation and
+Skill paths. `noExtensions` alone does not skip package resolution.
+
+The extension's actual IPC worker also passed an isolated Linux/Node 22.23.2
+run with pi 0.82.1. It streamed tool updates and cancelled a long Bash command;
+workspace read/write succeeded, while absolute and symlink read/write/edit
+against the trusted host's private credential failed. The worker did not
+inherit the synthetic memory key. Its UID is checked against Linux process
+metadata. The test container had no network and was removed. The worker
+primitive and ordinary CLI path are implemented; this does not yet prove the full memory-enabled startup profile or
+the absence of all host-executable resource discovery paths.
+
+The standard entry now registers isolated proxies for read/write/edit/bash/
+grep/find/ls and routes interactive `!`/`!!` Shell commands through that same
+worker. The Linux run exercised the proxies, streamed output and preserved exit
+codes. Cancellation was checked by the absence of delayed file writes for both
+model Bash and interactive Shell, not only by observing a rejected promise.
+
+Standard-entry management includes confirmed enable, pause, status and saved
+content viewing. These handlers are tested, but the final interactive CLI
+launcher flow has not yet passed acceptance. Automatic collection stays off.
+Before first data access, the real service's authenticated `/health` identity
+must match the configured account/user and USER role; missing identity or an
+administrator key is rejected. Actual-service checks verified saved-content
+reading and rejection of wrong credential binding and foreign references.
+
+Remaining #474 gates include the multi-user Dano Linux worker launcher,
+runtime/session integration, authenticated settings/status UI, interactive
+ordinary-pi evidence and in-app Browser flows. Publication and exact dependency
+installation are now evidenced above; they do not complete these integration
+gates. #465 and #474–477 remain open.
 
 ## Executed host file-tool probe
 
@@ -508,6 +887,196 @@ after spawning, before awaiting network requests; its Linux probe passed again.
   installed and started the unmodified OpenViking `0.4.20` distribution. The
   authentication-only service was stopped after its probes; the separate
   real-model environment supports ongoing governance experiments.
+
+## #474 protected Bash output redaction
+
+The HTTP server now forwards its trusted `protectedToolsForUser` factory to
+the runtime registry. It rejects that configuration when no server-side user
+resolver exists, avoiding an unprotected single-backend fallback. A real
+HTTP/SSE regression suite (9 tests) includes two authenticated users receiving
+separate profiles from verified User Contexts. Worker executors in that test
+are doubles; the production launcher still needs to supply this factory.
+
+Protected sessions now scrub provider capabilities from complete Bash output
+inside the same isolated worker through its guarded `user_bash` operation.
+The credential-bearing host no longer opens a worker-returned output path.
+The operation uses isolated Python (`-I -S`), bounded streaming, a private
+temporary file, and atomic replacement. It rejects symlinks and non-regular
+files; cancellation, isolation failure, and redaction failure prevent a
+successful tool result from being returned. Ordinary host-tool sessions retain
+their existing redaction behavior.
+
+Current evidence: 43 tests in the provider Python, protected-session, and
+worker-output-redaction suites; server type check and build passed. The new
+Shell/Python tests cover private files, split capabilities in large output,
+shell metacharacters, rejected paths, cancellation and failed isolation.
+The routing tests prove host filesystem redaction is bypassed. Those unit tests
+use a local executor double. A subsequent disposable Linux/Node 22.23.2 run of
+the updated Heimdall fixture tested the actual redactor source with the built
+worker provider and the unreleased extension provider API at `a242afe`:
+
+- Worker UID/GID 10001 created a private `0600` output with capabilities across
+  a read-chunk boundary and at the end of a large file.
+- Host UID/GID 1000 received `EACCES` reading it before and after redaction.
+- Worker-side assertions verified exact redacted contents, retained worker
+  ownership and `0600` mode.
+- Attempts to redact a host-private credential directly and through a symlink
+  failed; the credential contents remained unchanged.
+- Existing real Heimdall file/Shell, streaming, cancellation, process privacy,
+  and protected-path checks also passed (exit 0).
+
+The disposable container was automatically removed; the test image and all
+eight newly created layers were removed by exact ID, retaining the existing
+base image. This proves the output
+operation across actual identities; it does not prove the final multi-user
+launcher, full provider-Python request flow or browser acceptance. In particular,
+any browser download path for worker-private artifacts must preserve this
+boundary rather than assume the host can open the file.
+
+## #474 persistent worker identity allocation
+
+`worker-identity-registry.ts` provides launcher-owned, append-only UID/GID
+allocation using the existing `fs-ext` OS advisory-lock implementation (now an
+exact direct dependency). The configured ranges exclude the host UID/GID and
+invalid kernel identities. A user gets the same offset across restarts; new
+users get new offsets, and exhaustion fails rather than reusing an old identity.
+There is no release API. Owner identifiers are hashed before storage.
+
+Records use private files, atomic replacement and fsync under an exclusive
+OS lock. Invalid permissions, symlinks, duplicate owners, corrupt records and
+range changes fail closed. A retained initialization marker detects loss of
+the allocation file rather than starting allocation again. This is not a
+backup rollback detector: the final launcher must refuse a missing allocation
+directory when existing user data remains, reserve ranges against system
+accounts, and protect the directory's ancestors from tool users.
+
+Six tests pass, including six real competing Node processes, stable allocation
+after restart, exhaustion, lost/corrupt records, and OS-lock release after
+terminating its holder. Tests run on the development host; server type checking
+and build pass. The allocator is not yet composed into a privileged multi-user
+supervisor, so no production launcher or full lifecycle acceptance is claimed.
+
+## #474 worker broker entry and capability gate
+
+The Dano build now includes `bridge/worker-broker-entry.js`, an IPC-only Linux
+root entry that invokes the protected bootstrap in its own process. The
+bootstrap drops that broker to the host UID/GID while its tool worker uses the
+separate worker identity. This preserves the future parent supervisor's root
+identity for subsequent users. The installed Dano Heimdall provider path is
+fixed by the entry; RPC messages cannot choose modules or environment values.
+
+The broker protocol supports only isolation checks, the seven native tool
+names, interactive Shell, cancellation and shutdown. It bounds concurrent
+operations and message sizes, aborts operations on channel loss, and reports
+fixed error codes without forwarding worker exceptions. Five protocol tests,
+server type checking and the server build pass. These tests use a channel and
+worker double; the new broker entry itself has not yet passed a real Linux
+multi-process run or been wired to Dano's main server supervisor.
+
+The independent extension now exports `protectedWorkerProviderApiVersion = 1`
+from its bootstrap entry; all 42 extension tests pass. Dano requires this
+capability before bootstrapping its broker. Its currently locked npm `0.1.0`
+does not advertise the capability and will be rejected, preventing silent
+native-tool fallback. The extension changes remain unreleased; a real patch
+publication and exact Dano dependency update are still required before this
+entry can be enabled.
+
+The parent side now has `WorkerBrokerClient` and a built
+`bridge/start-worker-broker.js` supervisor helper. The client handles bounded
+requests, streaming, cancellation (including while waiting for startup),
+operation/startup timeouts, broker death and actual child-exit waiting. Shutdown
+has a kill deadline for a broker that ignores the request, and spawn errors
+that never emit `exit` are handled through `close`.
+
+Twelve tests across client/server protocol suites pass, including seven tests
+using real child processes. Those children run a synthetic worker, not a Linux
+UID sandbox. The supervisor helper validates protected paths, root-owned
+installation code/executables, distinct host/worker groups and the broker's
+actual kernel UID/GID, privilege state and `no_new_privs`. It projects only
+worker configuration into child argv and supplies a minimal environment. It
+does not change the parent's identities. Type checking and server build pass;
+the helper's privileged Linux path and descendant cleanup now have the
+disposable-container evidence below. The root supervisor must prepare private procfs, reserve and
+provision owner-bound directories, supply the enforced Heimdall policy, and
+connect this helper to the HTTP server factory before runtime enablement.
+
+### Actual dual-worker broker acceptance
+
+`fixtures/multi-worker-broker.mjs` exercised the built supervisor helper and
+broker entry with the extension's unreleased `c9305bb` source on Linux/Node
+22.23.2. The container had no network, used init for orphan reaping, and used
+the existing isolated-test capability/seccomp settings. Fixture identities
+were host 1000 and workers 10001/10002; these are arguments, not product defaults.
+
+The first run exposed a real missing integration: Shell failed with a devpts
+mount permission error. The earlier single-worker fixture had supplied required
+bubblewrap environment settings through its wrapper. Those settings now belong
+to `createWorkerTools`: reuse container devices, omit procfs inside Shell, and
+scope writable mounts to the worker workspace. The fixture wrapper no longer
+supplies these settings. The actual dual-worker path uses the fixed installed
+Dano provider without a wrapper.
+
+The final run exited 0 and proved:
+
+- Parent root UID/GID remained unchanged while two brokers bootstrapped workers.
+- Each worker reported its distinct UID/GID through real guarded Shell; that
+  Shell could not see `/proc/1/cmdline`.
+- Both owners' files existed before negative tests. Cross-owner read/write and
+  symlink reads failed, and both original contents remained intact.
+- A `setsid` descendant reported that it had started before its worker was
+  closed. Its delayed write never occurred; `/proc` inspection found no
+  processes remaining under that worker UID. Inspection had first positively
+  identified the live workers, avoiding a vacuous absence check.
+- The other worker continued reading its own file; its later close also left
+  no processes under its UID.
+
+Related deterministic suites pass 18 tests; server type checking/build pass.
+The fixture can run via stdin from its current source with working directory
+`/app/memory-extension/scripts` using `node --input-type=module - 1000 1000 10001`.
+This proves the two-worker process path, not Dano HTTP/browser acceptance or
+the final owner-directory provisioning and user retirement/transfer lifecycle.
+The extension still needs actual patch publication and a locked Dano update.
+All disposable containers and five source/artifact image layers from these
+runs were removed. The dependency-only added base layers are retained as
+`localhost/dano-memory-worker-base:9582c21a2198` for subsequent Linux fixtures;
+they contain the existing public base image, compiler tools and installed npm
+dependencies, without the new extension/Dano source or user runtime state.
+
+### Owner directory provisioning
+
+`worker-workspace.ts` now connects the persistent identity registry to the
+actual worker directory layout. It derives the User Folder from the trusted
+users root and server owner ID, accepts only a direct workspace child, and
+rejects symlinks or foreign-owned/group-bound directories. Shared ancestors
+must already permit traversal; it does not widen the runtime root or recursively
+change user file permissions.
+
+The host owns transit directories and the workspace. The workspace uses
+setgid/sticky permissions so tools can manage their normal files while being
+unable to replace the host-owned `.pi` directory. Both project and tool-agent
+Heimdall policies are host-owned and read-only to the worker. Private host
+agent/state directories are under a separate `0700` host-state root outside
+the User Folders, keeping them outside ordinary user-file transfer paths.
+
+Registry initialization now writes an empty pool without consuming an identity
+and permits first initialization only when all supplied persistent data roots
+are empty. Provisioning requires an established pool. A normal restart retains
+the existing mapping; lost pool metadata over retained user/private state fails
+closed. Seven registry tests pass, including the lost-whole-directory case.
+
+The updated real Linux dual-worker fixture now uses this provisioning path
+instead of hand-created identities/directories. It passed with the existing
+cross-user and descendant-cleanup checks, plus raw unprivileged OS attempts to
+rename `.pi`, rewrite its policy and read a host-private credential. The guarded
+tool path also denied policy replacement and private-state reads. Symlink and
+outside-root provisioning requests failed without changing the target's mode.
+Type checking and server build passed. Test containers and five new source
+image layers were removed; the reusable dependency base was retained.
+
+This is not yet the final server lifecycle: main supervisor composition,
+system-account range reservation, upload/artifact access, and explicit user
+retirement/transfer/revocation remain to be connected and accepted before
+enabling the protected profile in Dano.
 
 ## #473 acceptance audit and handoff
 

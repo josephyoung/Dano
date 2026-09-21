@@ -1,6 +1,10 @@
 FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
+# fs-ext builds the memory extension's kernel-backed file locking binding.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 ENV COREPACK_HOME=/tmp/corepack
 ENV PNPM_HOME=/tmp/pnpm-home
 ENV PNPM_STORE_DIR=/tmp/pnpm-store
@@ -23,7 +27,7 @@ RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}
 
 COPY . .
 RUN pnpm run build
-RUN pnpm --filter @dano/app --prod deploy /prod/dano
+RUN pnpm --store-dir="$PNPM_STORE_DIR" --offline --filter @dano/app --prod deploy /prod/dano
 
 FROM node:22-bookworm-slim AS runtime
 
@@ -36,7 +40,7 @@ RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}
   && npm_config_registry="$registry" npm install --global open-websearch@2.1.11
 RUN sed -i 's|https\?://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g; s|https\?://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
   && apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates bubblewrap curl fd-find git python3 python3-venv ripgrep \
+  && apt-get install -y --no-install-recommends ca-certificates bubblewrap curl fd-find git mount python3 python3-venv ripgrep util-linux \
   && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
   && chmod 4755 /usr/bin/bwrap \
   && rm -rf /var/lib/apt/lists/*
@@ -89,3 +93,13 @@ EXPOSE 8080
 USER node
 ENTRYPOINT ["./deploy/docker-entrypoint.sh"]
 CMD ["node", "./dist/server/main.js"]
+
+# Explicit opt-in for the root supervisor. It drops HTTP-host privileges before
+# loading Dano; secrets belong in the separately provisioned private config.
+FROM runtime AS protected-runtime
+USER root
+ENTRYPOINT ["node", "./dist/server/protected-main.js"]
+CMD []
+
+# An ordinary build keeps the existing non-root entrypoint and startup behavior.
+FROM runtime AS default-runtime
