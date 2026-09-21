@@ -1,4 +1,6 @@
 import type { UserMemoryControls } from "./user-memory-controls.js";
+import type { MemoryInputCapture } from "./memory-user-provenance.js";
+import type { CaptureProviderTaskFact } from "./memory-task-facts.js";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import {
   createIsolatedBashOperations,
@@ -16,6 +18,8 @@ export interface ProtectedSessionTools {
   /** Supervisor-owned private state, outside every tool workspace. */
   readonly memoryStateDirectory?: string;
   readonly memory?: UserMemoryControls;
+  readonly captureMemoryInput?: MemoryInputCapture;
+  readonly captureTaskFact?: CaptureProviderTaskFact;
   readonly trustedSkillPaths: readonly string[];
   readonly providerPythonModuleDirectory?: string;
   resolveWorker(workspace: string): Promise<IsolatedToolExecutor>;
@@ -61,6 +65,7 @@ export async function protectedSessionFactory(
         ? wrapProviderBash(definition, { broker: options.credentialBroker,
             scope: options.credentialBrokerScope, cwd: workspace, signal: options.signal,
             moduleDirectory: profile.providerPythonModuleDirectory,
+            captureTaskFact: profile.captureTaskFact,
             redactOutputFile: createWorkerOutputRedactor(worker) })
         : definition;
       pi.registerTool(tool);

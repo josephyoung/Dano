@@ -26,7 +26,7 @@ export type UserBackendFactory = (
 
 export interface UserRuntimeRegistryOptions {
   readonly sessionsRootPath?: string;
-  readonly protectedToolsForUser?: (context: UserContext) => Promise<ProtectedSessionTools>;
+  readonly protectedToolsForUser?: (context: UserContext, paths: { sessionsRootPath: string }) => Promise<ProtectedSessionTools>;
 }
 
 export interface UserOwnershipPathMap {
@@ -194,7 +194,7 @@ export class UserRuntimeRegistry {
     await ensureSafeDirectory(sessionsRootPath, {
       unsafeDirectoryError: unsafeRuntimeDirectory,
     });
-    const protectedTools = await this.options.protectedToolsForUser?.(userContext);
+    const protectedTools = await this.options.protectedToolsForUser?.(userContext, { sessionsRootPath });
     let backend: DanoBackend;
     try {
       backend = await this.createBackend({
@@ -478,7 +478,10 @@ async function mergeSessionDirectory(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  await fs.promises.mkdir(targetRoot, { recursive: true });
+  await ensureSafeDirectory(targetRoot, {
+    recursive: true,
+    unsafeDirectoryError: () => new Error("User session path is not a safe directory"),
+  });
   const sourceEncoded = sourceUserFolder
     .replace(/^[/\\]/, "")
     .replace(/[/\\:]/g, "-");
