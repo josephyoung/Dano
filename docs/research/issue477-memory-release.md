@@ -423,6 +423,32 @@ arithmetic chat answered only `391` for `23×17`. The extra fact needs review
 in the model-answer quality audit, rather than being silently counted as a
 clean exact answer.
 
+## Candidate 5: single-candidate selection retest
+
+The unchanged 80-case dataset and thresholds were frozen with
+[`issue477-evaluation-candidate5.json`](fixtures/issue477-evaluation-candidate5.json)
+at `8c64029b` before this run. Only the maximum USER-scoped vector search and
+local reranker candidate count changed from two to one. The final image remains
+`0.2.38` with exact `pi-openviking@0.1.12`; official OpenViking, Embedding and
+reranker versions and the four-CPU Podman VM are unchanged. The separate
+[formal retrieval evidence](evidence/issue477-candidate5/formal-retrieval.json)
+records 60/60 expected-source selections, 30/30 irrelevant omissions, zero
+cross-owner forbidden hits and 185.35 ms selection p95. The
+[five-user concurrent selection evidence](evidence/issue477-candidate5/five-user-selection.json)
+records 70/70 relevant selections and 30/30 irrelevant omissions across 100
+attempts, with 710.17 ms cold-round and 537.83 ms steady selection p95.
+These are **memory-selection-only** calls, not complete Dano/MiMo requests.
+
+The protected local acceptance config now uses one candidate. An app restart
+temporarily left nginx with its old upstream IP, producing HTTP 502; restarting
+nginx restored the fixed HTTPS entry to HTTP 200. The authenticated Browser
+restored its prior chat after reconnect. In a fresh MiMo chat asking for only
+the two saved codes, the model answered `枫桥31` and `溪桥82` but again volunteered
+the unrelated `山河58` marker despite the request not to add information.
+Reducing the candidate count improves measured selection latency but does not
+resolve this answer-quality concern. The final image's model-triggered
+`bash ls` also completed and reported `uploads` before this restart.
+
 ## Remaining release gates
 
 ### Live #465 PRD/Spec audit (2026-09-24)
@@ -445,7 +471,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Browser SSE/text, form, Field Assist, generic Skill, Heimdall boundary, image and bash observations | Actual Pi compression, business OA Skill and final-image regression pass |
 | AC-12 | Clean stack, one older-snapshot replay, candidate upgrade and matched rollback | General multi-owner deletion/revocation journal and upgrade-window reconciliation |
-| AC-13 | Frozen 80-case dataset; real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
+| AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
@@ -469,8 +495,9 @@ memory. Five distinct concurrent users must run at least 100 **complete Dano
 requests**, with steady recall-added p95 ≤1 s, wait hard limit 2 s, measured
 injection ≤1,500 tokens, healthy save-ready p95 ≤60 s and incremental model
 cost ≤20% against the same memory-off workload. The current five-user
-100-attempt probe calls OpenViking/reranker only: its 958.60 ms selection p95
-leaves 41.40 ms for Dano overhead and does not establish those limits.
+100-attempt probe calls OpenViking/reranker only: its 537.83 ms steady
+selection p95 leaves room for Dano overhead but does not establish those
+complete-request limits.
 
 The §11.2 Browser flow also requires a separately authenticated Bob context;
 a second tab sharing Alice's cookie cannot supply it. The current local stack
@@ -482,11 +509,11 @@ or issue closure follows from this partial evidence.
 - Define and test the multi-user upgrade-window reconciliation policy beyond
   one controlled synthetic resubmission.
 - Retain the failed vector-only and candidate-2 concurrency results alongside
-  the candidate-3 passing selection evidence; finish full model-answer review.
+  the passing candidate-3/4/5 selection evidence; finish full model-answer review.
 - Complete correction, deletion and authorization cases three times each,
   model-answer review, the 100-request latency/token/cost workload and the
   independent dual-user in-app Browser scenario.
-- Complete the business OA Skill Browser flow, remaining image/SSE/pi
-  compression regressions, the AC/T audit and controlled test-resource cleanup.
+- Complete the business OA Skill Browser flow, remaining final-image image/SSE/pi
+  compression regressions, close each audited AC/T gap and clean test resources.
 
 No production deployment or release conclusion is implied by this record.

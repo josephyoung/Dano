@@ -40,8 +40,8 @@ For an opt-in deployment, provision these distinct resources before Compose:
   For this candidate its private `reranker` object must set `url` to
   `http://reranker:8080/v1/rerank`, `model` to the manifest model name,
   `minimumLogit` to `0`, `timeoutMs` to `900`, `maxInputBytes` to `16384`,
-  `maxDocumentBytes` to `4096`, and `maxCandidates` to `2`. These are frozen in
-  [the third evaluation configuration](../docs/research/fixtures/issue477-evaluation-candidate3.json).
+  `maxDocumentBytes` to `4096`, and `maxCandidates` to `1`. These are frozen in
+  [the fifth evaluation configuration](../docs/research/fixtures/issue477-evaluation-candidate5.json).
   A malformed or unavailable reranker omits memory for that request; it does
   not fall back to the vector-only result that failed the relevance gate.
 
