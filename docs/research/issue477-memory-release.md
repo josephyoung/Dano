@@ -517,6 +517,14 @@ authenticated Browser chat asked for the two digits after the previously saved
 `枫桥` code; MiMo answered exactly `枫桥31`. This adds one final-image model
 answer, not the fixed 20-case, three-run recall acceptance.
 
+The final-image Browser also completed the three required ordinary runtime
+checks at the fixed HTTPS entry: MiMo answered a plain-text request, invoked
+`bash ls` and confirmed `uploads`, and read one real upload of the fixed
+synthetic `shapes.png`. It identified the red circle, blue square and yellow
+triangle in order. The same screenshot showed the uploaded image and answer.
+This is a single final-image pass, not all T-12 repetitions or the absent
+business OA Skill.
+
 ## Remaining release gates
 
 ### Live #465 PRD/Spec audit (2026-09-24)
