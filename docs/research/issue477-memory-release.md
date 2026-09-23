@@ -573,6 +573,58 @@ were recreated from that exact image; the fixed HTTPS entry returned 200
 without changing the localhost CA. Its health check reached `healthy`, and a
 fresh in-app Browser tab reconnected to Alice's existing chat on that entry.
 
+### Recovery checkpoint and automatic journal replay candidate
+
+The protected image now contains `runtime/reconcile-memory-recovery.mjs`.
+Its stopped-stack `checkpoint` binds each owner-state hash to a validated
+journal prefix. `preflight` checks the restored state, full owner set,
+checkpoint prefix and encrypted USER credential before remote work. `replay`
+verifies all identities, applies only post-checkpoint events in order, reads
+back the affected sources/documents, and writes the newer owner states only
+after every owner's readback succeeds. A partial remote failure is retryable.
+
+With the isolated finalqueue app/nginx stopped, image
+`localhost/dano477-protected:0.2.40-reconcile` created a private checkpoint
+for one existing owner. Its preflight and real OpenViking-backed replay passed
+with **zero** post-checkpoint events; the app returned healthy at the same
+HTTPS entry and the in-app Browser restored the existing chat. This verifies
+the real deployment's file paths, credential and clean no-op recovery only.
+The executable test suite also covers two post-checkpoint deletions (one
+source session and one document) through the actual HTTP client against a
+local simulated service, old-state restoration, idempotent retry, altered
+journal prefix, new owner and remote failure before state overlay. The test
+uses no real OpenViking deletion, so it is not a real-service deletion replay.
+
+Automatic approval review initially rejected creation of a dedicated
+OpenViking test USER and synthetic remote data. After the operator explicitly
+confirmed that permission, a new USER named
+`dano477_reconcile_synthetic_01` was created in the isolated OpenViking
+service. Its encrypted USER credential and owner state were kept in separate
+`dano477-reconcile-test-data` and `dano477-reconcile-test-recovery` volumes;
+the existing OA Browser owner was not changed. A synthetic document and empty
+Session were present before a one-owner checkpoint (`journalBytes=0`). Two
+later recovery intents targeted only that USER's Session and document. The
+rebuilt image `adab70014794` passed preflight with `owners=1, events=2`,
+then replay removed both on the real OpenViking service. USER-bound readback
+reported neither document nor Session present. An immediate second replay
+also passed, proving this two-event path is retryable. A second checkpoint
+captured the existing journal prefix, then the recovery mirror advanced to
+revision 2 while the stopped test data volume retained revision 1. Another
+two intents were replayed against a restaged document and Session. The
+readback found neither target and the restored local state advanced to
+revision 2. No older OpenViking data volume was imported for these probes,
+so they are **real-service nonzero-event replay** evidence rather than complete
+matched rollback acceptance. The command deliberately fails closed for new owners,
+new writers, pending governance, retirement and invalid/stale credentials;
+general upgrade-window reconciliation and arbitrary old snapshots remain
+release gates, as do the full AC/T Browser and quality matrices.
+
+For this candidate, the rebuilt protected image completed successfully.
+`pnpm run check` reported no server or Svelte diagnostics, the release checker
+passed, and the bounded full Vitest run passed 145 files (1,670 tests passed,
+one skipped). An earlier concurrent full run had one unrelated provider Skill
+gate timeout; that test passed alone and in the bounded full rerun.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -592,7 +644,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
-| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback | Automatic multi-owner deletion/revocation journal and upgrade-window reconciliation |
+| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal checkpoint plus real-service two-event replay | Matched old-volume replay with automatic journal, multi-owner deletion/revocation and upgrade-window reconciliation |
 | AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
 | Spec test | Current evidence | Missing acceptance |
@@ -605,7 +657,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; earlier Field Assist/Heimdall/SSE observations | Business OA Skill and complete final-image repetition |
-| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay | General old queue, multi-user reconciliation and automatic deletion/revocation records |
+| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal two-event preflight/replay | Matched old-volume journal replay, general old queue and multi-user reconciliation |
 | T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,

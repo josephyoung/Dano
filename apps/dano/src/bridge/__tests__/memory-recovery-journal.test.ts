@@ -34,6 +34,10 @@ it("mirrors each acknowledged state change and durably queues owner-bound deleti
   const events = (await readFile(join(directory, "events.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
   expect(events.map(event => event.mutation.kind)).toEqual(["removeSource", "removeMemory"]);
   expect(events.every(event => event.owner.accountId === "account" && event.owner.userId === "alice")).toBe(true);
+  const inspected = await MemoryRecoveryJournal.inspect(f.recovery, f.owner);
+  expect(inspected.state).toEqual(await f.base.read());
+  expect(inspected.eventBytes.toString("utf8")).toBe(await readFile(join(directory, "events.jsonl"), "utf8"));
+  expect(inspected.events.map(event => event.mutation.kind)).toEqual(["removeSource", "removeMemory"]);
   await expect(MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read())).resolves.toBeDefined();
 });
 

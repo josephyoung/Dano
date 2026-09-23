@@ -118,6 +118,7 @@ FROM runtime AS protected-runtime
 USER root
 COPY apps/dano/runtime/replay-memory-deletions.mjs ./replay-memory-deletions.mjs
 COPY apps/dano/runtime/bootstrap-memory-recovery.mjs ./bootstrap-memory-recovery.mjs
+COPY apps/dano/runtime/reconcile-memory-recovery.mjs ./runtime/reconcile-memory-recovery.mjs
 ENTRYPOINT ["node", "./dist/server/protected-main.js"]
 CMD []
 

@@ -13,6 +13,14 @@ export type RecoveryMutation =
   | { kind: "clearMemoryScope" }
   | { kind: "clearOwnerData" };
 
+export interface RecoveryEvent {
+  version: 1;
+  id: string;
+  owner: Owner;
+  occurredAt: string;
+  mutation: RecoveryMutation;
+}
+
 const unavailable = () => new Error("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
 const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const documentUri = (owner: Owner, value: unknown): value is string => {
@@ -122,6 +130,16 @@ export class MemoryRecoveryJournal {
     return journal;
   }
 
+  /** Read a stopped service's validated mirror and event stream for checkpoint
+   * or rollback tooling. Never infer a deleted fact from an older snapshot. */
+  static async inspect(root: string, owner: Owner): Promise<{ state: OwnerState; eventBytes: Buffer; events: RecoveryEvent[] }> {
+    const journal = await this.#prepare(root, owner);
+    const state = await journal.#state();
+    if (!state) throw unavailable();
+    const { bytes, events } = await journal.#validateEvents();
+    return { state, eventBytes: bytes, events };
+  }
+
   assertHealthy(): void { if (this.#poisoned) throw unavailable(); }
   poison(): void { this.#poisoned = true; }
 
@@ -136,11 +154,11 @@ export class MemoryRecoveryJournal {
     } catch { throw unavailable(); }
   }
 
-  async #validateEvents(): Promise<void> {
-    const bytes = await privateFile(join(this.#directory, "events.jsonl"));
-    if (!bytes) return;
+  async #validateEvents(): Promise<{ bytes: Buffer; events: RecoveryEvent[] }> {
+    const bytes = await privateFile(join(this.#directory, "events.jsonl")) ?? Buffer.alloc(0);
     if (bytes.length && bytes.at(-1) !== 10) throw unavailable();
     const ids = new Set<string>();
+    const events: RecoveryEvent[] = [];
     for (const line of bytes.toString("utf8").split("\n")) {
       if (!line) continue;
       try {
@@ -155,8 +173,10 @@ export class MemoryRecoveryJournal {
           || new Date(entry.occurredAt).toISOString() !== entry.occurredAt) throw unavailable();
         checkedMutation(this.owner, entry.mutation);
         ids.add(entry.id);
+        events.push(entry as unknown as RecoveryEvent);
       } catch { throw unavailable(); }
     }
+    return { bytes, events };
   }
 
   mirror(state: OwnerState): Promise<void> {

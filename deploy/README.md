@@ -98,10 +98,46 @@ and credential before running either format. Maintain the ledger separately
 from the older snapshot. `retainedDocuments` contains the public document body,
 not OpenViking's physical `MEMORY_FIELDS` trailer. The ledger is private data;
 do not put it in source control or logs. This command replays a supplied
-ledger. Dano `0.2.40` begins mirroring owner state and fsyncing remote deletion
-intents to the separate recovery volume, but this command does not yet consume
-that automatic journal. A complete recovery still requires an independently
-verified post-snapshot ledger.
+ledger. Dano `0.2.40` also mirrors owner state and fsyncs remote deletion
+intents to the separate recovery volume. For snapshots created after this
+journal was enabled, the protected image includes
+`/app/runtime/reconcile-memory-recovery.mjs`. Stop Dano and OpenViking before
+the backup, then run its `checkpoint` command with the protected data root,
+recovery root and a new private checkpoint file outside both volumes:
+
+```sh
+node /app/runtime/reconcile-memory-recovery.mjs checkpoint \
+  /var/lib/dano-protected /var/lib/dano-memory-recovery /checkpoint/snapshot.json
+```
+
+Keep that checkpoint with the old volume archives. It binds each owner's old
+state hash to the byte position and SHA-256 prefix of the independent journal.
+On rollback, retain the **newer** recovery volume, restore the old data/config
+and OpenViking volumes, then start only the internal OpenViking dependencies.
+Run `preflight` and `replay` with the protected config root, restored data
+root, newer recovery root and checkpoint file, in that order. The one-off
+container must run as the protected host UID/GID with the data volume writable
+for state locks and the recovery/checkpoint volumes read-only:
+
+```sh
+node /app/runtime/reconcile-memory-recovery.mjs preflight \
+  /etc/dano-protected /var/lib/dano-protected /var/lib/dano-memory-recovery /checkpoint/snapshot.json
+node /app/runtime/reconcile-memory-recovery.mjs replay \
+  /etc/dano-protected /var/lib/dano-protected /var/lib/dano-memory-recovery /checkpoint/snapshot.json
+```
+
+The command checks every owner, state hash, journal prefix and credential before the first
+remote mutation; it replays later deletion intents, reads back their effects,
+then atomically overlays the newer owner states. It prints only aggregate
+counts and can be rerun after a partial remote failure. Do not start Dano or
+expose nginx until replay succeeds.
+
+This command fails closed when a new owner or completed writer appears after
+the checkpoint, a governance job remains in progress, a credential is missing
+or invalid, or the snapshot and journal diverge. Those cases require a separate
+upgrade-window reconciliation; neither command may silently discard newer
+memory or treat a failed preflight as acceptance. The older supplied-ledger
+command remains the recovery path for backups without this checkpoint.
 
 For an existing deployment, stop Dano before introducing the recovery volume.
 Run `node /app/bootstrap-memory-recovery.mjs
@@ -112,8 +148,8 @@ and owner bindings, and copies each current owner state into an initially empty
 recovery volume. It prints only the owner count and is idempotent for unchanged
 state. The protected runtime rejects existing owners without this bootstrap or
 whose restored state differs from the mirror. Keep Dano stopped until the
-bootstrap completes; this is a one-time migration, not a substitute for the
-still-missing automatic journal replay.
+bootstrap completes; this is a one-time migration, not a substitute for
+checkpointing and reconciling later recovery events.
 The protected data mount must be writable during bootstrap because the state
 store opens its owner lock file; stop the app first and leave that mount under
 the protected host UID/GID.
