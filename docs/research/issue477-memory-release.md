@@ -728,7 +728,21 @@ rebuilt protected image `3d8569c7463f`. The ordinary Pi
 entry registered eight tools including `memory_save` and the `user_bash`
 handler; the Dano factory registered one memory tool. Neither produced an
 error or duplicate registration. This checks loading and registration; an
-ordinary protected Pi CLI chat remains a separate acceptance case.
+ordinary protected Pi CLI chat was then tested separately as described below.
+
+A disposable probe layer on the rebuilt image used the **published**
+`0.1.13` standard entry and pinned Pi `0.85.1` through the public protected
+Pi CLI RPC interface. It used the same MiMo-v2.5 model, its pinned tokenizer
+revision and a fresh synthetic USER in the isolated OpenViking service. The
+CLI showed default-off memory and separate collection consent, accepted its
+own confirmation prompt, let the real model call `memory_save`, reached
+`ready`, displayed the saved content and source, recalled the fact after
+`new_session`, and paused memory. Automatic collection stayed unauthorized;
+the USER key did not appear in captured RPC events or stderr. The synthetic
+account was deleted through the official admin API. The
+[sanitized result](evidence/issue477-published-cli/summary.json) records these
+assertions. This is one ordinary CLI functional path; it does not establish
+the complete pair audit or the Dano multi-user/browser and quality matrices.
 
 The updated `0.2.41-receipt` image contains product `0.2.41`, published
 pi-openviking `0.1.13` and the checkpoint receipt code. The fixed HTTPS
@@ -762,7 +776,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | PRD | Current evidence | Missing acceptance |
 |---|---|---|
-| AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords, rebuilt protected image and dual-entry loader check in that image | Complete ordinary protected Pi CLI chat and Dano integration repetition |
+| AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords, rebuilt image, dual-entry loader check and one real-service protected Pi CLI save/new-session recall | Complete pair audit and Dano integration repetition |
 | AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
 | AC-04 | Collection filters and consent have automated coverage | Real automatic-collection cases with exclusion evidence |
 | AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
@@ -775,7 +789,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
-| T-01 | Published `0.1.13`, exact Dano lockfile, rebuilt protected image, and dual-entry loading twice per entry in that image | Protected ordinary Pi CLI functional flow and full pair audit |
+| T-01 | Published `0.1.13`, exact Dano lockfile, rebuilt protected image, dual-entry loading twice per entry, and one real-service ordinary Pi CLI save/new-session recall | Full pair audit and repeated functional checks |
 | T-02/03 | Real USER-key isolation probes | Collision/forgery, Peer/project scope and independent Bob Browser across fixed repetitions |
 | T-04/05 | Automated lifecycle/collection tests; selected Browser paths | Full multi-viewer/rebind/branch/dispose and real collection exclusions |
 | T-06/07 | Actual old `session_unknown` recovery and credential-store replay | All crash windows, rotation, user switch and anonymous transfer on fixed service |
