@@ -2,7 +2,91 @@
 
 This directory contains deployment-specific defaults and proxy config.
 
-## Protected memory image (acceptance only)
+## Protected memory release candidate
+
+The opt-in release combination is recorded in
+[`memory-release.json`](memory-release.json): Dano `0.2.35`, exact
+`@josephyoung/pi-openviking@0.1.11`, and upstream OpenViking `v0.4.20`
+at the recorded multi-platform OCI index digest. The platform manifests are
+recorded alongside the index so the selected Linux architecture can be checked
+after pull. The Dockerfile uses `pnpm install --frozen-lockfile`; the extension
+and all runtime tools are installed in the image build, never on startup.
+Run `node scripts/check-memory-release.mjs` before building.
+
+For an opt-in deployment, provision these distinct resources before Compose:
+
+- A private deploy-control directory `DANO_OPENVIKING_CONFIG_DIR`, mode 0700,
+  with `ov.conf` mode 0600. Set `server.host` to `0.0.0.0`, port `1933`, a
+  nonempty root key, and absolute `storage.workspace` to
+  `/app/.openviking/data`. Configure `vlm` for extraction independently from
+  `embedding.dense`. The fixed candidate uses `embedding.dense.provider` =
+  `openai`, `api_base` = `http://embedding:8080/v1`, the manifest's model name
+  and dimension, and `encoding_format` = `float`.
+  Do not put this config, its key, or model credentials in source, image,
+  Compose environment, or a command line.
+- A read-only model asset directory `DANO_OPENVIKING_MODELS_DIR` for the
+  independent Embedding service. Set `DANO_EMBEDDING_IMAGE`,
+  `DANO_EMBEDDING_MODEL_FILE` and `DANO_EMBEDDING_MODEL_NAME` from the release
+  manifest. The release check hashes the GGUF file before startup. This
+  service runs the upstream llama.cpp server with no published host port.
+- An external named `DANO_OPENVIKING_DATA_VOLUME` for OpenViking's
+  `/app/.openviking`, separate from the protected Dano config/data volumes.
+  Keep the Dano source checkout, deploy-control files and runtime state in
+  different paths. The private Dano `memory-service.json` must name
+  `http://openviking:1933` as its origin and retain the management-key and
+  encryption-key versions across restart and recovery.
+
+Set `DANO_OPENVIKING_IMAGE` to the exact `openVikingImage` value in the release
+manifest, then run `node scripts/check-memory-release.mjs --deployment`.
+Append `deploy/compose/memory.yml` to the base and protected overlays. It
+attaches Dano and OpenViking to the internal `memory-backend` network; only
+OpenViking also joins the model-provider egress network. The Embedding
+service remains only on the internal network. The overlay publishes no
+OpenViking or Embedding host port and uses the official OpenViking image
+without VikingBot. Dano does
+not depend on OpenViking health to start, so disabled or unavailable memory
+must leave ordinary chat available. Do not add an OpenViking port mapping or
+put the management key in `app.environment`. Podman may inject host proxy
+variables into the container; `DANO_MEMORY_NO_PROXY` must include `embedding`,
+`openviking`, loopback addresses and any model provider reached directly.
+
+Before restoring any volume snapshot, stop Dano and OpenViking together and
+retain a newer deletion/revocation record outside the snapshot. An older
+OpenViking image or data snapshot can contain forgotten facts; do not resume
+Dano from that snapshot until deletion replay and readback have completed.
+For a stopped-stack backup, export the runtime, agent-config, workspaces,
+protected config/data and OpenViking data named volumes plus the private
+deploy-control directory, and record archive hashes and image digests. Keep
+the archives and the post-snapshot deletion/revocation ledger private. A
+rollback must restore matching image, config, state and OpenViking data, not
+only an image tag. Bring up only the internal OpenViking and Embedding services
+after import. Overlay the newer owner state and replay every later deletion
+and revocation before starting Dano or exposing nginx.
+
+The protected image contains `replay-memory-deletions.mjs`. Run it as a
+one-off container on the internal memory network with the restored protected
+config and data volumes mounted read-only and a post-snapshot ledger mounted
+read-only. The command takes the config directory, data directory and ledger
+path as positional arguments. It verifies the restored owner-state SHA-256,
+decrypts the owner-bound USER credential locally, checks OpenViking identity,
+removes the listed sources and document URIs, restores retained documents and
+reads back the complete public document set. It prints counts only. A changed
+state hash or owner mismatch fails before any remote mutation. Run once for
+each affected owner; the ledger must be maintained separately from the older
+snapshot and include `version`, `owner`, `statePath`, `postStateSha256`,
+`deleteUris`, `sourceSessionIds`, `retainedDocuments` and
+`expectedDocumentUris`. `retainedDocuments` contains the public document body,
+not OpenViking's physical `MEMORY_FIELDS` trailer. The ledger is private data;
+do not put it in source control or logs.
+
+An isolated #477 rehearsal restored an older snapshot into new volumes, proved
+both old URIs were present, replayed one later forget before starting Dano,
+and verified in the in-app Browser that a fresh chat could not retrieve the
+forgotten code while the unrelated preference remained. This establishes the
+tested sequence for that synthetic owner. The general multi-owner recovery,
+candidate-upgrade and matched-rollback procedure remains a #477 release gate.
+
+### Protected image entry
 
 Build the opt-in supervisor target from the same repository Dockerfile:
 
