@@ -176,12 +176,83 @@ two deleted URIs, one removed source, one retained document and three expected
 documents. This is a tested per-owner replay step; the general ledger capture,
 revocation and matched rollback procedure still need their release rehearsal.
 
+## Candidate upgrade and matched rollback rehearsal
+
+A third isolated stack began with Dano `0.2.34` and
+`@josephyoung/pi-openviking@0.1.8`, plus the same fixed official OpenViking
+`v0.4.20` and Embedding image. Its volumes and OpenViking account were new.
+The in-app Browser completed OA SSO, found both memory switches off, enabled
+only explicit memory, saved the synthetic `枫桥31` fact to ready, and recalled
+it from a separate chat. With OpenViking then stopped, a second `溪桥82` save
+entered `session_unknown`. All six volumes and private deploy-control files
+were exported after stopping Dano, nginx and Embedding. The private baseline
+manifest at `/private/tmp/dano477-upgrade-baseline.189h5urv/manifest.json`
+records the seven archive hashes. The baseline state had one ready operation
+and one pending `session_unknown` operation.
+
+The same stack's app was recreated with the actual `0.2.35` candidate image
+(`8b1524835ee3`), keeping the old volumes and fixed OpenViking version. The
+old ready fact remained visible in management and a fresh MiMo chat answered
+`枫桥31`. The old offline task became “结果待核实” and was **not** blindly
+resent; its remote session had never been confirmed. This is a safe ambiguity
+outcome, not a successful old-queue delivery. The candidate then saved a new
+synthetic dark-blue chart preference to ready. Its operation, document URI,
+digest and content were recorded in a private upgrade-window reconciliation
+file outside the old snapshot, alongside stopped candidate data and OpenViking
+archives.
+
+For matched rollback, a fourth isolated stack imported the **old** six-volume
+snapshot into fresh volumes and ran the old `0.2.34` image (`ff9dcbf3d807`).
+Before Dano started, the USER-bound replay command checked the restored
+owner-state hash and public document set: the old profile remained, while the
+candidate-window document and source were absent. The physical profile file
+had one trailing newline that OpenViking's public read omits, so its replay
+ledger used the exact public body. Browser management showed the old ready
+fact and the unresolved old queue. The new ready operation was not silently
+carried into the old state; its synthetic fact was explicitly resubmitted from
+the private reconciliation file through the old browser/model/tool path,
+reached ready under a **new** operation ID, and a fresh chat answered both
+`枫桥31` and the dark-blue preference. This demonstrates data-matched rollback
+and explicit reconciliation of one synthetic upgrade-window operation. It does
+not establish automatic operation migration or a production-safe resubmission
+policy for arbitrary users.
+
+Compatibility observed in this rehearsal: the `0.2.34`/`0.1.8` owner-state
+version 1 and OpenViking `v0.4.20` data were readable by `0.2.35`/`0.1.11`;
+the reverse path used the old snapshot and reissued the one newer operation.
+No OpenViking storage-format migration was exercised. The old ambiguous queue
+exposed a genuine extension recovery gap before #477 can pass.
+
+The gap was reproduced in two tests: a Session creation that failed before
+OpenViking accepted it left `session_unknown` forever, and pause after that
+failure left the payload pending across a new authorization epoch. The
+`pi-openviking@0.1.12` fix retries only creation of the **same empty Session
+ID** after USER-scoped absence and checks current authorization before that
+mutation. It does not retry an unknown message append or commit. The two tests
+were red on 0.1.11 and green on 0.1.12; all 252 extension tests passed. A
+one-off container from the candidate image with local 0.1.12 bits advanced
+the *actual old snapshot operation* against fixed OpenViking `v0.4.20` from
+`session_unknown` through `session_created`, `message_delivered`, `processing`
+to `ready`, with the original Session ID and one memory document. Extension
+PR [#10](https://github.com/josephyoung/pi-openviking/pull/10) merged;
+Trusted Publisher run `35879801711` succeeded and published 0.1.12. Dano's
+frozen lockfile installed the exact registry tarball after npm CDN propagation.
+The complete protected image `5dddd4a48172` reports Dano `0.2.35`, exact
+extension `0.1.12`, both Pi keywords and the replay command. A fresh fifth
+isolated stack imported the **old** six-volume snapshot, started the fixed
+OpenViking/Embedding services and this formal image, then passed real in-app
+Browser acceptance: the old pending `溪桥82` task became “已记住”, its profile
+document retained the earlier `枫桥31` fact, and a new MiMo chat correctly
+answered both codes. This closes the specific session-creation old-queue
+recovery gap, without changing the separate upgrade-window reconciliation
+policy requirement.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
   including deletion/revocation records across arbitrary rollback points.
-- Exercise candidate upgrade plus matched image/data rollback, old queue and
-  upgrade-window operations, documenting format compatibility and retention.
+- Define and test the multi-user upgrade-window reconciliation policy beyond
+  one controlled synthetic resubmission.
 - Run the fixed 20/10/20/10/10/10 evaluation cases three times each, the
   100-request latency/token/cost workload, and the independent dual-user
   in-app Browser scenario. Complete the broader regression and AC/T audit.

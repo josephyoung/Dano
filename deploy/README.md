@@ -6,7 +6,7 @@ This directory contains deployment-specific defaults and proxy config.
 
 The opt-in release combination is recorded in
 [`memory-release.json`](memory-release.json): Dano `0.2.35`, exact
-`@josephyoung/pi-openviking@0.1.11`, and upstream OpenViking `v0.4.20`
+`@josephyoung/pi-openviking@0.1.12`, and upstream OpenViking `v0.4.20`
 at the recorded multi-platform OCI index digest. The platform manifests are
 recorded alongside the index so the selected Linux architecture can be checked
 after pull. The Dockerfile uses `pnpm install --frozen-lockfile`; the extension
@@ -85,6 +85,23 @@ and verified in the in-app Browser that a fresh chat could not retrieve the
 forgotten code while the unrelated preference remained. This establishes the
 tested sequence for that synthetic owner. The general multi-owner recovery,
 candidate-upgrade and matched-rollback procedure remains a #477 release gate.
+
+The tested compatibility pair is Dano `0.2.34` with pi-openviking `0.1.8` and
+Dano `0.2.35` with pi-openviking `0.1.11`, both using OpenViking `v0.4.20` and
+owner-state version 1. A ready old fact survived the candidate image upgrade.
+The matched rollback imported **all** old data/config volumes into fresh
+volumes and used the old image; an operation accepted during the upgrade
+window was separately recorded and deliberately resubmitted in the synthetic
+test under a new operation ID. An old operation created while OpenViking was
+offline remained `session_unknown`/“result needs verification”; no version
+blindly replayed it. This unresolved queue outcome and a supported policy for
+arbitrary upgrade-window operations still block a general release claim.
+The final candidate pins pi-openviking `0.1.12`: its same-ID empty-Session
+retry recovered that actual old snapshot operation to ready against the real
+fixed OpenViking service in a one-off container. The complete final image was
+then run from the old six-volume snapshot: the in-app Browser showed the old
+pending task as ready and a new chat recalled both old and recovered facts.
+General multi-user upgrade-window reconciliation remains a separate gate.
 
 ### Protected image entry
 
