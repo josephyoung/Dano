@@ -387,6 +387,42 @@ must render the prompt before release. Sending `/compact` in the browser
 composer produced an ordinary model message rather than Pi compression, so
 that attempt is **not** counted as the required compression regression.
 
+## Candidate 4: review fixes and repeat acceptance
+
+The code and unchanged 80-case dataset were frozen in
+[`issue477-evaluation-candidate4.json`](fixtures/issue477-evaluation-candidate4.json)
+at `d243610b`. The protected image `204933dea05f` reports Dano `0.2.38` and
+the same published `pi-openviking@0.1.12`. The offline recovery command now
+uses Dano's `MemoryCredentialStore` rather than manually opening and
+decrypting the USER credential file; the existing store checks the file owner,
+mode, size, symlink boundary, key version and authenticated owner. The release
+checker parses the pnpm lockfile as YAML. The frozen lockfile install, full
+server/Svelte check, targeted credential/reranker/config tests and deployment
+release check passed.
+
+A one-off `0.2.38` container mounted the current private volumes read-only and
+an older ledger with no network. It rejected the mismatched state hash at
+`load` before any credential or remote operation. Against the previously
+restored isolated volumes, with only official OpenViking and Embedding running,
+the same image replayed the ledger successfully and checked two deleted URIs,
+one removed source, one retained document and all three expected documents.
+This revalidates the repaired credential path on the real service for the one
+synthetic owner; it does not create a general multi-owner ledger policy.
+
+The [candidate-4 formal retrieval results](evidence/issue477-candidate4/formal-retrieval.json)
+record 60/60 relevant source selections, 30/30 irrelevant omissions and zero
+forbidden cross-owner reads; selection p95 was 279.75 ms. The
+[five-user concurrent selection results](evidence/issue477-candidate4/five-user-selection.json)
+record 70/70 relevant selections and 30/30 irrelevant omissions, with
+first-round p95 849.68 ms and steady p95 958.60 ms. The latter has only
+41.40 ms margin below the 1-second selection threshold **before** Dano host
+overhead; it is not a pass of the complete-request gate. In the real in-app
+Browser, a fresh MiMo chat answered `枫桥31` and `溪桥82`, but also volunteered
+an extra recently saved synthetic marker `山河58`; a separate unrelated
+arithmetic chat answered only `391` for `23×17`. The extra fact needs review
+in the model-answer quality audit, rather than being silently counted as a
+clean exact answer.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
