@@ -247,14 +247,61 @@ answered both codes. This closes the specific session-creation old-queue
 recovery gap, without changing the separate upgrade-window reconciliation
 policy requirement.
 
+## Frozen evaluation baseline, 2026-09-24
+
+The 80-case synthetic dataset was committed as
+[`issue477-evaluation.json`](fixtures/issue477-evaluation.json) at `5616f135`
+before executing it. It fixes 20 recall, 10 correction, 20 isolation,
+10 deletion, 10 irrelevant-request and 10 authorization cases, with three
+repetitions each; the five-user/100-request workload, model, machine,
+configuration, official MiMo list prices and acceptance thresholds are also
+frozen there. The tested Podman VM had four CPUs and 4,076,376,064 bytes of
+RAM. MiMo-v2.5 extraction of the five four-fact source Sessions completed in
+87.2–95.1 seconds, producing one to four documents per synthetic owner.
+This is batch extraction timing, not the single-fact explicit-save p95 metric.
+
+The real OpenViking `v0.4.20` USER-key run produced these sanitized per-attempt
+files: [recall](evidence/issue477-baseline/recall.json),
+[isolation](evidence/issue477-baseline/isolation.json) and
+[irrelevant requests](evidence/issue477-baseline/irrelevant.json).
+All 60/60 recall searches found a document containing the expected fact and
+none returned the next owner's forbidden value; this is source retrieval,
+not a Dano/MiMo answer-correctness result. All 60/60 cross-user probes kept
+the target user's content and state isolated. Search, read, write and tree
+export returned 403 in 48 probes. The 12 same-named Session-message probes
+returned 200 because OpenViking wrote to the caller's own Session namespace;
+the target Session context was unchanged, and the caller's context contained
+its synthetic marker without the target fact.
+
+The initial relevance configuration **failed** its fixed requirement:
+0/30 irrelevant-request repetitions would avoid injection. Every real search
+returned at least one memory above the configured `minimumScore=0.1`; the
+published extension's context hook selects those entries under its token
+budget. This is a measured selection outcome, not 30 completed Dano chats.
+The irrelevant top scores ranged 0.354–0.535, while relevant top scores ranged
+0.396–0.755. A single higher vector-score cutoff would also discard some
+required facts. The candidate therefore needs a separately frozen and tested
+relevance stage; these failed baseline results remain part of the record.
+
+The formal `0.2.35`/`0.1.12` Browser regression also completed ordinary
+MiMo text chat, a model-triggered `bash ls` tool call, a real upload of the
+fixed synthetic `shapes.png` (model identified red circle, blue square and
+yellow triangle), and an `ask_user_question` radio card submitted as
+“咖啡” and returned to the model. These observations do not cover the remaining
+Skill, Field Assist, Heimdall, dual-user or 100-request gates.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
   including deletion/revocation records across arbitrary rollback points.
 - Define and test the multi-user upgrade-window reconciliation policy beyond
   one controlled synthetic resubmission.
-- Run the fixed 20/10/20/10/10/10 evaluation cases three times each, the
-  100-request latency/token/cost workload, and the independent dual-user
-  in-app Browser scenario. Complete the broader regression and AC/T audit.
+- Fix the failed irrelevant-memory selection and repeat the frozen evaluation
+  without removing the failed baseline evidence.
+- Complete correction, deletion and authorization cases three times each,
+  model-answer review, the 100-request latency/token/cost workload and the
+  independent dual-user in-app Browser scenario.
+- Complete Skill, Field Assist and Heimdall Browser regression, the AC/T audit,
+  and controlled test-resource cleanup.
 
 No production deployment or release conclusion is implied by this record.
