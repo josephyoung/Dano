@@ -290,6 +290,42 @@ yellow triangle), and an `ask_user_question` radio card submitted as
 “咖啡” and returned to the model. These observations do not cover the remaining
 Skill, Field Assist, Heimdall, dual-user or 100-request gates.
 
+## Candidate 2: bounded local reranking
+
+The first relevance repair used Dano `0.2.36`, exact pi-openviking `0.1.12`,
+the same OpenViking/Embedding versions and a separately pinned upstream
+llama.cpp reranking service. Its `bge-reranker-v2-m3-Q4_K_M` asset has SHA-256
+`e186a244ed455b4ab66ec64339ce7427a6ae13f5c0b5e544de96e50f0f8b3673`.
+The unchanged 80-case dataset and the new private limits were frozen in
+[`issue477-evaluation-candidate2.json`](fixtures/issue477-evaluation-candidate2.json)
+before formal execution. OpenViking `v0.4.20` `/find` is a QUICK vector path,
+so merely enabling its server-side reranker cannot affect this extension's
+recall. Dano reranks USER-scoped candidates before injecting them, and a
+missing, timed-out or malformed reranking response omits memory for that
+request. The published extension and user-bound credential scope are unchanged.
+
+The formal image `46443b7b95aa` started with the private reranker configuration.
+All 143 Vitest files passed (1,655 tests, one skipped); type/Svelte checks had
+no diagnostics. The [candidate 2 retrieval results](evidence/issue477-candidate2/formal-retrieval.json)
+contain 90 attempts: 60/60 expected source documents selected, 30/30
+irrelevant requests selected no memory, no cross-owner forbidden fact, and
+search plus reranking p95 324.45 ms. In the real in-app Browser, a fresh
+MiMo chat answered both stored upgrade codes after restart; an unrelated
+arithmetic chat returned 45. These are Browser observations, while the
+per-attempt file records service selection, not 90 Dano model answers.
+
+The first [five-user, 100-request selection probe](evidence/issue477-candidate2/five-user-selection.json)
+then exposed a concurrency flaw: reranking all five vector candidates with
+the 750 ms timeout selected only 7/70 relevant facts. 30/30 irrelevant
+requests omitted memory; steady selection p95 was 962.5 ms. This is a
+supplemental memory-selection workload, **not** the Spec's 100 complete user
+requests or a release pass. The failure is retained. The fixed corpus's
+expected fact was already in the first vector result for 20/20 distinct
+recall cases. Exploratory probes capped reranking at two candidates and used
+a 900 ms timeout; 70/70 relevant and 30/30 irrelevant requests then selected
+correctly, with steady selection p95 793.64 ms. A separately frozen candidate
+must still implement and repeat that result, including Dano host overhead.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
