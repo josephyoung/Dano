@@ -14,6 +14,31 @@ export type RecoveryMutation =
   | { kind: "clearOwnerData" };
 
 const unavailable = () => new Error("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
+const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const documentUri = (owner: Owner, value: unknown): value is string => {
+  if (typeof value !== "string" || !value.startsWith(`viking://user/${owner.userId}/memories/`) || !value.endsWith(".md")) return false;
+  const relative = value.slice(`viking://user/${owner.userId}/memories/`.length);
+  return !/[%?#\\\x00-\x1f]/.test(value)
+    && relative.split("/").every(part => part.length > 0 && !part.startsWith("."));
+};
+
+function checkedMutation(owner: Owner, value: unknown): asserts value is RecoveryMutation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw unavailable();
+  const mutation = value as Record<string, unknown>;
+  const fields = Object.keys(mutation).sort().join(",");
+  switch (mutation.kind) {
+    case "removeSource": if (fields === "kind,remoteSessionId" && identifier(mutation.remoteSessionId)) return; break;
+    case "removeMemory": if (fields === "kind,uri" && documentUri(owner, mutation.uri)) return; break;
+    case "replaceMemory":
+      if (fields === "content,kind,uri" && documentUri(owner, mutation.uri)
+        && typeof mutation.content === "string" && mutation.content.trim()
+        && Buffer.byteLength(mutation.content, "utf8") <= 1024 * 1024) return;
+      break;
+    case "clearMemoryScope":
+    case "clearOwnerData": if (fields === "kind") return; break;
+  }
+  throw unavailable();
+}
 
 async function privateDirectory(path: string): Promise<void> {
   const stat = await lstat(path);
@@ -115,13 +140,21 @@ export class MemoryRecoveryJournal {
     const bytes = await privateFile(join(this.#directory, "events.jsonl"));
     if (!bytes) return;
     if (bytes.length && bytes.at(-1) !== 10) throw unavailable();
+    const ids = new Set<string>();
     for (const line of bytes.toString("utf8").split("\n")) {
       if (!line) continue;
       try {
-        const entry = JSON.parse(line) as { owner?: Owner; mutation?: RecoveryMutation };
-        if (entry.owner?.accountId !== this.owner.accountId || entry.owner?.userId !== this.owner.userId
-          || !entry.mutation || !["removeSource", "removeMemory", "replaceMemory", "clearMemoryScope", "clearOwnerData"]
-            .includes(entry.mutation.kind)) throw unavailable();
+        if (Buffer.byteLength(line, "utf8") > 1024 * 1024) throw unavailable();
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        const owner = entry.owner as Owner | undefined;
+        if (Object.keys(entry).sort().join(",") !== "id,mutation,occurredAt,owner,version"
+          || entry.version !== 1 || !owner || Object.keys(owner).sort().join(",") !== "accountId,userId"
+          || owner.accountId !== this.owner.accountId || owner.userId !== this.owner.userId
+          || typeof entry.id !== "string" || !/^[a-f0-9-]{36}$/.test(entry.id) || ids.has(entry.id)
+          || typeof entry.occurredAt !== "string" || !Number.isFinite(Date.parse(entry.occurredAt))
+          || new Date(entry.occurredAt).toISOString() !== entry.occurredAt) throw unavailable();
+        checkedMutation(this.owner, entry.mutation);
+        ids.add(entry.id);
       } catch { throw unavailable(); }
     }
   }
@@ -158,6 +191,7 @@ export class MemoryRecoveryJournal {
     this.assertHealthy();
     const pending = this.#appends.then(async () => {
       this.assertHealthy();
+      checkedMutation(this.owner, mutation);
       const line = JSON.stringify({ version: 1, id: randomUUID(), owner: this.owner,
         occurredAt: new Date().toISOString(), mutation }) + "\n";
       if (Buffer.byteLength(line) > 1024 * 1024) throw unavailable();
@@ -173,8 +207,9 @@ export class MemoryRecoveryJournal {
       try { await directory.sync(); }
       finally { await directory.close(); }
     });
-    this.#appends = pending.catch(() => {});
-    return pending;
+    const guarded = pending.catch(() => { this.poison(); throw unavailable(); });
+    this.#appends = guarded.catch(() => {});
+    return guarded;
   }
 }
 

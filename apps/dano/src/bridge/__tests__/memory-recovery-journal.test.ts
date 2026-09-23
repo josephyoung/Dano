@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -67,5 +67,34 @@ it("rejects a partial event tail before publishing an owner runtime", async () =
   await MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read());
   await writeFile(join(f.recovery, "account", "alice", "events.jsonl"), '{"partial":', { mode: 0o600 });
   await expect(MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read()))
+    .rejects.toThrow("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
+});
+
+it("rejects malformed and duplicate deletion events before publishing an owner runtime", async () => {
+  const f = await fixture();
+  const journal = await MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read());
+  await journal.append({ kind: "removeMemory", uri: "viking://user/alice/memories/a.md" });
+  const path = join(f.recovery, "account", "alice", "events.jsonl");
+  const original = await readFile(path, "utf8");
+  const entry = JSON.parse(original.trim());
+  await writeFile(path, original + original, { mode: 0o600 });
+  await expect(MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read()))
+    .rejects.toThrow("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
+  entry.mutation = { kind: "removeMemory", uri: "viking://user/bob/memories/a.md" };
+  await writeFile(path, JSON.stringify(entry) + "\n", { mode: 0o600 });
+  await expect(MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read()))
+    .rejects.toThrow("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
+});
+
+it("poisons later memory operations if an event append fails", async () => {
+  const f = await fixture();
+  const journal = await MemoryRecoveryJournal.open(f.recovery, f.owner, await f.base.read());
+  const path = join(f.recovery, "account", "alice", "events.jsonl");
+  await symlink(join(f.root, "outside"), path);
+  await expect(journal.append({ kind: "removeMemory", uri: "viking://user/alice/memories/a.md" }))
+    .rejects.toThrow("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
+  await expect(journal.append({ kind: "clearMemoryScope" }))
+    .rejects.toThrow("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
+  await expect(new RecoveryStateStore(f.base, journal).read())
     .rejects.toThrow("MEMORY_RECOVERY_JOURNAL_UNAVAILABLE");
 });

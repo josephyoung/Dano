@@ -559,6 +559,20 @@ Automatic replay of the new journal, checkpointing against arbitrary older
 snapshots, and credential/upgrade-window reconciliation are still missing.
 This candidate is **not** a rollback or release acceptance.
 
+The journal reader now validates each event's version, unique ID, timestamp,
+exact owner and mutation fields, including owner-bound document URIs. A failed
+append poisons that owner's memory runtime before any remote deletion can be
+sent. The updated candidate passed 144 Vitest files (1664 tests passed, one
+skipped) when the existing `httpx`-capable local Python was selected; the
+default Python lacked `httpx`, and one full-suite concurrent run timed out in
+an unrelated Skill test, which passed in isolation. Type/Svelte checks, server
+build and release check passed. The final rebuilt protected image
+`localhost/dano477-protected:0.2.40-journal-final` rejected a cross-owner
+tampered event in a disposable container probe. The isolated app and nginx
+were recreated from that exact image; the fixed HTTPS entry returned 200
+without changing the localhost CA. Its health check reached `healthy`, and a
+fresh in-app Browser tab reconnected to Alice's existing chat on that entry.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
