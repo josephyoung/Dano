@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { MemoryReranker } from "../memory-reranker.js";
 
 const config = { url: "http://reranker:8080/v1/rerank", model: "synthetic-reranker",
-  minimumLogit: 0, timeoutMs: 500, maxInputBytes: 4096, maxDocumentBytes: 2048 };
+  minimumLogit: 0, timeoutMs: 500, maxInputBytes: 4096, maxDocumentBytes: 2048, maxCandidates: 2 };
 const candidates = [
   { uri: "viking://user/alice/memories/relevant.md", text: "用户的项目代号是青岚41", score: 0.42 },
   { uri: "viking://user/alice/memories/irrelevant.md", text: "用户喜欢绿色图表", score: 0.65 },
@@ -45,4 +45,15 @@ it("does not send oversized content or continue after cancellation", async () =>
   cancelled.abort();
   expect(await new MemoryReranker(config).filter("query", candidates, cancelled.signal)).toEqual([]);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it("never forwards more candidates than its configured inference budget", async () => {
+  const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => Response.json({ results: [
+    { index: 0, relevance_score: 2 }, { index: 1, relevance_score: -2 },
+  ] }));
+  vi.stubGlobal("fetch", fetch);
+  const result = await new MemoryReranker(config).filter("项目代号", [...candidates,
+    { uri: "viking://user/alice/memories/third.md", text: "第三条", score: 0.9 }]);
+  expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).documents).toHaveLength(2);
+  expect(result).toHaveLength(1);
 });

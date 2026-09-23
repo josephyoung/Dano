@@ -96,7 +96,8 @@ export class LazyMemoryClient implements Client, MemoryGovernanceClient {
   clearMemoryScope() { return this.#call(client => client.clearMemoryScope()); }
   recall(query: string, limit: number, signal?: AbortSignal): ReturnType<Client["recall"]> {
     return this.#call(async client => {
-      const found = await client.recall(query, limit, signal);
+      const found = await client.recall(query,
+        this.#options.reranker ? Math.min(limit, this.#options.reranker.maxCandidates) : limit, signal);
       return this.#options.reranker ? this.#options.reranker.filter(query, found, signal) : found;
     }, signal);
   }

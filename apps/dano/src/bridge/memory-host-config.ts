@@ -96,14 +96,14 @@ export function parseMemoryHostConfig(input: unknown): MemoryHostConfig {
     if (typeof policy.minimumScore !== "number" || !Number.isFinite(policy.minimumScore)) throw invalid();
     let reranker: MemoryRerankerConfig | undefined;
     if (raw.reranker !== undefined) {
-      const entry = object(raw.reranker, ["url", "model", "minimumLogit", "timeoutMs", "maxInputBytes", "maxDocumentBytes"]);
+      const entry = object(raw.reranker, ["url", "model", "minimumLogit", "timeoutMs", "maxInputBytes", "maxDocumentBytes", "maxCandidates"]);
       const endpoint = new URL(text(entry.url));
       if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password
         || endpoint.search || endpoint.hash || endpoint.pathname !== "/v1/rerank"
         || typeof entry.minimumLogit !== "number" || !Number.isFinite(entry.minimumLogit)) throw invalid();
       reranker = { url: endpoint.href, model: text(entry.model), minimumLogit: entry.minimumLogit,
         timeoutMs: positive(entry.timeoutMs), maxInputBytes: positive(entry.maxInputBytes),
-        maxDocumentBytes: positive(entry.maxDocumentBytes) };
+        maxDocumentBytes: positive(entry.maxDocumentBytes), maxCandidates: positive(entry.maxCandidates) };
       if (reranker.maxDocumentBytes > reranker.maxInputBytes) throw invalid();
     }
     const scheduler = object(raw.scheduler, ["pollIntervalMs", "initialBackoffMs", "maxBackoffMs", "maxAttemptsPerPhase", "maxOperationsPerTick"]);

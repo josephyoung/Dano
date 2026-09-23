@@ -5,7 +5,7 @@ This directory contains deployment-specific defaults and proxy config.
 ## Protected memory release candidate
 
 The opt-in release combination is recorded in
-[`memory-release.json`](memory-release.json): Dano `0.2.36`, exact
+[`memory-release.json`](memory-release.json): Dano `0.2.37`, exact
 `@josephyoung/pi-openviking@0.1.12`, and upstream OpenViking `v0.4.20`
 at the recorded multi-platform OCI index digest. The platform manifests are
 recorded alongside the index so the selected Linux architecture can be checked
@@ -39,9 +39,9 @@ For an opt-in deployment, provision these distinct resources before Compose:
   encryption-key versions across restart and recovery.
   For this candidate its private `reranker` object must set `url` to
   `http://reranker:8080/v1/rerank`, `model` to the manifest model name,
-  `minimumLogit` to `0`, `timeoutMs` to `750`, `maxInputBytes` to `16384`,
-  and `maxDocumentBytes` to `4096`. These are frozen in
-  [the second evaluation configuration](../docs/research/fixtures/issue477-evaluation-candidate2.json).
+  `minimumLogit` to `0`, `timeoutMs` to `900`, `maxInputBytes` to `16384`,
+  `maxDocumentBytes` to `4096`, and `maxCandidates` to `2`. These are frozen in
+  [the third evaluation configuration](../docs/research/fixtures/issue477-evaluation-candidate3.json).
   A malformed or unavailable reranker omits memory for that request; it does
   not fall back to the vector-only result that failed the relevance gate.
 

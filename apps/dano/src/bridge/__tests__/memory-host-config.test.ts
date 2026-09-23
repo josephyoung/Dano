@@ -80,7 +80,7 @@ it("accepts explicit bounded collection configuration and rejects model/tool pay
 
 it("accepts a private bounded reranker endpoint and rejects unsafe overrides", () => {
   const reranker = { url: "http://reranker:8080/v1/rerank", model: "synthetic-reranker",
-    minimumLogit: 0, timeoutMs: 750, maxInputBytes: 16384, maxDocumentBytes: 4096 };
+    minimumLogit: 0, timeoutMs: 900, maxInputBytes: 16384, maxDocumentBytes: 4096, maxCandidates: 2 };
   expect(parseMemoryHostConfig({ ...config(), reranker }).reranker).toEqual(reranker);
   for (const changed of [
     { ...reranker, url: "http://user:password@reranker:8080/v1/rerank" },
@@ -88,5 +88,6 @@ it("accepts a private bounded reranker endpoint and rejects unsafe overrides", (
     { ...reranker, minimumLogit: Infinity },
     { ...reranker, timeoutMs: 0 },
     { ...reranker, maxDocumentBytes: 20000 },
+    { ...reranker, maxCandidates: 0 },
   ]) expect(() => parseMemoryHostConfig({ ...config(), reranker: changed })).toThrow("INVALID_MEMORY_HOST_CONFIG");
 });
