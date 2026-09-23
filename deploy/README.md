@@ -5,7 +5,7 @@ This directory contains deployment-specific defaults and proxy config.
 ## Protected memory release candidate
 
 The opt-in release combination is recorded in
-[`memory-release.json`](memory-release.json): Dano `0.2.37`, exact
+[`memory-release.json`](memory-release.json): the Dano product version recorded there, exact
 `@josephyoung/pi-openviking@0.1.12`, and upstream OpenViking `v0.4.20`
 at the recorded multi-platform OCI index digest. The platform manifests are
 recorded alongside the index so the selected Linux architecture can be checked

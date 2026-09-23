@@ -625,6 +625,15 @@ passed, and the bounded full Vitest run passed 145 files (1,670 tests passed,
 one skipped). An earlier concurrent full run had one unrelated provider Skill
 gate timeout; that test passed alone and in the bounded full rerun.
 
+The exact rebuilt image `adab70014794` replaced the local app container and
+reached `healthy`; the persistent localhost HTTPS entry returned 200. In a
+fresh authenticated in-app Browser chat, MiMo returned the requested plain
+text, invoked `bash ls` and reported `uploads`, then read one upload of the
+fixed external `shapes.png` and identified red circle, blue square and yellow
+triangle in order. These three final-image checks cover the repository's
+Podman runtime regression floor, not the remaining §11.2 business Skill,
+dual-user or full model-quality release gates.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
