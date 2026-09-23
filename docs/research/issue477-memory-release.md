@@ -449,6 +449,27 @@ Reducing the candidate count improves measured selection latency but does not
 resolve this answer-quality concern. The final image's model-triggered
 `bash ls` also completed and reported `uploads` before this restart.
 
+Additional `0.2.38` Browser regressions completed on the same fixed HTTPS
+entry. MiMo invoked `ask_user_question`, rendered a two-option radio card,
+accepted “茶” and repeated the submitted choice. It invoked and read the
+image-approved `open-websearch` Skill and returned its frontmatter name. One
+real upload of the fixed external `shapes.png` reached the chat; MiMo correctly
+identified the red circle, blue square and yellow triangle in left-to-right
+order. The first, longer form prompt remained waiting and was cancelled; the
+shorter retry completed, so this does not establish a form failure root cause.
+
+The first `/compact` attempt on a one-turn chat failed because Pi had no
+history outside its configured 20,000-token recent window. For a controlled
+regression, the local acceptance profile temporarily enabled slash commands
+and set Pi's `keepRecentTokens` to one. After two ordinary turns, `/compact`
+showed the active compaction state, then completed. The newest persisted
+session contained one `compaction` entry between the second and third user
+turns; a subsequent MiMo turn correctly repeated the synthetic first-turn
+test word. Both temporary configuration overrides were removed, Dano/nginx
+restarted, and the fixed HTTPS entry returned HTTP 200. The original default
+settings remain in place; this is a real Pi compaction path check under a
+short acceptance window, not a long-context performance benchmark.
+
 ## Remaining release gates
 
 ### Live #465 PRD/Spec audit (2026-09-24)
@@ -469,7 +490,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-07 | Browser correction and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
 | AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
-| AC-11 | Browser SSE/text, form, Field Assist, generic Skill, Heimdall boundary, image and bash observations | Actual Pi compression, business OA Skill and final-image regression pass |
+| AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
 | AC-12 | Clean stack, one older-snapshot replay, candidate upgrade and matched rollback | General multi-owner deletion/revocation journal and upgrade-window reconciliation |
 | AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
@@ -482,7 +503,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-08 | Real Browser new-chat recall; bounded reranker selection | Short-session extraction, no-result/timeout and model-answer repetitions |
 | T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
-| T-12 | Browser form, Field Assist, SSE, Skill, Heimdall, image, bash | Real Pi compression, business OA Skill and final-image repetition |
+| T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; earlier Field Assist/Heimdall/SSE observations | Business OA Skill and complete final-image repetition |
 | T-13 | Clean deploy, candidate upgrade, matched old-data rollback | General old queue, multi-user reconciliation and deletion/revocation replay |
 | T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
 
@@ -513,7 +534,8 @@ or issue closure follows from this partial evidence.
 - Complete correction, deletion and authorization cases three times each,
   model-answer review, the 100-request latency/token/cost workload and the
   independent dual-user in-app Browser scenario.
-- Complete the business OA Skill Browser flow, remaining final-image image/SSE/pi
-  compression regressions, close each audited AC/T gap and clean test resources.
+- Complete the business OA Skill Browser flow, remaining final-image Field
+  Assist/Heimdall/SSE regressions, close each audited AC/T gap and clean test
+  resources.
 
 No production deployment or release conclusion is implied by this record.
