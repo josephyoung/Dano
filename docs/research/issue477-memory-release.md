@@ -527,6 +527,38 @@ business OA Skill.
 
 ## Remaining release gates
 
+### Candidate 0.2.40 recovery journal (2026-09-24)
+
+The candidate adds a separate, host-owned memory-recovery volume. A stopped
+service one-off bootstrap copied one existing owner's state into that volume;
+the protected app then restarted on the fixed HTTPS entry with image
+`localhost/dano477-protected:0.2.40`, and both the app health check and HTTPS
+request passed. The deployment release checker passed with the distinct
+recovery volume. New owner-state revisions are mirrored there; destructive
+remote methods write an owner-bound, fsynced intent first. Unit coverage
+includes missing/mismatched mirrors, partial event tails, and a failed mirror
+that poisons later memory access. The full repository check, tests, server build
+and release checker passed for this candidate.
+
+In the authenticated Browser, an explicit `memory_save` for the synthetic
+`栀霞72` fact reached `已记住` and merged into `profile.md`. A selective
+correction was rejected with `MEMORY_TARGET_AMBIGUOUS`. Diagnosis showed that
+the target text occurred once in the three live OpenViking documents, but the
+owner ledger had multiple operations pointing at the merged document. The
+package governance barrier requires one matching source digest in that case
+and rejected the operation before creating a job. This is a real selective
+governance acceptance gap; it must not be counted as a successful correction.
+
+No Browser deletion intent was recorded during this test. An attempted click
+on the final `确认清空` control was rejected by automatic approval review because
+the browser session was not independently proved to be a disposable test
+account whose entire memory could be erased. The confirmation dialog was
+cancelled. No workaround or indirect deletion was used. The journal's remote
+deletion path therefore has unit evidence but no real-service Browser proof.
+Automatic replay of the new journal, checkpointing against arbitrary older
+snapshots, and credential/upgrade-window reconciliation are still missing.
+This candidate is **not** a rollback or release acceptance.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)

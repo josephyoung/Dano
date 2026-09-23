@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { LazyMemoryClient } from "../lazy-memory-client.js";
 import { MemoryReranker } from "../memory-reranker.js";
+import type { MemoryRecoveryJournal } from "../memory-recovery-journal.js";
 
 const owner = { accountId: "account", userId: "alice" };
 function deferred<T>() {
@@ -107,6 +108,18 @@ it("does not initialize credentials for an already cancelled recall", async () =
   expect(h.connect).not.toHaveBeenCalled();
   expect(h.fetch).not.toHaveBeenCalled();
   await h.client.close();
+});
+
+it("does not send a remote deletion when its external recovery intent cannot be saved", async () => {
+  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const append = vi.fn().mockRejectedValue(new Error("RECOVERY_DISK_FULL"));
+  const client = new LazyMemoryClient({ owner, baseUrl: "https://memory.example.test", timeoutMs: 1000,
+    connect: async () => ({ owner, apiKey: "synthetic-user-key" }), assertToolIsolation: async () => {},
+    journal: { append, assertHealthy: () => {} } as unknown as MemoryRecoveryJournal });
+  await expect(client.removeMemory("viking://user/alice/memories/old.md")).rejects.toThrow("RECOVERY_DISK_FULL");
+  expect(append).toHaveBeenCalledWith({ kind: "removeMemory", uri: "viking://user/alice/memories/old.md" });
+  expect(fetch).not.toHaveBeenCalled();
+  await client.close();
 });
 
 it("limits USER-scoped retrieval to the reranker inference budget", async () => {

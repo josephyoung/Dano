@@ -72,6 +72,9 @@ if (withMemory) {
   options.memoryConfigDirectory = join(root, 'private-config');
   await mkdir(options.memoryConfigDirectory, { mode: 0o700 });
   await chown(options.memoryConfigDirectory, hostUid, hostGid);
+  options.memoryRecoveryDirectory = join(root, 'memory-recovery');
+  await mkdir(options.memoryRecoveryDirectory, { mode: 0o700 });
+  await chown(options.memoryRecoveryDirectory, hostUid, hostGid);
   const asset = async (name, value) => {
     const path = join(root, name), bytes = JSON.stringify(value); await writeFile(path, bytes, { mode: 0o644 });
     return { path, sha256: createHash('sha256').update(bytes).digest('hex') };

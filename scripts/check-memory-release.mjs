@@ -79,8 +79,13 @@ try {
     "deployment reranker image or model differs from memory release");
     const configDirectory = process.env.DANO_OPENVIKING_CONFIG_DIR;
     const modelsDirectory = process.env.DANO_OPENVIKING_MODELS_DIR;
-    assert(configDirectory && modelsDirectory && process.env.DANO_OPENVIKING_DATA_VOLUME,
-      "OpenViking private config, models and data volume are required");
+    const recoveryVolume = process.env.DANO_MEMORY_RECOVERY_VOLUME;
+    assert(configDirectory && modelsDirectory && process.env.DANO_OPENVIKING_DATA_VOLUME && recoveryVolume,
+      "OpenViking private config, models, data and separate recovery volume are required");
+    assert(recoveryVolume !== process.env.DANO_OPENVIKING_DATA_VOLUME
+      && recoveryVolume !== process.env.DANO_PROTECTED_DATA_VOLUME
+      && recoveryVolume !== process.env.DANO_PROTECTED_CONFIG_VOLUME,
+    "memory recovery volume must be separate from restored data and config volumes");
     const canonicalConfigDirectory = await privatePath(configDirectory, true);
     const configPath = join(canonicalConfigDirectory, "ov.conf");
     await privatePath(configPath, false);

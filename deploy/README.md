@@ -69,8 +69,10 @@ OpenViking image or data snapshot can contain forgotten facts; do not resume
 Dano from that snapshot until deletion replay and readback have completed.
 For a stopped-stack backup, export the runtime, agent-config, workspaces,
 protected config/data and OpenViking data named volumes plus the private
-deploy-control directory, and record archive hashes and image digests. Keep
-the archives and the post-snapshot deletion/revocation ledger private. A
+deploy-control directory, and record archive hashes and image digests. Back up
+the separate memory-recovery volume as a privacy-critical, monotonically newer
+asset; never replace it with the copy from an older data snapshot. Keep
+the archives and recovery journal private. A
 rollback must restore matching image, config, state and OpenViking data, not
 only an image tag. Bring up only the internal OpenViking and Embedding services
 after import. Overlay the newer owner state and replay every later deletion
@@ -96,7 +98,25 @@ and credential before running either format. Maintain the ledger separately
 from the older snapshot. `retainedDocuments` contains the public document body,
 not OpenViking's physical `MEMORY_FIELDS` trailer. The ledger is private data;
 do not put it in source control or logs. This command replays a supplied
-ledger; it does not automatically capture governance operations after backup.
+ledger. Dano `0.2.40` begins mirroring owner state and fsyncing remote deletion
+intents to the separate recovery volume, but this command does not yet consume
+that automatic journal. A complete recovery still requires an independently
+verified post-snapshot ledger.
+
+For an existing deployment, stop Dano before introducing the recovery volume.
+Run `node /app/bootstrap-memory-recovery.mjs
+/var/lib/dano-protected/host-state /var/lib/dano-memory-recovery` in a one-off
+container as the protected host UID/GID with the protected data and recovery
+volumes mounted. The command scans every owner state, validates private paths
+and owner bindings, and copies each current owner state into an initially empty
+recovery volume. It prints only the owner count and is idempotent for unchanged
+state. The protected runtime rejects existing owners without this bootstrap or
+whose restored state differs from the mirror. Keep Dano stopped until the
+bootstrap completes; this is a one-time migration, not a substitute for the
+still-missing automatic journal replay.
+The protected data mount must be writable during bootstrap because the state
+store opens its owner lock file; stop the app first and leave that mount under
+the protected host UID/GID.
 
 An isolated #477 rehearsal restored an older snapshot into new volumes, proved
 both old URIs were present, replayed one later forget before starting Dano,
@@ -177,12 +197,18 @@ included with protected data rather than the base runtime bind mount.
 These are external Linux volumes;
 Compose does not create or initialize them and does not remove them on `down`.
 Record their exact names for deliberate acceptance cleanup and backup.
+When the memory overlay is enabled, also provision a distinct external
+`DANO_MEMORY_RECOVERY_VOLUME`. It is mounted at
+`/var/lib/dano-memory-recovery` and must be excluded from any rollback that
+restores older protected data or OpenViking snapshots. Own its root by the
+protected host UID/GID with mode 0700; keep its contents private.
 
 Provision `/etc/dano-protected/supervisor.json` as root-owned mode 0600, with
 root-owned non-writable ancestors. Provision `/etc/dano-protected/agent` and
 `/etc/dano-protected/memory` as host-UID/GID-owned mode 0700; credential files
 inside them must be mode 0600. Set the profile's `memoryConfigDirectory` to
-the latter path and configure tokenizer asset paths explicitly. Put distinct
+the latter path and `memoryRecoveryDirectory` to
+`/var/lib/dano-memory-recovery`; configure tokenizer asset paths explicitly. Put distinct
 runtime, session, host-state and identity roots beneath
 `/var/lib/dano-protected`; their ownership must satisfy the supervisor contract.
 For a fresh deployment, let the supervisor create those empty child roots.
