@@ -180,6 +180,13 @@ For a fresh deployment, let the supervisor create those empty child roots.
 Never reuse a pre-existing identity range or initialize it against unrelated
 data. Configuration remains writable to the appropriate owner because Pi
 persists host settings, while the supervisor JSON remains root-owned.
+Before starting the protected host, render `/app/deploy/runtime-defaults/SYSTEM.md`
+into `/etc/dano-protected/agent/SYSTEM.md` with the image's
+`deploy/render-system-prompt.mjs --replace` as the configured host UID/GID.
+The protected entry bypasses the ordinary entrypoint, so a raw template would
+leave `{产品名称}` in the model prompt. Verify the deployed file has no
+placeholder and matches the effective product name, then confirm the identity
+in a fresh Browser chat.
 
 The existing OAuth configuration, nginx and exposure settings still apply.
 This overlay supplies no substitute identity provider and does not certify

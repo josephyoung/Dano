@@ -377,6 +377,16 @@ business “请假” Skill itself is absent from the isolated stack, so its OA
 workflow remains unaccepted. The deployment contract now states the protected
 Skill allowlist requirement explicitly.
 
+A separate local acceptance initialization defect left `{产品名称}` in the
+protected Agent Config Directory's `SYSTEM.md`, although the repository product
+name is “小络助手”. It made the model answer “我是，公司内部OA智能助手” in a test
+conversation. With Dano stopped, the image's `render-system-prompt.mjs`
+replaced that template using the image's product configuration; a new Browser
+chat then answered “我是小络助手，公司内部 OA 智能助手。” The acceptance configuration
+must render the prompt before release. Sending `/compact` in the browser
+composer produced an ordinary model message rather than Pi compression, so
+that attempt is **not** counted as the required compression regression.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
