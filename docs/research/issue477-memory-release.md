@@ -740,6 +740,17 @@ one upload of the fixed synthetic image and answered “红色圆形、蓝色正
 This reruns the image-sensitive chat/tool/upload checks; it does not repeat
 the complete governance or multi-user matrix.
 
+On the same rebuilt image and fixed HTTPS entry, two authenticated Browser
+tabs sharing Alice's account exercised one reversible pause transition. The
+initial state was memory enabled and automatic collection unauthorized.
+After pausing in the first tab, the second tab displayed the paused state;
+a fresh chat asked for the already saved synthetic recovery code and MiMo
+answered “不知道。” After enabling memory again in the first tab, another fresh
+chat in the second tab answered “清禾93”. The final state was memory enabled
+and automatic collection still unauthorized. This is one same-owner,
+cross-tab pause/recall/resume observation, not an independent second user or
+the full three-repetition pause and in-flight-save matrix.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -756,7 +767,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-04 | Collection filters and consent have automated coverage | Real automatic-collection cases with exclusion evidence |
 | AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
 | AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
-| AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
+| AC-08 | Browser defaults-off, explicit-only consent, management and one same-owner cross-tab pause/recall/resume flow | All governance transitions, independent two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
 | AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
