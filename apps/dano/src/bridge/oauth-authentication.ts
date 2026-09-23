@@ -14,6 +14,7 @@ import type {
   BridgeAuthenticationState,
   BridgeLoginErrorCode,
 } from "../../types/protocol.js";
+import { BRIDGE_LOGIN_ERROR_CODES, LOGIN_NEW_CHAT_QUERY_PARAM } from "../../types/protocol.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 import {
   OAuthProviderContractError,
@@ -37,6 +38,7 @@ import {
   UserContextError,
 } from "./user-context.js";
 import {
+  classifyOAuthLoginFailure,
   reportOAuthLoginFailure,
   type OAuthLoginStage,
 } from "./oauth-login-diagnostics.js";
@@ -839,6 +841,7 @@ async function handleCallback(
       });
       throw error;
     }
+    await consumeAuthError(req.headers, options.errorsPath, options.now());
     redirectAfterCallback(
       res,
       consumed.transaction.returnTo,
@@ -847,10 +850,7 @@ async function handleCallback(
     );
   } catch (error) {
     reportOAuthLoginFailure(stage, error, performance.now() - startedAt);
-    const code =
-      error instanceof OAuthProviderContractError
-        ? error.code
-        : "provider_login_failed";
+    const code = classifyOAuthLoginFailure(stage, error);
     const authErrorId = await writeAuthError(
       options.errorsPath,
       code,
@@ -1138,8 +1138,7 @@ function parseAuthError(serialized: string): StoredAuthError {
   const value = JSON.parse(serialized) as Partial<StoredAuthError>;
   if (
     value.version !== 1 ||
-    (value.code !== "provider_identity_invalid" &&
-      value.code !== "provider_login_failed") ||
+    !BRIDGE_LOGIN_ERROR_CODES.some(code => code === value.code) ||
     typeof value.expiresAt !== "number"
   ) {
     throw new Error("OAuth login error is invalid");
@@ -1259,6 +1258,19 @@ function sameOrigin(value: string | undefined, appOrigin: string): boolean {
   }
 }
 
+function loginReturnPath(returnTo: string): string {
+  // returnTo has already been restricted to a local path. Preserve its query
+  // and fragment without introducing an origin or exposing login credentials.
+  const hashIndex = returnTo.indexOf("#");
+  const fragment = hashIndex < 0 ? "" : returnTo.slice(hashIndex);
+  const pathAndQuery = hashIndex < 0 ? returnTo : returnTo.slice(0, hashIndex);
+  const queryIndex = pathAndQuery.indexOf("?");
+  const pathname = queryIndex < 0 ? pathAndQuery : pathAndQuery.slice(0, queryIndex);
+  const query = new URLSearchParams(queryIndex < 0 ? "" : pathAndQuery.slice(queryIndex + 1));
+  query.set(LOGIN_NEW_CHAT_QUERY_PARAM, "1");
+  return `${pathname}?${query}${fragment}`;
+}
+
 function redirectAfterCallback(
   res: http.ServerResponse,
   returnTo: string,
@@ -1267,9 +1279,12 @@ function redirectAfterCallback(
   authErrorId?: string,
 ): void {
   res.writeHead(303, {
-    Location: returnTo,
+    Location: sessionId ? loginReturnPath(returnTo) : returnTo,
     ...(sessionId
-      ? { "Set-Cookie": serializeLoginCookie(sessionId, sessionAbsoluteTtlMs) }
+      ? { "Set-Cookie": [
+          serializeLoginCookie(sessionId, sessionAbsoluteTtlMs),
+          serializeExpiredAuthErrorCookie(),
+        ] }
       : authErrorId
         ? { "Set-Cookie": serializeAuthErrorCookie(authErrorId) }
       : {}),

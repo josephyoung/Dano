@@ -43,6 +43,8 @@ import type {
 } from "@dano/types/protocol";
 import {
   ACCENT_COLOR_PRESET_KEYS,
+  BRIDGE_LOGIN_ERROR_CODES,
+  LOGIN_NEW_CHAT_QUERY_PARAM,
   DEFAULT_ACCENT_COLOR_PRESET,
 } from "@dano/types/protocol";
 import { createBrowserClient } from "./browserClientBootstrap";
@@ -267,6 +269,8 @@ let heartbeatWatchdog: ReturnType<typeof setInterval> | null = null;
 let lastHeartbeatAt = 0;
 let lastServerInstanceId: string | null = null;
 let defaultSessionStartedForPage = false;
+let loginNewChatPending = typeof window !== "undefined" &&
+  new URL(window.location.href).searchParams.get(LOGIN_NEW_CHAT_QUERY_PARAM) === "1";
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connectRequest: Promise<boolean> | null = null;
 let reconnectDelay = 1000;
@@ -2923,13 +2927,13 @@ async function startDefaultWorkspaceSession(
       ? (sessionsResp.data as { sessions?: SessionEntry[] } | undefined)
       : undefined;
     const existingSession = sessionData?.sessions?.[0];
-    if (existingSession) {
+    if (existingSession && !loginNewChatPending) {
       const switchResp = await switchSession(existingSession.path);
       await Promise.all(bootstrap);
       if (!switchResp.success) await restoreLiveSessionState();
       return true;
     }
-    if (!sessionsResp.success) {
+    if (!sessionsResp.success && !loginNewChatPending) {
       await Promise.all(bootstrap);
       await restoreLiveSessionState();
       return true;
@@ -2957,10 +2961,19 @@ async function startDefaultWorkspaceSession(
     const sessionResp = await newSession(registeredWorkspacePath);
     await Promise.all(bootstrap);
 
-    if (!sessionResp.success) {
+    const sessionCreated = sessionResp.success &&
+      !(sessionResp.data as { cancelled?: boolean } | undefined)?.cancelled;
+    if (sessionCreated && loginNewChatPending) {
+      loginNewChatPending = false;
+      const url = new URL(window.location.href);
+      url.searchParams.delete(LOGIN_NEW_CHAT_QUERY_PARAM);
+      window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    if (!sessionCreated) {
+      defaultSessionStartedForPage = false;
       pushNotification(
         summarizeErrorMessage(
-          sessionResp.error ?? t("store.error.defaultSessionFailed"),
+          sessionResp.success ? t("store.error.defaultSessionFailed") : sessionResp.error,
           t("store.error.defaultSessionFailed"),
         ),
         "error",
@@ -2977,7 +2990,7 @@ async function startDefaultWorkspaceSession(
 
 async function fetchInitialState() {
   _transcriptInitialLoading = true;
-  const selectedSessionPath = _activeTreeSessionPath;
+  const selectedSessionPath = loginNewChatPending ? null : _activeTreeSessionPath;
 
   try {
     const bootstrap = [
@@ -3044,9 +3057,8 @@ export function parseBridgeAuthenticationState(
       ? (candidate.loginError as { code?: unknown }).code
       : undefined;
   const loginError: BridgeLoginError | undefined =
-    loginErrorCode === "provider_identity_invalid" ||
-    loginErrorCode === "provider_login_failed"
-      ? { code: loginErrorCode }
+    typeof loginErrorCode === "string" && loginErrorCode.length > 0
+      ? { code: BRIDGE_LOGIN_ERROR_CODES.find(code => code === loginErrorCode) ?? "login_failed" }
       : undefined;
   const withLoginError = loginError ? { loginError } : {};
 
@@ -3161,7 +3173,7 @@ async function connectOnce(): Promise<boolean> {
     if (currentAuthentication) {
       applyAuthentication(currentAuthentication);
       if (currentAuthentication.loginError) {
-        pushNotification(t("authentication.loginFailed"), "error");
+        pushNotification(t(`authentication.loginError.${currentAuthentication.loginError.code}`), "error");
       }
     }
     if (currentAuthentication?.status === "reauth_required") {

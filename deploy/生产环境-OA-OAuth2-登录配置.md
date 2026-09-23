@@ -209,9 +209,32 @@ API 健康检查不能代替真实登录验收。使用受控浏览器完成以�
 `credential_encryption`、`credential_validation`（发布会话前再次校验身份）、
 `session_persistence`、`anonymous_transfer` 和 `session_rotation`。
 `elapsedMs` 是本次回调进入处理后到失败的总耗时。`unclassified` 表示异常没有可安全输出的已知错误码，
-不等于未知阶段或已经排除该阶段。诊断不会重试授权码、放宽身份校验或改变浏览器错误投影。
+不等于未知阶段或已经排除该阶段。诊断不会重试授权码或放宽身份校验。
 
-浏览器的一次性错误记录读后即删，最长有效期为 5 分钟；事后应查询应用日志，而不是依赖该文件。
+`/api/auth/current` 返回当前认证状态，并携带上一次回调的一次性 `loginError.code`。
+HTTP 200 表示状态读取成功，不表示此前的登录成功；已有有效会话也可能携带一次新的登录失败。
+浏览器只显示以下固定分类的本地化提示，不显示 Provider 原始异常：
+
+| code | 含义 |
+| --- | --- |
+| `authorization_invalid` | OA 明确返回 `invalid_grant`，需重新发起授权；不据此断言授权码过期或重复使用 |
+| `provider_unavailable` | Provider 超时、网络/TLS 错误、429、5xx 或明确暂时不可用 |
+| `provider_identity_invalid` | 身份无法验证或凭据已失效 |
+| `login_configuration_error` | Client、scope 或授权类型配置错误 |
+| `login_session_failed` | Dano 加密、保存或轮换登录会话失败 |
+| `user_data_transfer_failed` | Dano 无法接续登录前的数据，包括迁移锁冲突；不是要求用户结束一个任务 |
+| `login_failed` | 无法进一步确认的失败，避免误归因给 OA |
+
+浏览器的一次性错误记录读后即删，最长有效期为 5 分钟；成功登录也会删除旧记录并清除错误 Cookie，
+避免成功后再弹出旧错误。事后应查询应用日志，而不是依赖该文件。
+登录迁移持有源用户与目标用户的独占门禁，先等待已接受的用户操作结束，再检查归属并搬移数据。
+等待期间拒绝新的目录操作；清理或另一迁移持有门禁时也先等待。等待上限由 Bridge 配置
+`userTransferTimeoutMs` 控制，默认 10 秒；超时释放门禁、保留源数据并回滚本次新登录会话。
+真正仍在运行的模型任务、文件错误或归属失效不会绕过保护；单凭该修复不能确认历史故障的根因。
+
+每次成功登录仍生成全新的 Dano Login Session，并在回跳路径加上 `dano_new_chat=1`。
+浏览器据此忽略上次选中的聊天，创建全新聊天，成功后删除标记；历史聊天仍可选择，普通刷新不会反复新建。
+失败回调不添加该标记。
 state 失效或缺少浏览器绑定 Cookie 会直接重定向回首页，不会生成上述异常诊断。
 
 日志中禁止记录 authorization code、state、Client Secret、access token、refresh token、Cookie、

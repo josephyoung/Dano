@@ -101,6 +101,8 @@ interface InitialSessionFixture {
 
 async function connectWithDefaultWorkspaceSessions(
   sessions: InitialSessionFixture[],
+  cachedSessionPath?: string,
+  newSessionCancelled = false,
 ) {
   const workspacePath = "/users/current/workspaces/default";
   const newSessionPath = "/users/current/sessions/new.jsonl";
@@ -171,7 +173,7 @@ async function connectWithDefaultWorkspaceSessions(
           sessionName: "New session",
           sessionPath: newSessionPath,
           workspacePath,
-          cancelled: false,
+          cancelled: newSessionCancelled,
         },
         list_sessions: {
           sessions: sessions.slice(
@@ -236,6 +238,10 @@ async function connectWithDefaultWorkspaceSessions(
     return new Response(null, { status: 404 });
   });
   window.sessionStorage.clear();
+  if (cachedSessionPath) {
+    const { writeActiveSessionCache } = await import("../utils/newSession");
+    writeActiveSessionCache(window.sessionStorage, cachedSessionPath);
+  }
   const bridge = await startBridge(fetchImpl);
   return { bridge, commands, newSessionPath };
 }
@@ -379,7 +385,15 @@ describe("Bridge prompt acceptance", () => {
     bridge.disconnect();
   });
 
-  it("shows a recoverable login failure from one-time auth current state", async () => {
+  it.each([
+    ["authorization_invalid", "本次授权无效或已失效，请重新登录"],
+    ["provider_unavailable", "登录服务暂时无法响应，请稍后重试"],
+    ["provider_identity_invalid", "无法验证登录身份，请重新登录；持续失败请联系管理员"],
+    ["login_configuration_error", "登录服务配置异常，请联系管理员"],
+    ["login_session_failed", "无法建立登录会话，请重试；持续失败请联系管理员"],
+    ["user_data_transfer_failed", "无法接续登录前的数据，请重试；持续失败请联系管理员"],
+    ["login_failed", "登录未完成，请重试；持续失败请联系管理员"],
+  ] as const)("shows a recoverable %s from one-time auth current state", async (code, message) => {
     let currentReads = 0;
     const clientResponse = deferred<Response>();
     const fetchImpl = vi.fn<typeof fetch>(async input => {
@@ -388,7 +402,7 @@ describe("Bridge prompt acceptance", () => {
         return new Response(
           JSON.stringify({
             status: "anonymous",
-            loginError: { code: "provider_identity_invalid" },
+            loginError: { code },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -411,11 +425,11 @@ describe("Bridge prompt acceptance", () => {
     await vi.waitFor(() =>
       expect(bridge.authentication).toEqual({
         status: "anonymous",
-        loginError: { code: "provider_identity_invalid" },
+        loginError: { code },
       }),
     );
     expect(bridge.notifications.at(-1)).toMatchObject({
-      message: "登录失败，请重试",
+      message,
       notifyType: "error",
     });
     clientResponse.resolve(
@@ -436,13 +450,26 @@ describe("Bridge prompt acceptance", () => {
     expect(currentReads).toBe(1);
     expect(bridge.authentication).toEqual({ status: "anonymous" });
     expect(bridge.notifications.at(-1)).toMatchObject({
-      message: "登录失败，请重试",
+      message,
       notifyType: "error",
     });
     bridge.login();
     expect(assign).toHaveBeenCalledWith(
       "/api/auth/login?returnTo=%2Fchat",
     );
+    bridge.disconnect();
+  });
+
+  it("maps unknown error strings to a safe fallback and ignores malformed errors", async () => {
+    const bridge = await connectBridge(Promise.resolve(new Response(null, { status: 202 })));
+    const { parseBridgeAuthenticationState } = await import("./bridgeStore.svelte");
+    expect(parseBridgeAuthenticationState({
+      status: "anonymous", loginError: { code: "raw-secret-value" },
+    })).toEqual({ status: "anonymous", loginError: { code: "login_failed" } });
+    for (const code of [null, undefined, 42, {}, ""]) {
+      expect(parseBridgeAuthenticationState({ status: "anonymous", loginError: { code } }))
+        .toEqual({ status: "anonymous" });
+    }
     bridge.disconnect();
   });
 
@@ -577,6 +604,34 @@ describe("Bridge prompt acceptance", () => {
       expect.objectContaining({ type: "new_session" }),
     );
     bridge.disconnect();
+  });
+
+  it("opens a new chat after successful login even when history exists", async () => {
+    window.history.replaceState({}, "", "/chat?dano_new_chat=1&keep=yes#anchor");
+    const { bridge, commands, newSessionPath } = await connectWithDefaultWorkspaceSessions([{
+      id: "old", name: "History", path: "/users/current/sessions/old.jsonl",
+      updatedAt: "2026-09-23T01:00:00.000Z", content: "Preserved history",
+    }], "/users/current/sessions/old.jsonl");
+    await vi.waitFor(() => expect(bridge.activeSessionPath).toBe(newSessionPath));
+    expect(commands.filter(command => command.type === "new_session")).toHaveLength(1);
+    expect(commands.some(command => command.type === "switch_session")).toBe(false);
+    expect(bridge.transcript).toEqual([]);
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/chat?keep=yes#anchor");
+    eventSources[0]!.open();
+    await vi.waitFor(() => expect(commands).toContainEqual(
+      expect.objectContaining({ type: "switch_session", sessionPath: newSessionPath }),
+    ));
+    expect(commands.filter(command => command.type === "new_session")).toHaveLength(1);
+    bridge.disconnect();
+  });
+
+  it("retains the login new-chat marker if creating the chat is cancelled", async () => {
+    window.history.replaceState({}, "", "/chat?dano_new_chat=1");
+    const { bridge } = await connectWithDefaultWorkspaceSessions([], undefined, true);
+    await vi.waitFor(() => expect(bridge.notifications.some(n => n.notifyType === "error")).toBe(true));
+    expect(window.location.search).toBe("?dano_new_chat=1");
+    bridge.disconnect();
+    window.history.replaceState({}, "", "/chat");
   });
 
   it("creates the default workspace session only when no session exists", async () => {
