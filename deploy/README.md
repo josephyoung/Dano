@@ -129,7 +129,8 @@ node /app/runtime/reconcile-memory-recovery.mjs replay \
 The command checks every owner, state hash, journal prefix and credential before the first
 remote mutation; it replays later deletion intents, reads back their effects,
 then records a private checkpoint-bound replay receipt beside each owner state
-before atomically overlaying the newer owner states. Keep these receipts with
+before atomically replacing that owner's state. Owners are replaced in sequence;
+a partial multi-owner update is retryable. Keep these receipts with
 the restored protected data; a retry after overlay rejects a different or
 missing checkpoint. It prints only aggregate counts and can be rerun after a
 partial remote failure. Do not start Dano or
