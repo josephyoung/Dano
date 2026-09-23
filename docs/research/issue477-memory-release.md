@@ -688,9 +688,14 @@ contained four synthetic facts and the selected `栀霞72` phrase once. The UI
 corrected that phrase to `清禾93`, relocated the retained document to an opaque
 URI, preserved the other three facts, and showed all old sources as revoked.
 A fresh chat asked for the recovery-test code; MiMo answered only `清禾93`.
-This closes the previously observed merged-document Browser blocker, but it
-is one correction case, not the full §11 correction, deletion, two-user or
-performance acceptance.
+The same `0.2.41` Browser session also invoked `bash ls` and returned
+`uploads`, then uploaded the fixed external `shapes.png` once; MiMo identified
+red circle, blue square and yellow triangle in order. The active per-User
+workspace was on the named XFS data volume; a `bwrap` write/remove probe as
+the deployed app UID passed against that exact workspace with the deployed
+no-`/proc` binding configuration. This closes the previously observed
+merged-document Browser blocker, but it is one correction case, not the full
+§11 correction, deletion, two-user or performance acceptance.
 
 ### Live #465 PRD/Spec audit (2026-09-24)
 
