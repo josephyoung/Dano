@@ -5,8 +5,8 @@ This directory contains deployment-specific defaults and proxy config.
 ## Protected memory release candidate
 
 The opt-in release combination is recorded in
-[`memory-release.json`](memory-release.json): the Dano product version recorded there, exact
-`@josephyoung/pi-openviking@0.1.12`, and upstream OpenViking `v0.4.20`
+[`memory-release.json`](memory-release.json): the Dano product version recorded there,
+the exact `@josephyoung/pi-openviking` version recorded there, and upstream OpenViking `v0.4.20`
 at the recorded multi-platform OCI index digest. The platform manifests are
 recorded alongside the index so the selected Linux architecture can be checked
 after pull. The Dockerfile uses `pnpm install --frozen-lockfile`; the extension
@@ -128,8 +128,11 @@ node /app/runtime/reconcile-memory-recovery.mjs replay \
 
 The command checks every owner, state hash, journal prefix and credential before the first
 remote mutation; it replays later deletion intents, reads back their effects,
-then atomically overlays the newer owner states. It prints only aggregate
-counts and can be rerun after a partial remote failure. Do not start Dano or
+then records a private checkpoint-bound replay receipt beside each owner state
+before atomically overlaying the newer owner states. Keep these receipts with
+the restored protected data; a retry after overlay rejects a different or
+missing checkpoint. It prints only aggregate counts and can be rerun after a
+partial remote failure. Do not start Dano or
 expose nginx until replay succeeds.
 
 This command fails closed when a new owner or completed writer appears after
@@ -174,12 +177,18 @@ test under a new operation ID. An old operation created while OpenViking was
 offline remained `session_unknown`/“result needs verification”; no version
 blindly replayed it. This unresolved queue outcome and a supported policy for
 arbitrary upgrade-window operations still block a general release claim.
-The final candidate pins pi-openviking `0.1.12`: its same-ID empty-Session
+The Dano `0.2.40` recovery candidate pinned pi-openviking `0.1.12`: its same-ID empty-Session
 retry recovered that actual old snapshot operation to ready against the real
 fixed OpenViking service in a one-off container. The complete final image was
 then run from the old six-volume snapshot: the in-app Browser showed the old
 pending task as ready and a new chat recalled both old and recovered facts.
 General multi-user upgrade-window reconciliation remains a separate gate.
+The Dano `0.2.41` candidate pins pi-openviking `0.1.13`. In the real
+OpenViking service and the in-app Browser, a selected fact in a merged memory
+document was corrected, its old sources were revoked, unrelated facts remained,
+and a new chat recalled the replacement. See the release manifest for the
+current version pair and [the #477 evidence](../docs/research/issue477-memory-release.md)
+for its remaining acceptance gates.
 
 ### Protected image entry
 

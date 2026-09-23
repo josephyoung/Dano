@@ -204,7 +204,9 @@ async function prepare(configDirectory, dataRoot, recoveryRoot, checkpointFile) 
   await Promise.all([trustedDirectory(configDirectory), trustedDirectory(dataRoot),
     privateDirectory(join(configDirectory, "memory")), privateDirectory(recoveryRoot),
     privateDirectory(dirname(checkpointFile))]);
-  const manifest = JSON.parse((await privateFile(checkpointFile, 1024 * 1024)).toString("utf8"));
+  const checkpointBytes = await privateFile(checkpointFile, 1024 * 1024);
+  const manifest = JSON.parse(checkpointBytes.toString("utf8"));
+  const checkpointSha256 = digest(checkpointBytes);
   const entries = checkedManifest(manifest);
   const [states, remoteOwners] = await Promise.all([ownerStates(dataRoot), recoveryOwners(recoveryRoot)]);
   const expectedOwners = entries.map(item => item.owner).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -229,9 +231,21 @@ async function prepare(configDirectory, dataRoot, recoveryRoot, checkpointFile) 
     const alreadyOverlaid = restored.state.revision === journal.state.revision
       && JSON.stringify(restored.state) === JSON.stringify(journal.state);
     assert.ok(snapshot || alreadyOverlaid, "POST_SNAPSHOT_STATE_MISMATCH");
+    const statePath = join(dataRoot, entry.statePath);
+    const receiptPath = `${statePath}.replay-receipt.json`;
+    const receipt = { version: 1, checkpointSha256, owner: entry.owner,
+      statePath: entry.statePath, latestStateSha256: digest(latestBytes) };
     if (snapshot) {
       assert.equal(restored.state.revision, entry.stateRevision, "POST_SNAPSHOT_STATE_MISMATCH");
       noUnreconciledWrites(restored.state, journal.state);
+    } else {
+      let savedReceipt;
+      try { savedReceipt = JSON.parse((await privateFile(receiptPath, 4096)).toString("utf8")); }
+      catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        fail("POST_SNAPSHOT_STATE_MISMATCH");
+      }
+      assert.deepEqual(savedReceipt, receipt, "POST_SNAPSHOT_STATE_MISMATCH");
     }
     assert.ok(entry.eventBytes <= journal.eventBytes.length
       && digest(journal.eventBytes.subarray(0, entry.eventBytes)) === entry.eventSha256
@@ -242,7 +256,7 @@ async function prepare(configDirectory, dataRoot, recoveryRoot, checkpointFile) 
     const effects = expectedEffects(events);
     const key = await credentials.read(entry.owner);
     assert.ok(key, "CREDENTIAL_MISSING");
-    plans.push({ owner: entry.owner, events, effects, statePath: join(dataRoot, entry.statePath),
+    plans.push({ owner: entry.owner, events, effects, statePath, receiptPath, receipt,
       latestBytes, client: new OwnerMemoryClient({ owner: entry.owner, baseUrl: config.baseUrl,
         apiKey: key, scope: null, timeoutMs: config.requestTimeoutMs }) });
   }
@@ -283,7 +297,12 @@ export async function reconcile(configDirectory, dataRoot, recoveryRoot, checkpo
       assert.deepEqual(documents, expected, "DOCUMENT_SET_MISMATCH");
     }
   }
-  for (const plan of plans) await replacePrivate(plan.statePath, plan.latestBytes);
+  for (const plan of plans) {
+    // Persist the checkpoint binding before overlaying the old state. A retry
+    // may skip the old snapshot hash only when this exact replay wrote it.
+    await replacePrivate(plan.receiptPath, JSON.stringify(plan.receipt) + "\n");
+    await replacePrivate(plan.statePath, plan.latestBytes);
+  }
   return summary;
 }
 

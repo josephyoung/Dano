@@ -582,6 +582,12 @@ checkpoint prefix and encrypted USER credential before remote work. `replay`
 verifies all identities, applies only post-checkpoint events in order, reads
 back the affected sources/documents, and writes the newer owner states only
 after every owner's readback succeeds. A partial remote failure is retryable.
+The current candidate writes a private receipt bound to the exact checkpoint
+and newer state before overlay. A post-overlay retry requires that receipt;
+the targeted regression test first reproduced acceptance of an altered old
+state hash and now rejects it before any remote contact. This code and test
+were added after the `0.2.41` image described below, so image and browser
+acceptance must be repeated for the updated candidate.
 
 With the isolated finalqueue app/nginx stopped, image
 `localhost/dano477-protected:0.2.40-reconcile` created a private checkpoint
@@ -673,7 +679,7 @@ and integrity matched the Dano lockfile. Dano `0.2.41` pins it exactly.
 The repository check passed and a complete Vitest rerun with Python `httpx`
 passed 145 files, 1670 tests, with one existing skip.
 
-The `0.2.41` protected image was built from the current source with the exact
+The first `0.2.41` protected image was built from that source revision with the exact
 published `0.1.13`. Because the builder's direct GitHub TLS connection failed
 while installing the pinned `open-webSearch` Skill, the build-only Git source
 was routed through a temporary read-only local mirror of upstream
@@ -697,6 +703,15 @@ no-`/proc` binding configuration. This closes the previously observed
 merged-document Browser blocker, but it is one correction case, not the full
 §11 correction, deletion, two-user or performance acceptance.
 
+The installed published `0.1.13` was also loaded through the actual pinned Pi
+`DefaultResourceLoader` using both entries, twice each. The ordinary Pi
+entry registered eight tools including `memory_save` and the `user_bash`
+handler; the Dano factory registered one memory tool. Neither produced an
+error or duplicate registration. This is a package-level dual-entry check,
+not a rerun inside the protected image. The previously built image also lacks
+the later checkpoint-receipt fix, so its browser result cannot validate that
+new code until the image is rebuilt and the relevant checks repeated.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -708,7 +723,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | PRD | Current evidence | Missing acceptance |
 |---|---|---|
-| AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords and protected `0.2.41` image | Complete ordinary-pi and Dano factory entry audit on final image |
+| AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords, protected `0.2.41` image and installed-package dual-entry loader check | Rebuild and audit both entries in the updated final image |
 | AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
 | AC-04 | Collection filters and consent have automated coverage | Real automatic-collection cases with exclusion evidence |
 | AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
@@ -721,7 +736,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
-| T-01 | Published `0.1.13`, exact Dano lockfile and protected `0.2.41` image | Final dual-entry loading audit |
+| T-01 | Published `0.1.13`, exact Dano lockfile, first protected `0.2.41` image, and published-package Pi loader check twice per entry | Updated final-image dual-entry loading audit |
 | T-02/03 | Real USER-key isolation probes | Collision/forgery, Peer/project scope and independent Bob Browser across fixed repetitions |
 | T-04/05 | Automated lifecycle/collection tests; selected Browser paths | Full multi-viewer/rebind/branch/dispose and real collection exclusions |
 | T-06/07 | Actual old `session_unknown` recovery and credential-store replay | All crash windows, rotation, user switch and anonymous transfer on fixed service |

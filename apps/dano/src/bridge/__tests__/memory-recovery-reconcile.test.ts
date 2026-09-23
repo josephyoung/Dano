@@ -68,6 +68,34 @@ it("rejects a changed checkpoint prefix before contacting the remote service", a
   expect(contacted).not.toHaveBeenCalled();
 });
 
+it("rejects a mismatched checkpoint after a successful replay has overlaid the state", async () => {
+  const f = await fixture();
+  await checkpoint(f.data, f.recovery, f.checkpointFile);
+  const statePath = join(f.data, "host-state", "owner-a", "state", "memory", "state.json");
+  const oldBytes = await readFile(statePath);
+  await new RecoveryStateStore(f.store, f.journal).transact(state => { state.authorization.enabled = true; });
+  // Simulate restoring the old local state before the first replay.
+  const checkpointBytes = await readFile(f.checkpointFile);
+  const manifest = JSON.parse(checkpointBytes.toString("utf8"));
+  const previous = await readFile(join(f.recovery, "account", "alice", "state.json"));
+  await writeFile(statePath, oldBytes);
+  vi.spyOn(OwnerMemoryClient.prototype, "verifyIdentity").mockResolvedValue(undefined);
+  vi.spyOn(OwnerMemoryClient.prototype, "listMemoryDocuments").mockResolvedValue([]);
+  await reconcile(f.config, f.data, f.recovery, f.checkpointFile);
+  expect(await readFile(statePath)).toEqual(previous);
+  manifest.owners[0].stateSha256 = "0".repeat(64);
+  await writeFile(f.checkpointFile, JSON.stringify(manifest), { mode: 0o600 });
+  const contacted = vi.spyOn(OwnerMemoryClient.prototype, "verifyIdentity");
+  contacted.mockClear();
+  await expect(reconcile(f.config, f.data, f.recovery, f.checkpointFile))
+    .rejects.toThrow("POST_SNAPSHOT_STATE_MISMATCH");
+  expect(contacted).not.toHaveBeenCalled();
+  await writeFile(f.checkpointFile, checkpointBytes, { mode: 0o600 });
+  await rm(`${statePath}.replay-receipt.json`);
+  await expect(reconcile(f.config, f.data, f.recovery, f.checkpointFile, true))
+    .rejects.toThrow("POST_SNAPSHOT_STATE_MISMATCH");
+});
+
 it("rejects owners created after the backup checkpoint", async () => {
   const f = await fixture();
   await checkpoint(f.data, f.recovery, f.checkpointFile);
