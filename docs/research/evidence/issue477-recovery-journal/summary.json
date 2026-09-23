@@ -21,7 +21,9 @@
     "restoredDataRevisionAfterReplay": 3,
     "secondReplay": "passed; owners=1; events=2",
     "alternateContainerRemoved": true,
-    "oldVolumeClonesRemoved": true
+    "oldVolumeClonesRemoved": true,
+    "syntheticUserRemoved": true,
+    "testDataRecoveryCheckpointVolumesRemoved": true
   },
   "limitations": [
     "One synthetic USER; no other owner's data was deleted",

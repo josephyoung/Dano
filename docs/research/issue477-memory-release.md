@@ -624,6 +624,10 @@ document nor Session, and the restored state advanced to revision 3. A second
 replay passed. The alternate instance was stopped and removed. Sanitized
 per-step evidence is in
 [`issue477-recovery-journal/summary.json`](evidence/issue477-recovery-journal/summary.json).
+The exact synthetic USER was then removed through the official admin API, and
+the separate old-volume clones, test data/recovery/checkpoint volumes and
+probe script were removed. The original `dano477-finalqueue` stack remained
+healthy on the fixed HTTPS entry.
 This proves one synthetic matched old-volume deletion replay on the same
 candidate version; it does not cover an arbitrary old-version migration or
 general upgrade-window operations. The command deliberately fails closed for new owners,
