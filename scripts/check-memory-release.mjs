@@ -4,6 +4,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const deployment = process.argv.slice(2).includes("--deployment");
@@ -35,14 +36,13 @@ try {
   const release = await json(join(root, "deploy/memory-release.json"));
   const product = await json(join(root, "package.json"));
   const app = await json(join(root, "apps/dano/package.json"));
-  const lock = await readFile(join(root, "pnpm-lock.yaml"), "utf8");
+  const lock = parseYaml(await readFile(join(root, "pnpm-lock.yaml"), "utf8"));
   assert(product.version === release.danoVersion, "Dano product version differs from memory release");
   assert(app.dependencies["@josephyoung/pi-openviking"] === release.piOpenVikingVersion,
     "pi-openviking dependency differs from memory release");
-  const appImporter = lock.split(/\n  apps\/dano:\n/, 2)[1]?.split(/\n  [^ ]/u, 1)[0];
-  const pinned = appImporter?.match(/\n      '@josephyoung\/pi-openviking':\n        specifier: ([^\n]+)\n        version: ([^\n]+)/u);
-  assert(pinned?.[1] === release.piOpenVikingVersion &&
-    pinned?.[2].startsWith(`${release.piOpenVikingVersion}(`),
+  const pinned = lock?.importers?.["apps/dano"]?.dependencies?.["@josephyoung/pi-openviking"];
+  assert(pinned?.specifier === release.piOpenVikingVersion &&
+    typeof pinned.version === "string" && pinned.version.startsWith(`${release.piOpenVikingVersion}(`),
   "lockfile differs from memory release");
   assert(new RegExp(`^ghcr\\.io/volcengine/openviking:${release.openVikingVersion.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`, "u")
     .test(release.openVikingImage), "OpenViking release image must be pinned to a digest");

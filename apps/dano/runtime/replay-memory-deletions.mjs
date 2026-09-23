@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { createDecipheriv, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { OwnerMemoryClient } from "@josephyoung/pi-openviking/host";
+import { MemoryCredentialStore } from "./dist/server/bridge/memory-credential-store.js";
 
 // Run with Dano stopped. The post-snapshot ledger and owner state must come
 // from outside the older backup being restored. Never print either secret.
@@ -34,17 +35,13 @@ try {
     "POST_SNAPSHOT_STATE_MISMATCH");
 
   stage = "credential";
-  const name = createHash("sha256").update(JSON.stringify([owner.accountId, owner.userId])).digest("hex");
-  const credential = JSON.parse(await readFile(resolve(dataDirectory, "host-state", "memory-service", "credentials", `${name}.json`), "utf8"));
-  assert.equal(credential.version, 1, "CREDENTIAL_MISMATCH");
-  assert.equal(credential.algorithm, "aes-256-gcm", "CREDENTIAL_MISMATCH");
-  assert.equal(credential.keyVersion, config.encryptionKeyVersion, "CREDENTIAL_MISMATCH");
-  assert.deepEqual(credential.owner, owner, "CREDENTIAL_MISMATCH");
-  const binding = JSON.stringify(["dano-memory-credential", 1, config.encryptionKeyVersion, owner.accountId, owner.userId]);
-  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(config.encryptionKey, "hex"), Buffer.from(credential.iv, "base64url"));
-  decipher.setAAD(Buffer.from(binding));
-  decipher.setAuthTag(Buffer.from(credential.tag, "base64url"));
-  const key = Buffer.concat([decipher.update(Buffer.from(credential.ciphertext, "base64url")), decipher.final()]).toString("utf8");
+  const credentials = new MemoryCredentialStore({
+    directory: resolve(dataDirectory, "host-state", "memory-service", "credentials"),
+    encryptionKey: Buffer.from(config.encryptionKey, "hex"),
+    keyVersion: config.encryptionKeyVersion,
+  });
+  const key = await credentials.read(owner);
+  assert.ok(key, "CREDENTIAL_MISSING");
   const client = new OwnerMemoryClient({ owner, baseUrl: config.baseUrl, apiKey: key, scope: null,
     timeoutMs: config.requestTimeoutMs });
 
