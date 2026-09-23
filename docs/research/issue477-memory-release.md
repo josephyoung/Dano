@@ -470,6 +470,34 @@ restarted, and the fixed HTTPS entry returned HTTP 200. The original default
 settings remain in place; this is a real Pi compaction path check under a
 short acceptance window, not a long-context performance benchmark.
 
+## Candidate 6: multi-owner replay command, 0.2.39
+
+The protected image `ce3db0c7b493` contains Dano `0.2.39` and exact
+`pi-openviking@0.1.12`. The offline replay command now accepts the original
+version-1 single-owner ledger and a version-2 list of owner entries. It
+preflights all state hashes, owner bindings and USER credentials, then verifies
+every remote identity before the first remote mutation. A valid partial replay
+can be run again. Node syntax, the full Dano server/Svelte check, the server
+build and all 143 Vitest files (1,657 passed, one skipped) passed. Both release
+checker modes and the protected image's frozen lockfile build passed.
+
+The [sanitized replay summary](evidence/issue477-replay-v2/summary.json) records
+the real-service results. The old deletion ledger passed unchanged against
+the restored isolated OpenViking service: two deleted URIs, one removed source,
+one retained document and three expected documents. A new two-owner ledger
+used two existing isolated USER accounts; it removed one newly staged
+synthetic document from each account and left their nine original documents
+unchanged. An immediate second run passed, confirming idempotent replay.
+Duplicate owner entries were rejected as `INVALID_LEDGER` with networking
+disabled. Corrupting only the second owner's post-state hash yielded
+`POST_SNAPSHOT_STATE_MISMATCH` at `load`; both staged documents still existed
+after that failure, and a later valid replay removed them.
+
+This covers the mechanics of a supplied multi-owner ledger. It does **not**
+capture deletion/revocation events automatically outside older snapshots, nor
+does it define arbitrary upgrade-window reconciliation. Those remain hard
+release gates; the new command alone is not a recovery guarantee.
+
 ## Remaining release gates
 
 ### Live #465 PRD/Spec audit (2026-09-24)
@@ -491,7 +519,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
-| AC-12 | Clean stack, one older-snapshot replay, candidate upgrade and matched rollback | General multi-owner deletion/revocation journal and upgrade-window reconciliation |
+| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback | Automatic multi-owner deletion/revocation journal and upgrade-window reconciliation |
 | AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
 | Spec test | Current evidence | Missing acceptance |
@@ -504,7 +532,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; earlier Field Assist/Heimdall/SSE observations | Business OA Skill and complete final-image repetition |
-| T-13 | Clean deploy, candidate upgrade, matched old-data rollback | General old queue, multi-user reconciliation and deletion/revocation replay |
+| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay | General old queue, multi-user reconciliation and automatic deletion/revocation records |
 | T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,

@@ -80,24 +80,33 @@ The protected image contains `replay-memory-deletions.mjs`. Run it as a
 one-off container on the internal memory network with the restored protected
 config and data volumes mounted read-only and a post-snapshot ledger mounted
 read-only. The command takes the config directory, data directory and ledger
-path as positional arguments. It verifies the restored owner-state SHA-256,
-decrypts the owner-bound USER credential locally, checks OpenViking identity,
-removes the listed sources and document URIs, restores retained documents and
-reads back the complete public document set. It prints counts only. A changed
-state hash or owner mismatch fails before any remote mutation. Run once for
-each affected owner; the ledger must be maintained separately from the older
-snapshot and include `version`, `owner`, `statePath`, `postStateSha256`,
-`deleteUris`, `sourceSessionIds`, `retainedDocuments` and
-`expectedDocumentUris`. `retainedDocuments` contains the public document body,
+path as positional arguments. It verifies **all** restored owner-state hashes
+and owner bindings, decrypts each owner-bound USER credential locally and
+checks every OpenViking identity before any remote mutation. It then removes
+the listed sources and document URIs, restores retained documents and reads
+back each complete public document set. It prints aggregate counts only. A
+changed state hash, duplicate owner, missing credential or owner mismatch
+fails before remote mutation. A partial remote failure requires rerunning the
+same ledger; the public operations and readback are designed for idempotent
+retry. Version 1 accepts one owner with `owner`, `statePath`,
+`postStateSha256`, `deleteUris`, `sourceSessionIds`, `retainedDocuments` and
+`expectedDocumentUris`. Version 2 wraps one or more entries with those same
+fields in `{ "version": 2, "owners": [...] }`. Overlay every newer owner state
+and credential before running either format. Maintain the ledger separately
+from the older snapshot. `retainedDocuments` contains the public document body,
 not OpenViking's physical `MEMORY_FIELDS` trailer. The ledger is private data;
-do not put it in source control or logs.
+do not put it in source control or logs. This command replays a supplied
+ledger; it does not automatically capture governance operations after backup.
 
 An isolated #477 rehearsal restored an older snapshot into new volumes, proved
 both old URIs were present, replayed one later forget before starting Dano,
 and verified in the in-app Browser that a fresh chat could not retrieve the
 forgotten code while the unrelated preference remained. This establishes the
-tested sequence for that synthetic owner. The general multi-owner recovery,
-candidate-upgrade and matched-rollback procedure remains a #477 release gate.
+tested sequence for that synthetic owner. The version-2 replay also removed
+one temporary document per synthetic USER and preserved both original document
+sets; a wrong second-owner state hash stopped before touching either.
+Automatic multi-owner ledger capture, revocation coverage and the full
+upgrade/rollback policy remain #477 release gates.
 
 The tested compatibility pair is Dano `0.2.34` with pi-openviking `0.1.8` and
 Dano `0.2.35` with pi-openviking `0.1.11`, both using OpenViking `v0.4.20` and
