@@ -36,7 +36,8 @@ async function fixture() {
   await writeFile(join(config, "memory", "memory-service.json"), JSON.stringify({ accountId: "account",
     baseUrl: "http://localhost:1", requestTimeoutMs: 3000, encryptionKey: encryptionKey.toString("hex"),
     encryptionKeyVersion: "v1" }), { mode: 0o600 });
-  return { root, data, recovery, config, owner, store, journal, checkpointFile: join(root, "checkpoint.json") };
+  return { root, data, recovery, config, owner, store, journal, credentialStore,
+    checkpointFile: join(root, "checkpoint.json") };
 }
 
 it("checkpoints a stopped owner and preflights only the post-snapshot deletion intent", async () => {
@@ -106,6 +107,39 @@ it("rejects owners created after the backup checkpoint", async () => {
   await MemoryRecoveryJournal.bootstrap(f.recovery, newer, await store.read());
   await expect(reconcile(f.config, f.data, f.recovery, f.checkpointFile, true))
     .rejects.toThrow("RECOVERY_OWNER_SET_MISMATCH");
+});
+
+it("preflights both owners before replaying either owner's deletion", async () => {
+  const f = await fixture();
+  const bob = { accountId: "account", userId: "bob" };
+  const bobStore = new FileStateStore({ owner: bob,
+    directory: join(f.data, "host-state", "owner-b", "state", "memory"), policyVersion: "v1" });
+  await bobStore.transact(state => { state.authorization.enabled = false; });
+  await MemoryRecoveryJournal.bootstrap(f.recovery, bob, await bobStore.read());
+  const bobJournal = await MemoryRecoveryJournal.open(f.recovery, bob, await bobStore.read());
+  await f.credentialStore.write(bob, "synthetic-bob-key");
+  await checkpoint(f.data, f.recovery, f.checkpointFile);
+  const original = await readFile(f.checkpointFile);
+  const aliceUri = "viking://user/alice/memories/to-delete.md";
+  const bobUri = "viking://user/bob/memories/to-delete.md";
+  await f.journal.append({ kind: "removeMemory", uri: aliceUri });
+  await bobJournal.append({ kind: "removeMemory", uri: bobUri });
+  const verify = vi.spyOn(OwnerMemoryClient.prototype, "verifyIdentity").mockResolvedValue(undefined);
+  const remove = vi.spyOn(OwnerMemoryClient.prototype, "removeMemory").mockResolvedValue(undefined);
+  vi.spyOn(OwnerMemoryClient.prototype, "listMemoryDocuments").mockResolvedValue([]);
+  const altered = JSON.parse(original.toString("utf8"));
+  altered.owners.find((item: { owner: { userId: string } }) => item.owner.userId === "bob").stateSha256 = "0".repeat(64);
+  await writeFile(f.checkpointFile, JSON.stringify(altered), { mode: 0o600 });
+  await expect(reconcile(f.config, f.data, f.recovery, f.checkpointFile))
+    .rejects.toThrow("POST_SNAPSHOT_STATE_MISMATCH");
+  expect(verify).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+  await writeFile(f.checkpointFile, original, { mode: 0o600 });
+  await expect(reconcile(f.config, f.data, f.recovery, f.checkpointFile))
+    .resolves.toEqual({ owners: 2, events: 2 });
+  expect(remove).toHaveBeenCalledTimes(2);
+  expect(remove).toHaveBeenCalledWith(aliceUri);
+  expect(remove).toHaveBeenCalledWith(bobUri);
 });
 
 it("keeps the service stopped while a later governance barrier is unfinished", async () => {

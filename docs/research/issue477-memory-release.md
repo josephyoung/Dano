@@ -587,7 +587,11 @@ and newer state before overlay. A post-overlay retry requires that receipt;
 the targeted regression test first reproduced acceptance of an altered old
 state hash and now rejects it before any remote contact. A removed receipt
 also fails preflight. The updated code is in the rebuilt `0.2.41-receipt`
-image described below.
+image described below. The targeted eight-test suite also confirms that a
+bad checkpoint for Bob prevents replay of Alice's deletion before either
+remote client is contacted; a valid two-owner checkpoint replays both
+deletions. This uses simulated remote clients, not a two-owner real-service
+rollback.
 
 With the isolated finalqueue app/nginx stopped, image
 `localhost/dano477-protected:0.2.40-reconcile` created a private checkpoint
@@ -640,6 +644,21 @@ general upgrade-window operations. The command deliberately fails closed for new
 new writers, pending governance, retirement and invalid/stale credentials;
 general upgrade-window reconciliation and arbitrary old snapshots remain
 release gates, as do the full AC/T Browser and quality matrices.
+
+On the rebuilt `0.2.41-receipt` image, a second real-service rehearsal used
+two temporary synthetic USERs in one temporary account. Each had a distinct
+encrypted credential, protected owner state and real OpenViking document.
+After a two-owner checkpoint, both independent recovery mirrors advanced one
+revision and logged a deletion; the old local states were restored. Preflight
+reported two owners and two later events. Replay removed both public
+documents, overlaid both newer states and wrote private checkpoint-bound
+receipts; a second replay passed. USER-bound readback found neither document.
+The temporary account was deleted through the official admin API. The
+[sanitized run summary](evidence/issue477-two-owner-receipt/summary.json)
+records the image and aggregate assertions. This tests
+two-owner state restoration and remote deletion on the current service; it
+does not recreate an older image/data-volume pair or cover source Session
+removal, revocation, new writers or credential rotation.
 
 For this candidate, the rebuilt protected image completed successfully.
 `pnpm run check` reported no server or Svelte diagnostics, the release checker
@@ -740,7 +759,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
-| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume two-event replay | Multi-owner deletion/revocation, arbitrary old-version and upgrade-window reconciliation |
+| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
 | AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
 | Spec test | Current evidence | Missing acceptance |
@@ -753,7 +772,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; earlier Field Assist/Heimdall/SSE observations | Business OA Skill and complete final-image repetition |
-| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal matched old-volume two-event preflight/replay | General old queue, credential/new writer and multi-user reconciliation |
+| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume one-owner replay and current-service two-owner deletion/retry | General old queue, credential/new writer and old-version multi-user reconciliation |
 | T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
