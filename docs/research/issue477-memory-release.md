@@ -498,6 +498,14 @@ capture deletion/revocation events automatically outside older snapshots, nor
 does it define arbitrary upgrade-window reconciliation. Those remain hard
 release gates; the new command alone is not a recovery guarantee.
 
+The final `0.2.39` protected image was then started on the established
+`https://localhost:18711/` acceptance entry. The app container reported
+healthy, the existing localhost CA verified HTTPS 200, and the authenticated
+in-app Browser restored its prior Pi session after reload. In a new chat,
+MiMo answered the synthetic prompt `0.2.39 验收：仅回复“服务可用”。` with `服务可用。`.
+This confirms final-image browser connectivity and one complete ordinary
+request, not the fixed memory-answer or five-user load gates.
+
 ## Remaining release gates
 
 ### Live #465 PRD/Spec audit (2026-09-24)
