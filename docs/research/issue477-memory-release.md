@@ -425,6 +425,58 @@ clean exact answer.
 
 ## Remaining release gates
 
+### Live #465 PRD/Spec audit (2026-09-24)
+
+Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
+and [Spec](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465#issuecomment-5674833976).
+"Partial" identifies evidence already collected; it is **not** acceptance.
+All thirteen ACs and fourteen T cases remain open until their complete
+requirement and required real-service/browser method pass. In particular,
+the 60/60 and 30/30 figures above measure selection, not model answers.
+
+| PRD | Current evidence | Missing acceptance |
+|---|---|---|
+| AC-01/02 | Published independent package `0.1.12`, fixed lockfile, protected image and two Pi keywords | Complete ordinary-pi and Dano factory entry audit on final image |
+| AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
+| AC-04 | Collection filters and consent have automated coverage | Real automatic-collection cases with exclusion evidence |
+| AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
+| AC-07 | Browser correction and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
+| AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
+| AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
+| AC-11 | Browser SSE/text, form, Field Assist, generic Skill, Heimdall boundary, image and bash observations | Actual Pi compression, business OA Skill and final-image regression pass |
+| AC-12 | Clean stack, one older-snapshot replay, candidate upgrade and matched rollback | General multi-owner deletion/revocation journal and upgrade-window reconciliation |
+| AC-13 | Frozen 80-case dataset; real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
+
+| Spec test | Current evidence | Missing acceptance |
+|---|---|---|
+| T-01 | Published package and exact image install | Final dual-entry loading audit |
+| T-02/03 | Real USER-key isolation probes | Collision/forgery, Peer/project scope and independent Bob Browser across fixed repetitions |
+| T-04/05 | Automated lifecycle/collection tests; selected Browser paths | Full multi-viewer/rebind/branch/dispose and real collection exclusions |
+| T-06/07 | Actual old `session_unknown` recovery and credential-store replay | All crash windows, rotation, user switch and anonymous transfer on fixed service |
+| T-08 | Real Browser new-chat recall; bounded reranker selection | Short-session extraction, no-result/timeout and model-answer repetitions |
+| T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
+| T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
+| T-12 | Browser form, Field Assist, SSE, Skill, Heimdall, image, bash | Real Pi compression, business OA Skill and final-image repetition |
+| T-13 | Clean deploy, candidate upgrade, matched old-data rollback | General old queue, multi-user reconciliation and deletion/revocation replay |
+| T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
+
+The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
+10 irrelevant and 10 authorization cases, each independently repeated three
+times. Correction, isolation, deletion and authorization require every attempt
+to pass. Recall needs at least 90% required-source hits **and** at least 90%
+correct model answers; irrelevant requests need at least 90% without injected
+memory. Five distinct concurrent users must run at least 100 **complete Dano
+requests**, with steady recall-added p95 ≤1 s, wait hard limit 2 s, measured
+injection ≤1,500 tokens, healthy save-ready p95 ≤60 s and incremental model
+cost ≤20% against the same memory-off workload. The current five-user
+100-attempt probe calls OpenViking/reranker only: its 958.60 ms selection p95
+leaves 41.40 ms for Dano overhead and does not establish those limits.
+
+The §11.2 Browser flow also requires a separately authenticated Bob context;
+a second tab sharing Alice's cookie cannot supply it. The current local stack
+has only Alice's authenticated Browser context. No production go/no-go decision
+or issue closure follows from this partial evidence.
+
 - Package and validate the recovery procedure as a repeatable command,
   including deletion/revocation records across arbitrary rollback points.
 - Define and test the multi-user upgrade-window reconciliation policy beyond
