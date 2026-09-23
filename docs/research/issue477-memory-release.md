@@ -326,14 +326,45 @@ a 900 ms timeout; 70/70 relevant and 30/30 irrelevant requests then selected
 correctly, with steady selection p95 793.64 ms. A separately frozen candidate
 must still implement and repeat that result, including Dano host overhead.
 
+## Candidate 3: frozen bounded retrieval retest
+
+The unchanged 80-case dataset and the two-candidate, 900 ms reranker limits
+were frozen in [`issue477-evaluation-candidate3.json`](fixtures/issue477-evaluation-candidate3.json)
+at `cd064666` before the formal rerun. Dano `0.2.37` limits both the USER-scoped
+OpenViking `/find` request and the local reranker input to two candidates. The
+protected image `8cb0ff821faf` installed the exact published
+`pi-openviking@0.1.12`. Its running package metadata included both required
+Pi keywords. All 143 Vitest files passed (1,657 tests, one skipped), and the
+server and Svelte checks had no diagnostics.
+
+The [formal retrieval results](evidence/issue477-candidate3/formal-retrieval.json)
+record all 90 unchanged recall and irrelevant-request attempts across three
+repetitions. Expected source selection was 60/60, irrelevant requests selected
+no memory in 30/30 attempts, and no next-owner forbidden fact was read.
+USER-scoped search plus reranking p95 was 223.25 ms; reranking alone p95 was
+209.41 ms. The [five-user concurrent selection results](evidence/issue477-candidate3/five-user-selection.json)
+record 100 attempts: relevant selection 70/70, irrelevant omission 30/30,
+first-round p95 690.97 ms and steady selection p95 817.31 ms. That workload
+uses real OpenViking and reranker requests on the four-CPU isolated Podman VM,
+but it does **not** include five complete Dano/MiMo user requests, model token
+usage, extraction cost, or Dano host overhead. It cannot satisfy the Spec's
+full latency and cost release gate by itself.
+
+The real in-app Browser on the running `0.2.37` image completed OA-backed
+MiMo chats through the fixed trusted `https://localhost:18711/` entry. In a
+fresh chat it answered both stored upgrade facts, `枫桥31` and `溪桥82`; a second
+fresh chat answered the unrelated `19×23` request as `437`, with no memory fact
+in the visible answer. This is direct model/browser evidence for those two
+requests, not a 60/30 model-answer audit.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
   including deletion/revocation records across arbitrary rollback points.
 - Define and test the multi-user upgrade-window reconciliation policy beyond
   one controlled synthetic resubmission.
-- Fix the failed irrelevant-memory selection and repeat the frozen evaluation
-  without removing the failed baseline evidence.
+- Retain the failed vector-only and candidate-2 concurrency results alongside
+  the candidate-3 passing selection evidence; finish full model-answer review.
 - Complete correction, deletion and authorization cases three times each,
   model-answer review, the 100-request latency/token/cost workload and the
   independent dual-user in-app Browser scenario.
