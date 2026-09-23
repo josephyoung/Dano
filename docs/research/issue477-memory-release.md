@@ -650,6 +650,48 @@ triangle in order. These three final-image checks cover the repository's
 Podman runtime regression floor, not the remaining §11.2 business Skill,
 dual-user or full model-quality release gates.
 
+### Merged-document correction package 0.1.13 (2026-09-24)
+
+The ambiguous live correction above exposed a package defect: OpenViking
+coalesced two source operations into one document and paraphrased the selected
+fact, so neither stored source digest equaled the unique document sentence.
+[pi-openviking PR #11](https://github.com/josephyoung/pi-openviking/pull/11)
+now accepts that case only after the selected sentence occurs exactly once and
+the remaining text is classified unrelated. It revokes the complete source
+group to prevent old Session replay and checks the exact operation-ID set in
+the state transaction, so a writer appearing during inspection fails closed.
+
+The independent package's 254 tests and type check passed. An isolated
+official OpenViking v0.4.20 account with two real USER-bound source Sessions
+completed the corrected-document readback; the unrelated fact remained, both
+Sessions were deleted, the old URI was relocated, and export marked both old
+sources revoked. The synthetic account and one-off container were deleted.
+GitHub Trusted Publisher
+[run 35923522460](https://github.com/josephyoung/pi-openviking/actions/runs/35923522460)
+published `0.1.13` with provenance; the npm registry's exact-version metadata
+and integrity matched the Dano lockfile. Dano `0.2.41` pins it exactly.
+The repository check passed and a complete Vitest rerun with Python `httpx`
+passed 145 files, 1670 tests, with one existing skip.
+
+The `0.2.41` protected image was built from the current source with the exact
+published `0.1.13`. Because the builder's direct GitHub TLS connection failed
+while installing the pinned `open-webSearch` Skill, the build-only Git source
+was routed through a temporary read-only local mirror of upstream
+`v2.1.11` (`3094fa5`); the shipped Dockerfile's Skill installer and pinned
+source stayed in use. The mirror service and clone were removed after the
+build. The image reported both package versions and both required Pi keywords.
+The fixed HTTPS Compose stack passed health and the deployment smoke check
+(anonymous Cookie, Client, SSE, message and disconnect).
+
+In the authenticated in-app Browser on `0.2.41`, the merged `profile.md`
+contained four synthetic facts and the selected `栀霞72` phrase once. The UI
+corrected that phrase to `清禾93`, relocated the retained document to an opaque
+URI, preserved the other three facts, and showed all old sources as revoked.
+A fresh chat asked for the recovery-test code; MiMo answered only `清禾93`.
+This closes the previously observed merged-document Browser blocker, but it
+is one correction case, not the full §11 correction, deletion, two-user or
+performance acceptance.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -661,11 +703,11 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | PRD | Current evidence | Missing acceptance |
 |---|---|---|
-| AC-01/02 | Published independent package `0.1.12`, fixed lockfile, protected image and two Pi keywords | Complete ordinary-pi and Dano factory entry audit on final image |
+| AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords and protected `0.2.41` image | Complete ordinary-pi and Dano factory entry audit on final image |
 | AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
 | AC-04 | Collection filters and consent have automated coverage | Real automatic-collection cases with exclusion evidence |
 | AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
-| AC-07 | Browser correction and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
+| AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
 | AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
@@ -674,7 +716,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
-| T-01 | Published package and exact image install | Final dual-entry loading audit |
+| T-01 | Published `0.1.13`, exact Dano lockfile and protected `0.2.41` image | Final dual-entry loading audit |
 | T-02/03 | Real USER-key isolation probes | Collision/forgery, Peer/project scope and independent Bob Browser across fixed repetitions |
 | T-04/05 | Automated lifecycle/collection tests; selected Browser paths | Full multi-viewer/rebind/branch/dispose and real collection exclusions |
 | T-06/07 | Actual old `session_unknown` recovery and credential-store replay | All crash windows, rotation, user switch and anonymous transfer on fixed service |

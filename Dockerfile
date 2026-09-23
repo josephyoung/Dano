@@ -50,9 +50,6 @@ ARG HTTPS_PROXY
 ARG NO_PROXY
 ARG PIP_CERT
 ARG PIP_INDEX_URL
-ARG GIT_CONFIG_COUNT
-ARG GIT_CONFIG_KEY_0
-ARG GIT_CONFIG_VALUE_0
 RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
   && npm config set registry "$registry" \
   && npm_config_registry="$registry" npm install --global open-websearch@2.1.11
@@ -90,6 +87,11 @@ COPY deploy/system-prompt.mjs ./deploy/system-prompt.mjs
 COPY apps/dano/runtime/skill-seed.mjs ./apps/dano/runtime/skill-seed.mjs
 COPY apps/dano/runtime/product-name.mjs ./apps/dano/runtime/product-name.mjs
 COPY apps/dano/runtime/system-prompt.mjs ./apps/dano/runtime/system-prompt.mjs
+# Build-only Git source routing, used when the pinned public Skill source is
+# mirrored near an isolated builder. Keep it after the dependency layers.
+ARG GIT_CONFIG_COUNT
+ARG GIT_CONFIG_KEY_0
+ARG GIT_CONFIG_VALUE_0
 RUN mkdir -p /app/open-websearch-skill-seed \
   && cd /app/open-websearch-skill-seed \
   && registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
