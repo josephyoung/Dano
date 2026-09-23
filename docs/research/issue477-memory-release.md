@@ -612,9 +612,21 @@ captured the existing journal prefix, then the recovery mirror advanced to
 revision 2 while the stopped test data volume retained revision 1. Another
 two intents were replayed against a restaged document and Session. The
 readback found neither target and the restored local state advanced to
-revision 2. No older OpenViking data volume was imported for these probes,
-so they are **real-service nonzero-event replay** evidence rather than complete
-matched rollback acceptance. The command deliberately fails closed for new owners,
+revision 2. A further stopped-stack rehearsal copied the current protected
+data and OpenViking volumes into distinct old-volume clones and compared their
+contents before resuming the original stack. After two new deletion intents,
+the current service removed the synthetic document and Session. A separate
+official `v0.4.20` OpenViking instance booted from the **old** clone, where
+USER-bound readback still found both. Its matched old protected data was at
+revision 2, while the independent recovery mirror was at revision 3. The
+one-owner/two-event preflight and replay passed; readback then found neither
+document nor Session, and the restored state advanced to revision 3. A second
+replay passed. The alternate instance was stopped and removed. Sanitized
+per-step evidence is in
+[`issue477-recovery-journal/summary.json`](evidence/issue477-recovery-journal/summary.json).
+This proves one synthetic matched old-volume deletion replay on the same
+candidate version; it does not cover an arbitrary old-version migration or
+general upgrade-window operations. The command deliberately fails closed for new owners,
 new writers, pending governance, retirement and invalid/stale credentials;
 general upgrade-window reconciliation and arbitrary old snapshots remain
 release gates, as do the full AC/T Browser and quality matrices.
@@ -653,7 +665,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-08 | Browser defaults-off, explicit-only consent, management and selected pause flows | All governance transitions, two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
-| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal checkpoint plus real-service two-event replay | Matched old-volume replay with automatic journal, multi-owner deletion/revocation and upgrade-window reconciliation |
+| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume two-event replay | Multi-owner deletion/revocation, arbitrary old-version and upgrade-window reconciliation |
 | AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
 | Spec test | Current evidence | Missing acceptance |
@@ -666,7 +678,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; earlier Field Assist/Heimdall/SSE observations | Business OA Skill and complete final-image repetition |
-| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal two-event preflight/replay | Matched old-volume journal replay, general old queue and multi-user reconciliation |
+| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal matched old-volume two-event preflight/replay | General old queue, credential/new writer and multi-user reconciliation |
 | T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
