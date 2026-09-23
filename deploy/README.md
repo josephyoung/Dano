@@ -149,6 +149,16 @@ The default Dockerfile target remains `default-runtime`, inheriting the existing
 non-root app entrypoint. Selecting `protected-runtime` is explicit and does not
 change ordinary deployments.
 
+The protected entry does not run `docker-entrypoint.sh` or discover Skills from
+the mutable Agent Config Directory. List each image-owned Skill directory in
+the supervisor profile's `host.trustedSkillPaths`, using its absolute path
+under `/app` (for example,
+`/app/open-websearch-skill-seed/.agents/skills/open-websearch`). The supervisor
+verifies these paths are in the image installation, and the worker mounts them
+read-only. An empty list means the protected session has no Skills, even if a
+copy exists under the Agent Config Directory. Keep the Skill content and this
+allowlist in the same reviewed image/configuration release.
+
 For isolated Compose acceptance, append `deploy/compose/protected.yml` to the
 base Compose file and the selected exposure overlay. Set
 `DANO_PROTECTED_IMAGE`, `DANO_PROTECTED_CONFIG_VOLUME` and

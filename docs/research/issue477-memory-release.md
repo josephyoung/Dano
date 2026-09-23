@@ -357,6 +357,26 @@ fresh chat answered the unrelated `19×23` request as `437`, with no memory fact
 in the visible answer. This is direct model/browser evidence for those two
 requests, not a 60/30 model-answer audit.
 
+The same final image passed additional real Browser regressions: MiMo
+triggered `bash ls` and reported `uploads`; an `ask_user_question` radio card
+accepted “茶” and the model repeated it. A textarea question exposed Field
+Assist, and its MiMo-backed polish changed the synthetic value “处理个人事务” to
+“需处理个人事务”; the card was cancelled before any OA submission.
+
+The first “请假” quick action exposed a protected-stack configuration gap:
+the model could find no OA Skill. This stack's supervisor profile had an empty
+`trustedSkillPaths`. Copying the image seed into the Agent Config Directory
+did not enable it, because protected sessions load only the profile's trusted
+image paths. After adding the exact image-owned `open-websearch` Skill path to
+the **private local acceptance profile** and restarting Dano, a fresh Browser
+chat invoked and read that Skill's `SKILL.md`. A model-triggered Bash
+`test -r` found the trusted Skill readable and
+`/etc/dano-protected/agent/settings.json` unreadable. This validates generic
+Skill loading and the worker's Heimdall read boundary on this image. The
+business “请假” Skill itself is absent from the isolated stack, so its OA
+workflow remains unaccepted. The deployment contract now states the protected
+Skill allowlist requirement explicitly.
+
 ## Remaining release gates
 
 - Package and validate the recovery procedure as a repeatable command,
@@ -368,7 +388,7 @@ requests, not a 60/30 model-answer audit.
 - Complete correction, deletion and authorization cases three times each,
   model-answer review, the 100-request latency/token/cost workload and the
   independent dual-user in-app Browser scenario.
-- Complete Skill, Field Assist and Heimdall Browser regression, the AC/T audit,
-  and controlled test-resource cleanup.
+- Complete the business OA Skill Browser flow, remaining image/SSE/pi
+  compression regressions, the AC/T audit and controlled test-resource cleanup.
 
 No production deployment or release conclusion is implied by this record.
