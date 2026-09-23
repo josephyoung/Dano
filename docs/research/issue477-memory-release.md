@@ -506,6 +506,17 @@ MiMo answered the synthetic prompt `0.2.39 验收：仅回复“服务可用”�
 This confirms final-image browser connectivity and one complete ordinary
 request, not the fixed memory-answer or five-user load gates.
 
+The same final image's installed `pi-openviking` manifest reported version
+`0.1.12`, Pi keywords `pi-package` and `pi-extension`, and the standard
+`dist/standard.js` entry. In a fresh Node 22 `pi 0.85.1` RPC session, loading
+that exact standard entry produced the expected notice that unprotected Pi
+does not enable long-term memory, and `get_state` succeeded without a provider
+request. A first attempt with Node 24 could not load the Node 22 `fs-ext`
+binary; the tested runtime is Node 22. On the protected final image, a new
+authenticated Browser chat asked for the two digits after the previously saved
+`枫桥` code; MiMo answered exactly `枫桥31`. This adds one final-image model
+answer, not the fixed 20-case, three-run recall acceptance.
+
 ## Remaining release gates
 
 ### Live #465 PRD/Spec audit (2026-09-24)
