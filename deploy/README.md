@@ -5,7 +5,7 @@ This directory contains deployment-specific defaults and proxy config.
 ## Protected memory release candidate
 
 The opt-in release combination is recorded in
-[`memory-release.json`](memory-release.json): Dano `0.2.35`, exact
+[`memory-release.json`](memory-release.json): Dano `0.2.36`, exact
 `@josephyoung/pi-openviking@0.1.12`, and upstream OpenViking `v0.4.20`
 at the recorded multi-platform OCI index digest. The platform manifests are
 recorded alongside the index so the selected Linux architecture can be checked
@@ -25,16 +25,25 @@ For an opt-in deployment, provision these distinct resources before Compose:
   Do not put this config, its key, or model credentials in source, image,
   Compose environment, or a command line.
 - A read-only model asset directory `DANO_OPENVIKING_MODELS_DIR` for the
-  independent Embedding service. Set `DANO_EMBEDDING_IMAGE`,
+  independent Embedding and reranking services. Set `DANO_EMBEDDING_IMAGE`,
   `DANO_EMBEDDING_MODEL_FILE` and `DANO_EMBEDDING_MODEL_NAME` from the release
-  manifest. The release check hashes the GGUF file before startup. This
-  service runs the upstream llama.cpp server with no published host port.
+  manifest, as well as `DANO_RERANKER_IMAGE`, `DANO_RERANKER_MODEL_FILE` and
+  `DANO_RERANKER_MODEL_NAME`. The release check hashes both GGUF files before
+  startup. Both services run the pinned upstream llama.cpp server with no
+  published host ports.
 - An external named `DANO_OPENVIKING_DATA_VOLUME` for OpenViking's
   `/app/.openviking`, separate from the protected Dano config/data volumes.
   Keep the Dano source checkout, deploy-control files and runtime state in
   different paths. The private Dano `memory-service.json` must name
   `http://openviking:1933` as its origin and retain the management-key and
   encryption-key versions across restart and recovery.
+  For this candidate its private `reranker` object must set `url` to
+  `http://reranker:8080/v1/rerank`, `model` to the manifest model name,
+  `minimumLogit` to `0`, `timeoutMs` to `750`, `maxInputBytes` to `16384`,
+  and `maxDocumentBytes` to `4096`. These are frozen in
+  [the second evaluation configuration](../docs/research/fixtures/issue477-evaluation-candidate2.json).
+  A malformed or unavailable reranker omits memory for that request; it does
+  not fall back to the vector-only result that failed the relevance gate.
 
 Set `DANO_OPENVIKING_IMAGE` to the exact `openVikingImage` value in the release
 manifest, then run `node scripts/check-memory-release.mjs --deployment`.
@@ -42,13 +51,17 @@ Append `deploy/compose/memory.yml` to the base and protected overlays. It
 attaches Dano and OpenViking to the internal `memory-backend` network; only
 OpenViking also joins the model-provider egress network. The Embedding
 service remains only on the internal network. The overlay publishes no
-OpenViking or Embedding host port and uses the official OpenViking image
+OpenViking, Embedding or reranker host port and uses the official OpenViking image
 without VikingBot. Dano does
 not depend on OpenViking health to start, so disabled or unavailable memory
 must leave ordinary chat available. Do not add an OpenViking port mapping or
 put the management key in `app.environment`. Podman may inject host proxy
 variables into the container; `DANO_MEMORY_NO_PROXY` must include `embedding`,
-`openviking`, loopback addresses and any model provider reached directly.
+`openviking`, `reranker`, loopback addresses and any model provider reached directly.
+OpenViking `v0.4.20` `/find` uses its QUICK vector path even when a server-side
+reranker is configured. Dano therefore applies the bounded reranker to the
+USER-scoped results before injection, under the existing two-second memory
+wait fuse.
 
 Before restoring any volume snapshot, stop Dano and OpenViking together and
 retain a newer deletion/revocation record outside the snapshot. An older

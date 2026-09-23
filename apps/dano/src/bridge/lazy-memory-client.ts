@@ -1,6 +1,7 @@
 import { OwnerMemoryClient, type MemoryExtensionOptions, type MemoryGovernanceClient,
   type Owner } from "@josephyoung/pi-openviking/host";
 import type { MemoryUserConnection } from "./memory-identity-service.js";
+import type { MemoryReranker } from "./memory-reranker.js";
 
 type Client = MemoryExtensionOptions["client"];
 interface Options {
@@ -10,6 +11,7 @@ interface Options {
   /** Bound by the host to one authenticated UserContext, never a tool input. */
   connect(): Promise<MemoryUserConnection>;
   assertToolIsolation(): Promise<void>;
+  reranker?: MemoryReranker;
 }
 
 /** Local construction does not contact OpenViking or provision a USER key.
@@ -93,7 +95,10 @@ export class LazyMemoryClient implements Client, MemoryGovernanceClient {
   removeMemory(uri: string) { return this.#call(client => client.removeMemory(uri)); }
   clearMemoryScope() { return this.#call(client => client.clearMemoryScope()); }
   recall(query: string, limit: number, signal?: AbortSignal): ReturnType<Client["recall"]> {
-    return this.#call(client => client.recall(query, limit, signal), signal);
+    return this.#call(async client => {
+      const found = await client.recall(query, limit, signal);
+      return this.#options.reranker ? this.#options.reranker.filter(query, found, signal) : found;
+    }, signal);
   }
 
   /** Reject new work and wait for identity checks and sent requests to settle.

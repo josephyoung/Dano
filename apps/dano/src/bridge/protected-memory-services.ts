@@ -8,6 +8,7 @@ import { MemoryTokenizers } from "./memory-tokenizer.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 import type { UserMemoryServices } from "./user-memory-runtime.js";
 import { memoryCollectionModel, type MemoryCollectionModelRuntime } from "./memory-collection-model.js";
+import { MemoryReranker } from "./memory-reranker.js";
 
 /** Only the protected HTTP host constructs these services. No remote connection
  * is made at startup; authenticated users still need explicit memory consent. */
@@ -35,6 +36,7 @@ Promise<{ services: UserMemoryServices; close(): Promise<void> } | undefined> {
         managementKey: config.managementKey, timeoutMs: config.requestTimeoutMs }),
       baseUrl: config.baseUrl, requestTimeoutMs: config.requestTimeoutMs, maxContentBytes: config.maxContentBytes,
       policyVersion: config.policyVersion, policy: { ...config.policy, countTokens: tokenizers.countTokens },
+      ...(config.reranker ? { reranker: new MemoryReranker(config.reranker) } : {}),
       scheduler: config.scheduler,
       ...(config.collection ? { collection: { ...config.collection,
         selector: memoryCollectionModel(config.collection, modelRuntime!, [config.managementKey, config.encryptionKey]),

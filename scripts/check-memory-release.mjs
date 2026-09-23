@@ -59,6 +59,12 @@ try {
     /^[a-f0-9]{64}$/u.test(release.embedding.modelSha256) &&
     Number.isSafeInteger(release.embedding.dimension) && release.embedding.dimension > 0,
   "embedding model manifest is incomplete");
+  assert(release.reranker?.image === release.embedding.image &&
+    JSON.stringify(release.reranker.platformDigests) === JSON.stringify(release.embedding.platformDigests) &&
+    /^[A-Za-z0-9._-]+\.gguf$/u.test(release.reranker.modelFile) &&
+    /^[a-f0-9]{64}$/u.test(release.reranker.modelSha256) &&
+    typeof release.reranker.modelName === "string" && release.reranker.modelName.length > 0,
+  "reranker manifest is incomplete");
 
   if (deployment) {
     assert(process.env.DANO_OPENVIKING_IMAGE === release.openVikingImage,
@@ -67,6 +73,10 @@ try {
       process.env.DANO_EMBEDDING_MODEL_FILE === release.embedding.modelFile &&
       process.env.DANO_EMBEDDING_MODEL_NAME === release.embedding.modelName,
     "deployment embedding image or model differs from memory release");
+    assert(process.env.DANO_RERANKER_IMAGE === release.reranker.image &&
+      process.env.DANO_RERANKER_MODEL_FILE === release.reranker.modelFile &&
+      process.env.DANO_RERANKER_MODEL_NAME === release.reranker.modelName,
+    "deployment reranker image or model differs from memory release");
     const configDirectory = process.env.DANO_OPENVIKING_CONFIG_DIR;
     const modelsDirectory = process.env.DANO_OPENVIKING_MODELS_DIR;
     assert(configDirectory && modelsDirectory && process.env.DANO_OPENVIKING_DATA_VOLUME,
@@ -95,10 +105,15 @@ try {
       "embedding model is missing or outside the model mount");
     assert(await sha256(actual) === release.embedding.modelSha256,
       "embedding model hash differs from memory release");
+    const reranker = await realpath(join(modelRoot, release.reranker.modelFile));
+    assert(reranker.startsWith(`${modelRoot}${sep}`) && (await lstat(reranker)).isFile(),
+      "reranker model is missing or outside the model mount");
+    assert(await sha256(reranker) === release.reranker.modelSha256,
+      "reranker model hash differs from memory release");
   }
   process.stdout.write(`memory release check passed: Dano ${release.danoVersion}, ` +
     `pi-openviking ${release.piOpenVikingVersion}, OpenViking ${release.openVikingVersion}, ` +
-    `embedding ${release.embedding.imageVersion}\n`);
+    `embedding ${release.embedding.imageVersion}, reranker ${release.reranker.imageVersion}\n`);
 } catch (error) {
   process.stderr.write(`memory release check failed: ${error instanceof Error ? error.message : "unknown error"}\n`);
   process.exitCode = 1;

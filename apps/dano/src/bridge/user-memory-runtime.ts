@@ -8,6 +8,7 @@ import type { MemoryCredentialStore } from "./memory-credential-store.js";
 import type { MemoryProvisioner } from "./memory-provisioner.js";
 import { MemoryIdentityService } from "./memory-identity-service.js";
 import { LazyMemoryClient } from "./lazy-memory-client.js";
+import type { MemoryReranker } from "./memory-reranker.js";
 import type { ProtectedSessionTools } from "./protected-session-tools.js";
 import type { UserMemoryControls, UserMemoryStatus } from "./user-memory-controls.js";
 import type { UserContext } from "./user-context.js";
@@ -28,6 +29,7 @@ export interface UserMemoryServices {
   maxContentBytes: number;
   policyVersion: string;
   policy: MemoryExtensionOptions["policy"];
+  reranker?: MemoryReranker;
   scheduler: SchedulerPolicy;
   collection?: UserMemoryCollectionOptions;
 }
@@ -81,7 +83,7 @@ export class UserMemoryRuntime implements UserMemoryControls {
     const owner = await options.owners.get(context);
     const identity = new MemoryIdentityService({ ...options, assertToolIsolation: () => worker.assertIsolated() });
     const client = new LazyMemoryClient({ owner, baseUrl: options.baseUrl, timeoutMs: options.requestTimeoutMs,
-      connect: () => identity.connect(context), assertToolIsolation: () => worker.assertIsolated() });
+      connect: () => identity.connect(context), assertToolIsolation: () => worker.assertIsolated(), reranker: options.reranker });
     const store = new FileStateStore({ owner, directory: join(stateDirectory, "memory"), policyVersion: options.policyVersion });
     const configured = options.collection;
     const taskFacts = configured?.taskFacts ? new MemoryTaskFacts({ ...configured.taskFacts, store,

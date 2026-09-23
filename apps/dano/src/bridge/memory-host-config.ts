@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { UserMemoryServices } from "./user-memory-runtime.js";
 import type { MemoryTokenizerBinding, MemoryTokenizerLimits } from "./memory-tokenizer.js";
 import type { UserMemoryCollectionOptions } from "./user-memory-collection.js";
+import type { MemoryRerankerConfig } from "./memory-reranker.js";
 import { parseMemoryTaskFactConfig, type MemoryTaskFactConfig } from "./memory-task-facts.js";
 
 export interface MemoryCollectionHostConfig {
@@ -27,6 +28,7 @@ export interface MemoryHostConfig {
   maxContentBytes: number;
   policyVersion: string;
   policy: Omit<UserMemoryServices["policy"], "countTokens">;
+  reranker?: MemoryRerankerConfig;
   scheduler: Omit<UserMemoryServices["scheduler"], "onStatus" | "onError">;
   tokenizerLimits: MemoryTokenizerLimits;
   tokenizers: MemoryTokenizerBinding[];
@@ -85,13 +87,25 @@ function collectionConfig(value: unknown): MemoryCollectionHostConfig {
 export function parseMemoryHostConfig(input: unknown): MemoryHostConfig {
   try {
     const raw = object(input, ["version", "baseUrl", "accountId", "managementKey", "encryptionKey", "encryptionKeyVersion",
-      "requestTimeoutMs", "maxContentBytes", "policyVersion", "policy", "scheduler", "tokenizerLimits", "tokenizers", "collection"]);
+      "requestTimeoutMs", "maxContentBytes", "policyVersion", "policy", "reranker", "scheduler", "tokenizerLimits", "tokenizers", "collection"]);
     const url = new URL(text(raw.baseUrl));
     const encryptionKey = text(raw.encryptionKey), managementKey = text(raw.managementKey);
     if (raw.version !== 1 || !["http:", "https:"].includes(url.protocol) || url.username || url.password
       || url.pathname !== "/" || url.search || url.hash || !/^[a-fA-F0-9]{64}$/.test(encryptionKey) || /\s/.test(managementKey)) throw invalid();
     const policy = object(raw.policy, ["maxPayloadBytes", "recallTimeoutMs", "recallTokenBudget", "recallLimit", "minimumScore"]);
     if (typeof policy.minimumScore !== "number" || !Number.isFinite(policy.minimumScore)) throw invalid();
+    let reranker: MemoryRerankerConfig | undefined;
+    if (raw.reranker !== undefined) {
+      const entry = object(raw.reranker, ["url", "model", "minimumLogit", "timeoutMs", "maxInputBytes", "maxDocumentBytes"]);
+      const endpoint = new URL(text(entry.url));
+      if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password
+        || endpoint.search || endpoint.hash || endpoint.pathname !== "/v1/rerank"
+        || typeof entry.minimumLogit !== "number" || !Number.isFinite(entry.minimumLogit)) throw invalid();
+      reranker = { url: endpoint.href, model: text(entry.model), minimumLogit: entry.minimumLogit,
+        timeoutMs: positive(entry.timeoutMs), maxInputBytes: positive(entry.maxInputBytes),
+        maxDocumentBytes: positive(entry.maxDocumentBytes) };
+      if (reranker.maxDocumentBytes > reranker.maxInputBytes) throw invalid();
+    }
     const scheduler = object(raw.scheduler, ["pollIntervalMs", "initialBackoffMs", "maxBackoffMs", "maxAttemptsPerPhase", "maxOperationsPerTick"]);
     const initialBackoffMs = positive(scheduler.initialBackoffMs), maxBackoffMs = positive(scheduler.maxBackoffMs);
     if (initialBackoffMs > maxBackoffMs) throw invalid();
@@ -113,6 +127,7 @@ export function parseMemoryHostConfig(input: unknown): MemoryHostConfig {
       maxContentBytes: positive(raw.maxContentBytes),
       policy: { maxPayloadBytes: positive(policy.maxPayloadBytes), recallTimeoutMs: positive(policy.recallTimeoutMs),
         recallTokenBudget: positive(policy.recallTokenBudget), recallLimit: positive(policy.recallLimit), minimumScore: policy.minimumScore },
+      ...(reranker ? { reranker } : {}),
       scheduler: { pollIntervalMs: positive(scheduler.pollIntervalMs), initialBackoffMs, maxBackoffMs,
         maxAttemptsPerPhase: positive(scheduler.maxAttemptsPerPhase), maxOperationsPerTick: positive(scheduler.maxOperationsPerTick) },
       tokenizerLimits: { maxAssetBytes: positive(limits.maxAssetBytes), maxInputBytes: positive(limits.maxInputBytes),
