@@ -934,6 +934,21 @@ remaining dual-user, business OA, full quality matrix, or rollback gates.
 
 ### Live #465 PRD/Spec audit (2026-09-24)
 
+The first case of the independently frozen
+[save-ready workload](fixtures/issue477-save-ready.json) failed on the
+`0.2.42`/`0.1.13` image. In the real Browser, the user supplied synthetic
+`云汀201`, but MiMo's `memory_save` argument was `云汀2020`. The operation then
+became `ready` after 173 seconds (UI timestamp precision), above the 60-second
+limit, and the exported content held the wrong fact. The
+[sanitized failure receipt](evidence/issue477-save-ready/first-attempt.json)
+records both observations and the exact-document cleanup. A retryable VLM
+connection error appeared during extraction; its contribution to latency is
+not yet isolated. The other nine fixed cases were not run against this failed
+candidate, so no p95 is claimed. The published extension currently accepts
+model-generated save text without comparing it with the current user message;
+an independent package regression fix is under test before a new release and
+Dano image rebuild.
+
 The frozen 20 cross-USER isolation cases ran three times each against the
 real OpenViking public API in the protected local stack. The
 [executable matrix](fixtures/issue477-isolation-matrix.py) and
@@ -966,7 +981,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and Pi compression; an isolated production-generated leave Skill was discovered and rendered its operation choice and six-field form | Business options/authentication failed; complete OA and final-image regression matrix |
 | AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
-| AC-13 | Frozen 80-case dataset; 20 isolation cases ×3 passed against real OpenViking; candidate-7 traced workload had 70/70 semantic recall answers and 30/30 irrelevant omissions; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image has matched on/off cost evidence | Other five categories ×3, Dano/Browser isolation, healthy save-ready and causal latency interpretation |
+| AC-13 | Frozen 80-case dataset; 20 isolation cases ×3 passed against real OpenViking; candidate-7 traced workload had 70/70 semantic recall answers and 30/30 irrelevant omissions; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image has matched on/off cost evidence; first frozen save-ready case **failed** at 173 seconds and wrong fact | Correct and rerun save-ready, other five categories ×3, Dano/Browser isolation and causal latency interpretation |
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
@@ -979,7 +994,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; generated leave Skill choice/form rendered in a disposable layer | Working business options/authentication and complete final-image repetition |
 | T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume one-owner replay and current-service two-owner deletion/retry | General old queue, credential/new writer and old-version multi-user reconciliation |
-| T-14 | Five-user, 100-complete-request MiMo candidate-7 run passed semantic recall, injection, wait and token limits in an instrumented disposable container; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image passed matched on/off cost | Healthy save-ready p95 and full fixed matrix |
+| T-14 | Five-user, 100-complete-request MiMo candidate-7 run passed semantic recall, injection, wait and token limits in an instrumented disposable container; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image passed matched on/off cost; first frozen save-ready case **failed** | Fix and rerun healthy save-ready p95 and full fixed matrix |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
 10 irrelevant and 10 authorization cases, each independently repeated three
