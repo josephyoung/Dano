@@ -885,10 +885,15 @@ irrelevant answers. Literal recall matching was 64/70; no OA refusal occurred
 in this run. The matched memory-off arm was not repeated on the new image tag;
 its runtime code and prompt are byte-identical to the already measured arm.
 The tokenizer, host-config and SYSTEM prompt focused tests passed 23/23;
-`pnpm run check` and the full-source image build passed. A concurrent full
-Vitest run was stopped after resource-related test startup/timeouts while the
-image installed its runtime dependencies, so it is not counted as passing
-validation for this final prompt candidate.
+`pnpm run check` and the full-source image build passed. On 2026-09-24,
+the full Vitest suite was rerun without a concurrent image build, with
+`/private/tmp/dano465-openviking-venv/bin` first on `PATH` so the Python
+provider tests could import `httpx` 0.28.1: **145 test files,
+1674 passed, 1 skipped** in 49.82 s. The ordinary shell's `python3` lacked
+`httpx` and produced six environment-only failures; that run is not counted.
+An earlier concurrent full run was also stopped after startup/timeouts and is
+not counted. This proves the repository test suite, not the outstanding real
+Browser, full evaluation matrix, save-ready, or rollback release gates.
 
 ### Live #465 PRD/Spec audit (2026-09-24)
 
