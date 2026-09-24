@@ -765,6 +765,34 @@ and automatic collection still unauthorized. This is one same-owner,
 cross-tab pause/recall/resume observation, not an independent second user or
 the full three-repetition pause and in-flight-save matrix.
 
+The business OA Skill regression was probed without writing to OA. A
+read-only production inventory found the generated “请假申请” Skill and the
+configured OA URL/tenant-key entries; the older documented
+`dano-a-oa-qingjia` path is not the installed Skill. A disposable layer on
+the candidate image loaded that Skill as a protected trusted resource with
+the two OA configuration entries. In the authenticated in-app Browser, the
+“请假” quick action discovered the Skill, rendered the four-operation choice,
+and then rendered all six fields of the new-leave form. The form was cancelled
+without any business mutation. Its dynamic user-list selector failed because
+the same-origin business path returned `200 text/html` from the Dano entry,
+not JSON. An independent request to that path reproduced the response.
+
+The model's ordinary protected `bash` worked. The original broker PATH
+omitted the image's Python virtual environment; Python discovery and the
+Skill's read-only commands surfaced `SUPERVISOR_OPERATION_FAILED`. Adding
+that virtual environment to the **probe profile only** let a
+Browser-triggered Python command import `httpx`. A direct app-container
+read-only option lookup still returned
+`authentication unavailable`: the available OA URL/tenant-key settings did
+not yield a usable business authorization header for this generated Skill. Passing
+business credentials directly into model-triggered bash would violate the
+protected worker boundary and was not done. The probe layer/profile and OA
+environment were removed from the running stack; the original receipt image,
+supervisor profile, fixed HTTPS entry and smoke check were restored. The
+[sanitized OA summary](evidence/issue477-oa-skill/summary.json) records the
+observations. Functional business choices, authenticated requests and the
+complete OA Browser regression remain release blockers.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -783,7 +811,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
 | AC-08 | Browser defaults-off, explicit-only consent, management and one same-owner cross-tab pause/recall/resume flow | All governance transitions, independent two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
-| AC-11 | Final-image Browser form, generic Skill, image, bash and actual Pi compression; earlier Field Assist/Heimdall observations | Business OA Skill and full final-image regression matrix |
+| AC-11 | Final-image Browser form, generic Skill, image, bash and Pi compression; an isolated production-generated leave Skill was discovered and rendered its operation choice and six-field form | Business options/authentication failed; complete OA and final-image regression matrix |
 | AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
 | AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
 
@@ -796,7 +824,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-08 | Real Browser new-chat recall; bounded reranker selection | Short-session extraction, no-result/timeout and model-answer repetitions |
 | T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
-| T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; earlier Field Assist/Heimdall/SSE observations | Business OA Skill and complete final-image repetition |
+| T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; generated leave Skill choice/form rendered in a disposable layer | Working business options/authentication and complete final-image repetition |
 | T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume one-owner replay and current-service two-owner deletion/retry | General old queue, credential/new writer and old-version multi-user reconciliation |
 | T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
 
