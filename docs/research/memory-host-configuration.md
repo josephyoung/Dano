@@ -23,8 +23,11 @@ policy defaults:
 - Request deadline, maximum displayed content bytes and policy version.
 - Save payload limit, recall timeout, token budget, result count and score threshold.
 - Scheduler polling, backoff, retry and per-tick operation limits.
-- Tokenizer asset/input limits, startup deadline and one or more explicit model
-  bindings to local tokenizer/config paths and SHA-256 hashes.
+- Tokenizer asset/input limits, startup deadline, `maxQueuedRequests` per model,
+  and one or more explicit model bindings to local tokenizer/config paths and
+  SHA-256 hashes. Set the queue bound at least as high as the expected
+  simultaneous recalls minus one. Requests still obey their individual recall
+  deadlines; a full queue omits recall without blocking ordinary chat.
 
 Unknown fields, duplicate model bindings, malformed keys, unsafe asset paths,
 nonpositive limits and inverted retry bounds are rejected. Tokenizer functions,

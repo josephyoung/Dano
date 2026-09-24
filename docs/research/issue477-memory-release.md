@@ -823,6 +823,73 @@ make this unchanged Skill reach the Dano provider transport; a login-bound
 Browser retest and a reviewed credential-boundary integration are still needed.
 The Python path requirement is now documented for protected deployment.
 
+### Five-user complete-request diagnosis (2026-09-24)
+
+The `0.2.42` candidate replaces the tokenizer's single-flight rejection with a
+bounded per-model FIFO. Five simultaneous Dano/MiMo requests then recalled the
+correct owner fact and answered it in a first pilot. The canonical protected
+image was built and ran with published `pi-openviking@0.1.13`. The matched
+[100-request memory-on](evidence/issue477-candidate6/full-workload-on.json)
+and [memory-off](evidence/issue477-candidate6/full-workload-off.json)
+workloads each completed 100 real Dano/MiMo requests for five authenticated
+synthetic owners. With memory on, strict answer matching passed 63/70 recall
+attempts; all 30 irrelevant answers contained no owner fact. The memory-off
+workload answered 6/70 recall questions by chance. The on/off prompt p95s
+were 20.145/25.466 s and estimated model costs were $0.01209/$0.01859.
+Answer length and cache variation prevent attributing the cost difference to
+memory alone.
+
+The same frozen workload on a disposable container with sanitized extension
+and transport tracing produced [direct evidence](evidence/issue477-candidate6/traced-workload.json):
+70/70 expected sources returned, 70/70 relevant contexts injected, 30/30
+irrelevant contexts omitted, 759 ms recall-wait p95, 837 ms maximum, and 213
+injected tokens maximum. It completed 100/100 requests, but strict answer
+matching fell to 57/70. Two additional context logs were cache reuses within
+an existing request, not extra requests. The one-candidate reranker and the
+tokenizer were not the remaining source of those wrong answers. A targeted
+answer probe showed both weekday paraphrases (for example, `星期三` for `周三`)
+and the model misclassifying a personal-memory question as an unsupported OA
+business operation. The production OA capability boundary remains intact; a
+generic clarification for memory-only answers is being evaluated separately.
+
+In the [next disposable candidate](evidence/issue477-candidate7/instrumented-full-workload.json),
+the shipped SYSTEM.md template clarifies that answering an authorized personal
+memory fact does not require an OA Skill, while remembered text grants no OA
+business authority. The 100 complete Dano/MiMo requests passed 70/70 expected
+source hits, 70/70 context injections, 70/70 semantically correct recall
+answers, and 30/30 irrelevant requests with no injection or personal fact in
+the answer. Literal matching was 64/70; six answers used `星期` where the frozen
+fact used `周`. Recall wait p95/max were 452/694 ms, and injection was at most
+213 tokens. This used a copied runtime prompt in a disposable container;
+at that point, a full-source image repeat and matched memory-off cost
+comparison were still necessary.
+An image made by copying only this prompt template onto the previously
+full-built `0.2.42` queue image then completed [matched on/off
+workloads](evidence/issue477-candidate7/matched-workload-summary.json):
+100/100 requests in each arm, 69/70 semantic recall answers with memory on,
+30/30 irrelevant answers without personal facts, and estimated model cost
+$0.01068 on versus $0.01932 off (observed increment −44.7%). One relevant
+request still received an OA-capability refusal. Because this candidate used a
+single-file image layer after a full-source rebuild hit Podman disk capacity,
+the full-source image and Browser/provider gates were still open at that
+point. The cost result also cannot isolate memory overhead from answer-length
+or cache variation.
+After scoped removal of this issue's stopped test containers and obsolete
+images, the complete Dockerfile `protected-runtime` build succeeded as image
+`c490cc97f45e`. Its built server tree and SYSTEM.md template hashes match
+the prompt-layer image byte for byte. On the full-source image, a further
+[five-user 100-request run](evidence/issue477-candidate7/full-source-summary.json)
+completed 100/100 Dano/MiMo requests, answered 70/70 recall cases correctly
+under the weekday-equivalence rubric, and kept owner facts out of 30/30
+irrelevant answers. Literal recall matching was 64/70; no OA refusal occurred
+in this run. The matched memory-off arm was not repeated on the new image tag;
+its runtime code and prompt are byte-identical to the already measured arm.
+The tokenizer, host-config and SYSTEM prompt focused tests passed 23/23;
+`pnpm run check` and the full-source image build passed. A concurrent full
+Vitest run was stopped after resource-related test startup/timeouts while the
+image installed its runtime dependencies, so it is not counted as passing
+validation for this final prompt candidate.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -843,7 +910,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and Pi compression; an isolated production-generated leave Skill was discovered and rendered its operation choice and six-field form | Business options/authentication failed; complete OA and final-image regression matrix |
 | AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
-| AC-13 | Frozen 80-case dataset; one-candidate real-service selection 60/60 and irrelevant omission 30/30 | Six-category model/browser cases ×3; complete 100-request latency/token/cost comparison |
+| AC-13 | Frozen 80-case dataset; candidate-7 traced workload had 70/70 semantic recall answers and 30/30 irrelevant omissions; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image has matched on/off cost evidence | Six-category model/browser cases ×3; healthy save-ready and causal latency interpretation |
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
@@ -856,7 +923,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; generated leave Skill choice/form rendered in a disposable layer | Working business options/authentication and complete final-image repetition |
 | T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume one-owner replay and current-service two-owner deletion/retry | General old queue, credential/new writer and old-version multi-user reconciliation |
-| T-14 | Frozen evaluation and real-service selection attempts | Complete Dano/MiMo request quality, five-user latency, token and cost gates |
+| T-14 | Five-user, 100-complete-request MiMo candidate-7 run passed semantic recall, injection, wait and token limits in an instrumented disposable container; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image passed matched on/off cost | Healthy save-ready p95 and full fixed matrix |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
 10 irrelevant and 10 authorization cases, each independently repeated three
@@ -866,10 +933,10 @@ correct model answers; irrelevant requests need at least 90% without injected
 memory. Five distinct concurrent users must run at least 100 **complete Dano
 requests**, with steady recall-added p95 ≤1 s, wait hard limit 2 s, measured
 injection ≤1,500 tokens, healthy save-ready p95 ≤60 s and incremental model
-cost ≤20% against the same memory-off workload. The current five-user
-100-attempt probe calls OpenViking/reranker only: its 537.83 ms steady
-selection p95 leaves room for Dano overhead but does not establish those
-complete-request limits.
+cost ≤20% against the same memory-off workload. The earlier 100-attempt probe
+called OpenViking/reranker only; candidate 7 now supplies complete matched
+requests and a full-source image repeat. The healthy save-ready comparison
+and full six-category matrix are still open.
 
 The §11.2 Browser flow also requires a separately authenticated Bob context;
 a second tab sharing Alice's cookie cannot supply it. The current local stack
@@ -883,7 +950,7 @@ or issue closure follows from this partial evidence.
 - Retain the failed vector-only and candidate-2 concurrency results alongside
   the passing candidate-3/4/5 selection evidence; finish full model-answer review.
 - Complete correction, deletion and authorization cases three times each,
-  model-answer review, the 100-request latency/token/cost workload and the
+  remaining model-answer review, the healthy save-ready workload and the
   independent dual-user in-app Browser scenario.
 - Complete the business OA Skill Browser flow, remaining final-image Field
   Assist/Heimdall/SSE regressions, close each audited AC/T gap and clean test

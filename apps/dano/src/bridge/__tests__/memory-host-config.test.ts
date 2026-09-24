@@ -11,7 +11,7 @@ function config() {
     maxContentBytes: 16384, policyVersion: "v1",
     policy: { maxPayloadBytes: 4096, recallTimeoutMs: 1000, recallTokenBudget: 1500, recallLimit: 5, minimumScore: 0.5 },
     scheduler: { pollIntervalMs: 1000, initialBackoffMs: 1000, maxBackoffMs: 5000, maxAttemptsPerPhase: 5, maxOperationsPerTick: 4 },
-    tokenizerLimits: { maxAssetBytes: 65536, maxInputBytes: 8192, startupTimeoutMs: 2000 },
+    tokenizerLimits: { maxAssetBytes: 65536, maxInputBytes: 8192, startupTimeoutMs: 2000, maxQueuedRequests: 8 },
     tokenizers: [{ model: { provider: "fixture", api: "openai-completions", id: "fixture" },
       tokenizer: { path: "/installed/tokenizer.json", sha256: "a".repeat(64) },
       config: { path: "/installed/tokenizer_config.json", sha256: "b".repeat(64) } }] };
@@ -27,6 +27,7 @@ it("normalizes the service origin and requires explicit policies and model bindi
     (value: any) => { value.baseUrl = "https://user:SYNTHETIC_PRIVATE_KEY@example.test/"; },
     (value: any) => { value.scheduler.maxBackoffMs = 1; },
     (value: any) => { value.policy.recallTokenBudget = 0; },
+    (value: any) => { value.tokenizerLimits.maxQueuedRequests = 0; },
     (value: any) => { value.tokenizers = []; },
     (value: any) => { value.tokenizers[0].tokenizer.path = "./workspace/model.json"; },
   ]) {

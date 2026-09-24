@@ -109,7 +109,7 @@ export function parseMemoryHostConfig(input: unknown): MemoryHostConfig {
     const scheduler = object(raw.scheduler, ["pollIntervalMs", "initialBackoffMs", "maxBackoffMs", "maxAttemptsPerPhase", "maxOperationsPerTick"]);
     const initialBackoffMs = positive(scheduler.initialBackoffMs), maxBackoffMs = positive(scheduler.maxBackoffMs);
     if (initialBackoffMs > maxBackoffMs) throw invalid();
-    const limits = object(raw.tokenizerLimits, ["maxAssetBytes", "maxInputBytes", "startupTimeoutMs"]);
+    const limits = object(raw.tokenizerLimits, ["maxAssetBytes", "maxInputBytes", "startupTimeoutMs", "maxQueuedRequests"]);
     if (!Array.isArray(raw.tokenizers) || !raw.tokenizers.length) throw invalid();
     const models = new Set<string>();
     const tokenizers = raw.tokenizers.map(value => {
@@ -131,7 +131,7 @@ export function parseMemoryHostConfig(input: unknown): MemoryHostConfig {
       scheduler: { pollIntervalMs: positive(scheduler.pollIntervalMs), initialBackoffMs, maxBackoffMs,
         maxAttemptsPerPhase: positive(scheduler.maxAttemptsPerPhase), maxOperationsPerTick: positive(scheduler.maxOperationsPerTick) },
       tokenizerLimits: { maxAssetBytes: positive(limits.maxAssetBytes), maxInputBytes: positive(limits.maxInputBytes),
-        startupTimeoutMs: positive(limits.startupTimeoutMs) }, tokenizers,
+        startupTimeoutMs: positive(limits.startupTimeoutMs), maxQueuedRequests: positive(limits.maxQueuedRequests) }, tokenizers,
       ...(raw.collection === undefined ? {} : { collection: collectionConfig(raw.collection) }) };
   } catch { throw invalid(); }
 }
