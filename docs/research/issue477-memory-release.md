@@ -778,6 +778,12 @@ Long-term memory remained enabled; collection authorization remained revoked.
 The [sanitized Browser summary](evidence/issue477-auto-collection-browser/summary.json)
 records the assertions. This is one real Browser case, not the sensitive-data
 exclusion, inference-filter, in-flight revocation or three-repetition matrix.
+Two additional fresh chats, one with only a fake API key and one with a benign
+preference alongside a different fake API key, produced no new visible save
+operation or management document during the observation window. Collection
+authorization was revoked afterward. Because the selector's execution and
+fact-level decision were not independently observed, these are negative
+Browser observations, not proof of the full sensitive-data exclusion gate.
 
 The business OA Skill regression was probed without writing to OA. A
 read-only production inventory found the generated “请假申请” Skill and the
@@ -807,6 +813,16 @@ supervisor profile, fixed HTTPS entry and smoke check were restored. The
 observations. Functional business choices, authenticated requests and the
 complete OA Browser regression remain release blockers.
 
+The direct app-container option lookup had no Browser Login Session binding,
+so that call alone does not establish a login-bound failure. Read-only review
+of the installed generated Skill found that its `auth_headers()` runs before
+the OA request and requires its own environment or browser-state credential
+source. The protected broker deliberately projects neither production tenant
+keys nor browser storage into a worker. Correcting `broker.path` alone cannot
+make this unchanged Skill reach the Dano provider transport; a login-bound
+Browser retest and a reviewed credential-boundary integration are still needed.
+The Python path requirement is now documented for protected deployment.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
@@ -820,7 +836,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 |---|---|---|
 | AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords, rebuilt image, dual-entry loader check and one real-service protected Pi CLI save/new-session recall | Complete pair audit and Dano integration repetition |
 | AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
-| AC-04 | Collection filters and consent have automated coverage; one Browser collection reached ready and was recalled after separate consent | Sensitive-data/inference exclusions, revocation race and fixed repetitions |
+| AC-04 | Collection filters and consent have automated coverage; one Browser collection reached ready and was recalled after separate consent; two synthetic-key chats produced no visible save | Sensitive-data/inference exclusions with observed selector decisions, revocation race and fixed repetitions |
 | AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
 | AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, one targeted collected-fact forget and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
 | AC-08 | Browser defaults-off, separate collection consent/revocation, management and one same-owner cross-tab pause/recall/resume flow | All governance transitions, independent two-Session pause, export and blocked-write recovery ×3 |

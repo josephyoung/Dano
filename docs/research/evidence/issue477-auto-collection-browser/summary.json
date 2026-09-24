@@ -19,12 +19,16 @@
     "targetedForgetRemovedSyntheticFact": true,
     "newChatAfterForgetAnsweredUnknown": true,
     "unrelatedMemoryStillRecalled": true,
+    "syntheticCredentialOnlyChatCreatedNoNewVisibleOperation": true,
+    "syntheticCredentialAndBenignPreferenceChatCreatedNoNewVisibleOperation": true,
+    "syntheticCredentialAbsentFromManagementList": true,
     "finalMemoryEnabled": true,
     "finalAutomaticCollectionUnauthorized": true
   },
   "limitations": [
     "One owner, one synthetic fact and one browser repetition",
-    "No sensitive-information exclusion, inference filter or in-flight revocation matrix",
+    "The two synthetic credential chats produced no visible delivery operation during the observation window; selector execution and a fact-level redaction decision were not independently observed",
+    "No complete sensitive-information exclusion, inference filter or in-flight revocation matrix",
     "No independently authenticated Bob browser context or fixed three-repetition evaluation"
   ]
 }

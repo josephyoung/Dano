@@ -257,6 +257,13 @@ the latter path and `memoryRecoveryDirectory` to
 `/var/lib/dano-memory-recovery`; configure tokenizer asset paths explicitly. Put distinct
 runtime, session, host-state and identity roots beneath
 `/var/lib/dano-protected`; their ownership must satisfy the supervisor contract.
+If protected Skills invoke Python, put `/usr/local/lib/dano-python/bin` first
+in the profile's `broker.path`, ahead of the required system executable
+directories. The broker launches workers with this explicit path, so the
+image's `ENV PATH` does not supply the Python virtual environment to those
+workers. Verify `python -c 'import httpx'` through the authenticated Browser's
+model-triggered bash before running an OA Skill; a direct app-container shell
+uses a different environment and does not verify this boundary.
 For a fresh deployment, let the supervisor create those empty child roots.
 Never reuse a pre-existing identity range or initialize it against unrelated
 data. Configuration remains writable to the appropriate owner because Pi

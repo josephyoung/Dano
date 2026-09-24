@@ -37,7 +37,10 @@
   },
   "diagnosticControls": {
     "ordinaryProtectedBashPassed": true,
-    "venvHttpxPassedAfterWorkerPathCorrection": true
+    "venvHttpxPassedAfterWorkerPathCorrection": true,
+    "generatedSkillResolvesItsOwnAuthHeadersBeforeBusinessRequest": true,
+    "protectedWorkerProjectsNoTenantKeyOrBrowserState": true,
+    "directContainerLookupHasNoBrowserLoginBinding": true
   },
   "restored": {
     "image": "localhost/dano477-protected:0.2.41-receipt",
@@ -48,6 +51,7 @@
   "limitations": [
     "No authenticated business option readback",
     "No completed OA form submission or mutation",
-    "Generated Skill and production OA credentials were not added to the shipped Dano image"
+    "Generated Skill and production OA credentials were not added to the shipped Dano image",
+    "Correcting the Python PATH alone does not resolve the generated Skill's pre-request credential lookup"
   ]
 }
