@@ -36,6 +36,12 @@ it("normalizes the service origin and requires explicit policies and model bindi
     try { parseMemoryHostConfig(value); } catch (error) { expect(String(error)).not.toContain("SYNTHETIC_PRIVATE_KEY"); }
   }
 });
+it("starts from a private config written before tokenizer queuing was introduced", () => {
+  const old = config();
+  const { maxQueuedRequests, ...previousLimits } = old.tokenizerLimits;
+  const parsed = parseMemoryHostConfig({ ...old, tokenizerLimits: previousLimits });
+  expect(parsed.tokenizerLimits).toEqual({ ...previousLimits, maxQueuedRequests });
+});
 it("loads private configuration and treats only a missing file as unconfigured", async () => {
   const root = await directory();
   expect(await readMemoryHostConfig(root)).toBeUndefined();

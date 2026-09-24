@@ -903,6 +903,35 @@ and no synthetic USER. The temporary copied credential directory was removed.
 The original fixed HTTPS entry remained healthy. This is test-resource cleanup,
 not a multi-user rollback or deletion-non-resurrection acceptance result.
 
+### Existing-config upgrade regression (2026-09-24)
+
+Switching the fixed isolated stack from `0.2.41` to the first full-source
+`0.2.42` image exposed a real startup regression: its existing private
+`memory-service.json` had no `tokenizerLimits.maxQueuedRequests`, and the new
+parser rejected it before the HTTP host started. The container restarted
+repeatedly; the original `0.2.41` image was restored and passed HTTPS health.
+The version-1 parser now supplies a bounded queue of eight only when that
+new field is absent. Explicit zero and other invalid values still fail.
+The release manifest was also updated to match root version `0.2.42`.
+
+The repaired complete Dockerfile image `b7a9f62c395f` was built from the
+current source. Its fixed public open-webSearch tag was cloned on the host,
+verified as commit `3094fa558fce35a8373e45ed5a6c43362e206906`, and
+mounted read-only for the last build step after the VM's GitHub proxy returned
+502; the Dockerfile still installed the same tag. The original private config
+and named volumes were left in place. The repaired image started with no
+restart, became healthy at `https://localhost:18711/`, and the Codex in-app
+Browser restored the authenticated session, prior chat, and memory management
+view. In a new chat, MiMo answered `7+5` as `12`, executed `bash ls` and
+reported `uploads`, then read the fixed synthetic `shapes.png` upload and
+identified its red circle, blue square, and yellow triangle in order.
+The repaired source passed `pnpm run check`, the release-manifest check,
+13 targeted tokenizer/config tests and a non-concurrent full Vitest run:
+145 files, 1675 passed, 1 skipped. Screenshots and the sanitized summary are
+in [the upgrade evidence](evidence/issue477-upgrade/). This
+proves the existing-config upgrade and three browser regressions, not the
+remaining dual-user, business OA, full quality matrix, or rollback gates.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)

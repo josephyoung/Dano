@@ -16,6 +16,8 @@ export interface MemoryTokenizerLimits {
   startupTimeoutMs: number;
   maxQueuedRequests: number;
 }
+/** Bounded queue for version-1 private configs created before this field existed. */
+export const DEFAULT_MAX_QUEUED_REQUESTS = 8;
 const key = (model: MemoryModelIdentity) => JSON.stringify([model.provider, model.api, model.id]);
 interface CountRequest {
   id: number;

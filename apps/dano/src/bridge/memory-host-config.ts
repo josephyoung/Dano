@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import type { UserMemoryServices } from "./user-memory-runtime.js";
-import type { MemoryTokenizerBinding, MemoryTokenizerLimits } from "./memory-tokenizer.js";
+import { DEFAULT_MAX_QUEUED_REQUESTS, type MemoryTokenizerBinding, type MemoryTokenizerLimits } from "./memory-tokenizer.js";
 import type { UserMemoryCollectionOptions } from "./user-memory-collection.js";
 import type { MemoryRerankerConfig } from "./memory-reranker.js";
 import { parseMemoryTaskFactConfig, type MemoryTaskFactConfig } from "./memory-task-facts.js";
@@ -131,7 +131,9 @@ export function parseMemoryHostConfig(input: unknown): MemoryHostConfig {
       scheduler: { pollIntervalMs: positive(scheduler.pollIntervalMs), initialBackoffMs, maxBackoffMs,
         maxAttemptsPerPhase: positive(scheduler.maxAttemptsPerPhase), maxOperationsPerTick: positive(scheduler.maxOperationsPerTick) },
       tokenizerLimits: { maxAssetBytes: positive(limits.maxAssetBytes), maxInputBytes: positive(limits.maxInputBytes),
-        startupTimeoutMs: positive(limits.startupTimeoutMs), maxQueuedRequests: positive(limits.maxQueuedRequests) }, tokenizers,
+        startupTimeoutMs: positive(limits.startupTimeoutMs),
+        maxQueuedRequests: limits.maxQueuedRequests === undefined
+          ? DEFAULT_MAX_QUEUED_REQUESTS : positive(limits.maxQueuedRequests) }, tokenizers,
       ...(raw.collection === undefined ? {} : { collection: collectionConfig(raw.collection) }) };
   } catch { throw invalid(); }
 }
