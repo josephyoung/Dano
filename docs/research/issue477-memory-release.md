@@ -765,6 +765,20 @@ and automatic collection still unauthorized. This is one same-owner,
 cross-tab pause/recall/resume observation, not an independent second user or
 the full three-repetition pause and in-flight-save matrix.
 
+The same Browser account then separately authorized automatic collection and
+sent one synthetic stable preference in a new chat, explicitly without a
+`memory_save` request. The management UI showed an automatic-collection
+operation move from processing to ready, with an automatic source. A fresh
+MiMo chat recalled the preference. After revoking collection consent, the UI
+showed automatic collection unauthorized while a fresh chat still recalled
+the previously saved fact. The UI then forgot only that synthetic sentence;
+its source changed to revoked, a new chat answered that it did not know the
+preference, and a separate new chat still recalled an unrelated saved code.
+Long-term memory remained enabled; collection authorization remained revoked.
+The [sanitized Browser summary](evidence/issue477-auto-collection-browser/summary.json)
+records the assertions. This is one real Browser case, not the sensitive-data
+exclusion, inference-filter, in-flight revocation or three-repetition matrix.
+
 The business OA Skill regression was probed without writing to OA. A
 read-only production inventory found the generated “请假申请” Skill and the
 configured OA URL/tenant-key entries; the older documented
@@ -806,10 +820,10 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 |---|---|---|
 | AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords, rebuilt image, dual-entry loader check and one real-service protected Pi CLI save/new-session recall | Complete pair audit and Dano integration repetition |
 | AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
-| AC-04 | Collection filters and consent have automated coverage | Real automatic-collection cases with exclusion evidence |
+| AC-04 | Collection filters and consent have automated coverage; one Browser collection reached ready and was recalled after separate consent | Sensitive-data/inference exclusions, revocation race and fixed repetitions |
 | AC-05/06 | Real USER-key cross-owner search/read/write/export probes, protected file boundary | Two independent authenticated Browser users; project and replay scope; all fixed cases ×3 |
-| AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
-| AC-08 | Browser defaults-off, explicit-only consent, management and one same-owner cross-tab pause/recall/resume flow | All governance transitions, independent two-Session pause, export and blocked-write recovery ×3 |
+| AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, one targeted collected-fact forget and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
+| AC-08 | Browser defaults-off, separate collection consent/revocation, management and one same-owner cross-tab pause/recall/resume flow | All governance transitions, independent two-Session pause, export and blocked-write recovery ×3 |
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and Pi compression; an isolated production-generated leave Skill was discovered and rendered its operation choice and six-field form | Business options/authentication failed; complete OA and final-image regression matrix |
 | AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
@@ -819,10 +833,10 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 |---|---|---|
 | T-01 | Published `0.1.13`, exact Dano lockfile, rebuilt protected image, dual-entry loading twice per entry, and one real-service ordinary Pi CLI save/new-session recall | Full pair audit and repeated functional checks |
 | T-02/03 | Real USER-key isolation probes | Collision/forgery, Peer/project scope and independent Bob Browser across fixed repetitions |
-| T-04/05 | Automated lifecycle/collection tests; selected Browser paths | Full multi-viewer/rebind/branch/dispose and real collection exclusions |
+| T-04/05 | Automated lifecycle/collection tests; one real Browser automatic collection/recall/revocation path | Full multi-viewer/rebind/branch/dispose and collection exclusions |
 | T-06/07 | Actual old `session_unknown` recovery and credential-store replay | All crash windows, rotation, user switch and anonymous transfer on fixed service |
 | T-08 | Real Browser new-chat recall; bounded reranker selection | Short-session extraction, no-result/timeout and model-answer repetitions |
-| T-09/10 | One real-service correction/deletion and replay; defaults-off Browser | Complete correction/forget/pause/restore state matrix ×3 |
+| T-09/10 | Real-service correction/deletion/replay; Browser targeted forget with unrelated recall preserved, defaults-off and cross-tab pause | Complete correction/forget/pause/restore state matrix ×3 |
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; generated leave Skill choice/form rendered in a disposable layer | Working business options/authentication and complete final-image repetition |
 | T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume one-owner replay and current-service two-owner deletion/retry | General old queue, credential/new writer and old-version multi-user reconciliation |
