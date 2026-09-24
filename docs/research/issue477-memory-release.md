@@ -944,10 +944,18 @@ limit, and the exported content held the wrong fact. The
 records both observations and the exact-document cleanup. A retryable VLM
 connection error appeared during extraction; its contribution to latency is
 not yet isolated. The other nine fixed cases were not run against this failed
-candidate, so no p95 is claimed. The published extension currently accepts
-model-generated save text without comparing it with the current user message;
-an independent package regression fix is under test before a new release and
-Dano image rebuild.
+candidate, so no p95 is claimed. The independent package fix was published as
+`@josephyoung/pi-openviking@0.1.14` and locked in Dano `0.2.43`. Its
+`MEMORY_SOURCE_MISMATCH` guard checks the proposed content against the current
+user message before creating an operation. The rebuilt protected image
+`1f1eea87390f` passed package/version inspection, release-manifest check,
+`pnpm run check`, full Vitest (1675 passed, one skipped), and `pnpm run build`.
+In the [same frozen S-01 Browser retest](evidence/issue477-save-ready/verbatim-guard-retest.json),
+MiMo again proposed content that did not match the source; the guard blocked it
+and the save-record list gained no new operation. This establishes the
+fail-closed correction, but S-01 still fails successful-save acceptance and no
+healthy save-ready p95 is established. The remaining fixed cases and release
+gates remain open.
 
 The frozen 20 cross-USER isolation cases ran three times each against the
 real OpenViking public API in the protected local stack. The
@@ -972,7 +980,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 
 | PRD | Current evidence | Missing acceptance |
 |---|---|---|
-| AC-01/02 | Published independent package `0.1.13`, fixed lockfile, two Pi keywords, rebuilt image, dual-entry loader check and one real-service protected Pi CLI save/new-session recall | Complete pair audit and Dano integration repetition |
+| AC-01/02 | Published independent package `0.1.14`, fixed lockfile, two Pi keywords, rebuilt image, dual-entry loader check and one real-service protected Pi CLI save/new-session recall | Complete pair audit and Dano integration repetition |
 | AC-03 | Browser explicit save, ready status/source and new-chat recall | Repeat fixed cases with model-answer review |
 | AC-04 | Collection filters and consent have automated coverage; one Browser collection reached ready and was recalled after separate consent; two synthetic-key chats produced no visible save | Sensitive-data/inference exclusions with observed selector decisions, revocation race and fixed repetitions |
 | AC-05/06 | Frozen 20 cross-USER cases ×3 passed against real OpenViking with forged headers, including isolated Session-ID replay; protected file boundary | Two independent authenticated Browser users, Dano routing and project scope |
@@ -981,11 +989,11 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | AC-09/10 | Old ambiguous queue recovered on real service; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, truthful explicit failure and no duplicate/cross-owner replay |
 | AC-11 | Final-image Browser form, generic Skill, image, bash and Pi compression; an isolated production-generated leave Skill was discovered and rendered its operation choice and six-field form | Business options/authentication failed; complete OA and final-image regression matrix |
 | AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume one-owner replay plus current-service two-owner deletion/retry | Real multi-owner source/revocation and old-version rollback, arbitrary upgrade-window reconciliation |
-| AC-13 | Frozen 80-case dataset; 20 isolation cases ×3 passed against real OpenViking; candidate-7 traced workload had 70/70 semantic recall answers and 30/30 irrelevant omissions; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image has matched on/off cost evidence; first frozen save-ready case **failed** at 173 seconds and wrong fact | Correct and rerun save-ready, other five categories ×3, Dano/Browser isolation and causal latency interpretation |
+| AC-13 | Frozen 80-case dataset; 20 isolation cases ×3 passed against real OpenViking; candidate-7 traced workload had 70/70 semantic recall answers and 30/30 irrelevant omissions; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image has matched on/off cost evidence; first frozen save-ready case **failed** at 173 seconds and wrong fact; rebuilt image blocks the same mismatch before save | Complete successful save-ready cases, other five categories ×3, Dano/Browser isolation and causal latency interpretation |
 
 | Spec test | Current evidence | Missing acceptance |
 |---|---|---|
-| T-01 | Published `0.1.13`, exact Dano lockfile, rebuilt protected image, dual-entry loading twice per entry, and one real-service ordinary Pi CLI save/new-session recall | Full pair audit and repeated functional checks |
+| T-01 | Published `0.1.14`, exact Dano lockfile, rebuilt protected image, dual-entry loading twice per entry, and one real-service ordinary Pi CLI save/new-session recall | Full pair audit and repeated functional checks |
 | T-02/03 | Real USER-key isolation matrix 20×3, including header forgery and Session-ID collision | Dano/Peer/project scope and independent Bob Browser across fixed repetitions |
 | T-04/05 | Automated lifecycle/collection tests; one real Browser automatic collection/recall/revocation path | Full multi-viewer/rebind/branch/dispose and collection exclusions |
 | T-06/07 | Actual old `session_unknown` recovery and credential-store replay | All crash windows, rotation, user switch and anonymous transfer on fixed service |
@@ -994,7 +1002,7 @@ the 60/60 and 30/30 figures above measure selection, not model answers.
 | T-11 | Protected file access denied; real USER-key 403 probes | Full unauthenticated/401/403/native-tool/symlink/env/HTTP matrix |
 | T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; generated leave Skill choice/form rendered in a disposable layer | Working business options/authentication and complete final-image repetition |
 | T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume one-owner replay and current-service two-owner deletion/retry | General old queue, credential/new writer and old-version multi-user reconciliation |
-| T-14 | Five-user, 100-complete-request MiMo candidate-7 run passed semantic recall, injection, wait and token limits in an instrumented disposable container; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image passed matched on/off cost; first frozen save-ready case **failed** | Fix and rerun healthy save-ready p95 and full fixed matrix |
+| T-14 | Five-user, 100-complete-request MiMo candidate-7 run passed semantic recall, injection, wait and token limits in an instrumented disposable container; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image passed matched on/off cost; frozen S-01 still fails successful-save acceptance after source guard | Complete healthy save-ready p95 and full fixed matrix |
 
 The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
 10 irrelevant and 10 authorization cases, each independently repeated three
