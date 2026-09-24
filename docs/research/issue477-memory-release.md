@@ -895,6 +895,14 @@ An earlier concurrent full run was also stopped after startup/timeouts and is
 not counted. This proves the repository test suite, not the outstanding real
 Browser, full evaluation matrix, save-ready, or rollback release gates.
 
+After the isolated evaluation, the shared OpenViking account contained seven
+USERs. Five matched the exact synthetic `eval477_` OA subject → Dano OAuth ID
+→ memory-owner ID derivation. Those five were removed through the official
+single-USER admin endpoint; a fresh listing contained the two original USERs
+and no synthetic USER. The temporary copied credential directory was removed.
+The original fixed HTTPS entry remained healthy. This is test-resource cleanup,
+not a multi-user rollback or deletion-non-resurrection acceptance result.
+
 ### Live #465 PRD/Spec audit (2026-09-24)
 
 Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
