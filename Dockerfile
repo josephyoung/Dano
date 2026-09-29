@@ -2,15 +2,23 @@ FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 # fs-ext builds the memory extension's kernel-backed file locking binding.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
+ARG DANO_APT_MIRROR=
+COPY deploy/apt-bootstrap.sh ./deploy/apt-bootstrap.sh
+RUN sh ./deploy/apt-bootstrap.sh ca-certificates python3 make g++
 ENV COREPACK_HOME=/tmp/corepack
 ENV PNPM_HOME=/tmp/pnpm-home
 ENV PNPM_STORE_DIR=/tmp/pnpm-store
 ENV DANO_DEFAULT_NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/
 ARG NPM_REGISTRY=
 ARG NPM_CONFIG_REGISTRY=
+# Optional build-only proxy trust. Bind a public CA using podman build -v;
+# ARG values do not become runtime image environment variables.
+ARG NODE_EXTRA_CA_CERTS
+ARG NODE_OPTIONS
+ARG COREPACK_NPM_REGISTRY
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
   && npm config set registry "$registry" \
   && npm_config_registry="$registry" corepack enable \
@@ -23,11 +31,12 @@ COPY pnpm-lock.yaml* ./
 RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
   && npm_config_registry="$registry" \
   npm_config_fetch_timeout=600000 \
-  pnpm install --frozen-lockfile=false --store-dir="$PNPM_STORE_DIR" --package-import-method=copy
+  npm_config_nodedir=/usr/local \
+  pnpm install --frozen-lockfile --store-dir="$PNPM_STORE_DIR" --package-import-method=copy
 
 COPY . .
 RUN pnpm run build
-RUN pnpm --store-dir="$PNPM_STORE_DIR" --offline --filter @dano/app --prod deploy /prod/dano
+RUN CI=true pnpm --store-dir="$PNPM_STORE_DIR" --filter @dano/app --prod deploy /prod/dano
 
 FROM node:22-bookworm-slim AS runtime
 
@@ -35,19 +44,25 @@ WORKDIR /app
 ENV DANO_DEFAULT_NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/
 ARG NPM_REGISTRY=
 ARG NPM_CONFIG_REGISTRY=
+ARG NODE_EXTRA_CA_CERTS
+ARG NODE_OPTIONS
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG PIP_CERT
+ARG PIP_INDEX_URL
+ARG DANO_APT_MIRROR=
 RUN registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
   && npm config set registry "$registry" \
   && npm_config_registry="$registry" npm install --global open-websearch@2.1.11
-RUN sed -i 's|https\?://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g; s|https\?://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates bubblewrap curl fd-find git mount python3 python3-venv ripgrep util-linux \
+COPY deploy/apt-bootstrap.sh ./deploy/apt-bootstrap.sh
+RUN sh ./deploy/apt-bootstrap.sh ca-certificates bubblewrap curl fd-find git mount python3 python3-venv ripgrep util-linux \
   && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
-  && chmod 4755 /usr/bin/bwrap \
-  && rm -rf /var/lib/apt/lists/*
+  && chmod 4755 /usr/bin/bwrap
 COPY deploy/python-requirements.txt /app/deploy/python-requirements.txt
 # /usr is readable in the tool sandbox; /opt is restricted to runtime skills.
 RUN python3 -m venv /usr/local/lib/dano-python \
-  && /usr/local/lib/dano-python/bin/pip install --no-cache-dir -r /app/deploy/python-requirements.txt \
+  && /usr/local/lib/dano-python/bin/pip install --no-cache-dir --timeout 120 --retries 3 -r /app/deploy/python-requirements.txt \
   && /usr/local/lib/dano-python/bin/python -c 'import httpx'
 ENV PATH="/usr/local/lib/dano-python/bin:${PATH}"
 ENV NODE_ENV=production
@@ -72,6 +87,11 @@ COPY deploy/system-prompt.mjs ./deploy/system-prompt.mjs
 COPY apps/dano/runtime/skill-seed.mjs ./apps/dano/runtime/skill-seed.mjs
 COPY apps/dano/runtime/product-name.mjs ./apps/dano/runtime/product-name.mjs
 COPY apps/dano/runtime/system-prompt.mjs ./apps/dano/runtime/system-prompt.mjs
+# Build-only Git source routing, used when the pinned public Skill source is
+# mirrored near an isolated builder. Keep it after the dependency layers.
+ARG GIT_CONFIG_COUNT
+ARG GIT_CONFIG_KEY_0
+ARG GIT_CONFIG_VALUE_0
 RUN mkdir -p /app/open-websearch-skill-seed \
   && cd /app/open-websearch-skill-seed \
   && registry="${NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-$DANO_DEFAULT_NPM_REGISTRY}}" \
@@ -98,6 +118,12 @@ CMD ["node", "./dist/server/main.js"]
 # loading Dano; secrets belong in the separately provisioned private config.
 FROM runtime AS protected-runtime
 USER root
+COPY apps/dano/runtime/replay-memory-deletions.mjs ./replay-memory-deletions.mjs
+COPY apps/dano/runtime/private-recovery-path.mjs ./private-recovery-path.mjs
+COPY apps/dano/runtime/bootstrap-memory-recovery.mjs ./bootstrap-memory-recovery.mjs
+COPY apps/dano/runtime/reconcile-memory-recovery.mjs ./runtime/reconcile-memory-recovery.mjs
+COPY apps/dano/runtime/replace-memory-user-key.mjs ./runtime/replace-memory-user-key.mjs
+COPY apps/dano/runtime/private-recovery-path.mjs ./runtime/private-recovery-path.mjs
 ENTRYPOINT ["node", "./dist/server/protected-main.js"]
 CMD []
 

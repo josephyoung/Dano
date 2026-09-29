@@ -8,6 +8,7 @@ import type { MemoryCredentialStore } from "./memory-credential-store.js";
 import type { MemoryProvisioner } from "./memory-provisioner.js";
 import { MemoryIdentityService } from "./memory-identity-service.js";
 import { LazyMemoryClient } from "./lazy-memory-client.js";
+import type { MemoryReranker } from "./memory-reranker.js";
 import type { ProtectedSessionTools } from "./protected-session-tools.js";
 import type { UserMemoryControls, UserMemoryStatus } from "./user-memory-controls.js";
 import type { UserContext } from "./user-context.js";
@@ -17,6 +18,8 @@ import { MemoryUserProvenance } from "./memory-user-provenance.js";
 import { UserMemoryCollection, type UserMemoryCollectionOptions } from "./user-memory-collection.js";
 import { MemoryTaskFacts, type ProviderTaskFactInput } from "./memory-task-facts.js";
 import { memoryWriterClassifier } from "./memory-writer-classifier.js";
+import { MemoryRecoveryJournal, RecoveryStateStore } from "./memory-recovery-journal.js";
+import type { GovernanceStateStore } from "@josephyoung/pi-openviking/host";
 
 type SchedulerPolicy = Omit<ConstructorParameters<typeof DeliveryScheduler>[0], "store" | "delivery">;
 export interface UserMemoryServices {
@@ -28,14 +31,16 @@ export interface UserMemoryServices {
   maxContentBytes: number;
   policyVersion: string;
   policy: MemoryExtensionOptions["policy"];
+  reranker?: MemoryReranker;
   scheduler: SchedulerPolicy;
   collection?: UserMemoryCollectionOptions;
+  recoveryDirectory?: string;
 }
 
 /** One authenticated user's shared authorization/outbox, with per-session
  * extension factories. Construct only after supervisor isolation is verified. */
 export class UserMemoryRuntime implements UserMemoryControls {
-  readonly #store: FileStateStore;
+  readonly #store: GovernanceStateStore;
   readonly #delivery: MemoryDelivery;
   readonly #scheduler: DeliveryScheduler;
   readonly #governance: MemoryGovernanceService;
@@ -55,7 +60,7 @@ export class UserMemoryRuntime implements UserMemoryControls {
   #closing?: Promise<void>;
   #captureAuthorizationRead?: ReturnType<FileStateStore["read"]>;
 
-  private constructor(store: FileStateStore, client: LazyMemoryClient, options: UserMemoryServices,
+  private constructor(store: GovernanceStateStore, client: LazyMemoryClient, options: UserMemoryServices,
     context: UserContext, stateDirectory: string, sessionRoot?: string) {
     this.#store = store; this.#client = client; this.#options = options;
     this.#context = context; this.#stateDirectory = stateDirectory;
@@ -80,9 +85,13 @@ export class UserMemoryRuntime implements UserMemoryControls {
     await worker.assertIsolated();
     const owner = await options.owners.get(context);
     const identity = new MemoryIdentityService({ ...options, assertToolIsolation: () => worker.assertIsolated() });
+    const baseStore = new FileStateStore({ owner, directory: join(stateDirectory, "memory"), policyVersion: options.policyVersion });
+    const journal = options.recoveryDirectory
+      ? await MemoryRecoveryJournal.open(options.recoveryDirectory, owner, await baseStore.read()) : undefined;
+    const store = journal ? new RecoveryStateStore(baseStore, journal) : baseStore;
     const client = new LazyMemoryClient({ owner, baseUrl: options.baseUrl, timeoutMs: options.requestTimeoutMs,
-      connect: () => identity.connect(context), assertToolIsolation: () => worker.assertIsolated() });
-    const store = new FileStateStore({ owner, directory: join(stateDirectory, "memory"), policyVersion: options.policyVersion });
+      connect: () => identity.connect(context), assertToolIsolation: () => worker.assertIsolated(), reranker: options.reranker,
+      journal });
     const configured = options.collection;
     const taskFacts = configured?.taskFacts ? new MemoryTaskFacts({ ...configured.taskFacts, store,
       userId: context.user.id, policyVersion: configured.policyVersion, timeoutMs: configured.lifecycleTimeoutMs }) : undefined;
@@ -106,14 +115,27 @@ export class UserMemoryRuntime implements UserMemoryControls {
     const runtime = new UserMemoryRuntime(store, client, { ...options, collection }, context, join(stateDirectory, "memory"), sessionRoot);
     runtime.#taskFacts = taskFacts;
     try {
-      // Runtime creation completes before this user's authenticated controls or
-      // sessions are published by UserRuntimeRegistry. Invalidate an obsolete
-      // grant before either scheduler can claim work under the new host policy.
+      // Initialize untouched accounts before controls/sessions or schedulers
+      // become visible. One durable transaction keeps both defaults together;
+      // existing pause/collection settings are never replaced on restart.
       const state = await store.read();
       runtime.#retired = Boolean(state.retirement);
-      if (state.authorization.automaticCollection && (!collection
-        || state.authorization.collectionConsent?.policyVersion !== collection.policyVersion)) {
+      if (!runtime.#retired && state.revision === 0) {
+        const boundaries = await runtime.#collection?.sessions.boundaries(
+          AbortSignal.timeout(collection!.lifecycleTimeoutMs)) ?? [];
+        await store.transact(current => {
+          if (current.revision !== 0 || current.retirement) return;
+          const effectiveAt = new Date().toISOString();
+          current.authorization = { ...current.authorization, enabled: true,
+            epoch: current.authorization.epoch + 1, effectiveAt,
+            automaticCollection: Boolean(collection),
+            ...(collection ? { collectionConsent: { policyVersion: collection.policyVersion,
+              scope: null, revision: 1, effectiveAt, boundaries } } : {}) };
+        });
+      } else if (state.authorization.automaticCollection && !collection) {
         await runtime.#delivery.revokeCollection();
+      } else if (!runtime.#retired && state.authorization.enabled) {
+        await runtime.#refreshCollectionPolicy();
       }
       runtime.#scheduler.start();
       runtime.#governanceScheduler.start();
@@ -143,11 +165,16 @@ export class UserMemoryRuntime implements UserMemoryControls {
       wakeDelivery: () => { if (!this.#closed) this.#scheduler.wake(); } });
     return ((pi) => {
       pi.on("agent_settled", (_event, ctx) => {
+        if (this.#closed) return;
+        let sessionManager: typeof ctx.sessionManager;
+        // Pi can settle an aborted request after its context was invalidated.
+        // Do not access that context or discard another session's pending input.
+        try { sessionManager = ctx.sessionManager; } catch { return; }
         this.provenance.settle({
-          getSessionId: () => ctx.sessionManager.getSessionId(),
-          getEntry: id => ctx.sessionManager.getEntry(id),
-          getEntries: () => ctx.sessionManager.getEntries(),
-          getBranch: id => ctx.sessionManager.getBranch(id),
+          getSessionId: () => sessionManager.getSessionId(),
+          getEntry: id => sessionManager.getEntry(id),
+          getEntries: () => sessionManager.getEntries(),
+          getBranch: id => sessionManager.getBranch(id),
           appendCustomEntry: (type, data) => { pi.appendEntry(type, data); return ""; },
         });
       });
@@ -187,6 +214,7 @@ export class UserMemoryRuntime implements UserMemoryControls {
         this.#assertOpen();
         if (!state.authorization.enabled) await this.#delivery.enable(this.#options.policyVersion,
           await this.#collection?.sessions.boundaries(AbortSignal.timeout(this.#options.collection!.lifecycleTimeoutMs)) ?? []);
+        await this.#refreshCollectionPolicy();
       } else await this.#delivery.pause();
     });
     this.#settings = pending.catch(() => {});
@@ -212,7 +240,18 @@ export class UserMemoryRuntime implements UserMemoryControls {
       } } : {}) };
   }
 
-  /** Separate consent, bound to the policy actually shown by the authenticated UI. */
+  async #refreshCollectionPolicy(): Promise<void> {
+    const configuration = this.#options.collection;
+    if (!configuration || !this.#collection) return;
+    const state = await this.#store.read();
+    if (state.authorization.enabled && state.authorization.automaticCollection
+      && state.authorization.collectionConsent?.policyVersion !== configuration.policyVersion) {
+      await this.#delivery.authorizeCollection({ policyVersion: configuration.policyVersion, scope: null,
+        boundaries: await this.#collection.sessions.boundaries(AbortSignal.timeout(configuration.lifecycleTimeoutMs)) });
+    }
+  }
+
+  /** Authenticated settings switch; policy binding is independent of user consent. */
   setAutomaticCollection(enabled: boolean, policyVersion?: string): Promise<void> {
     if (typeof enabled !== "boolean" || (enabled && (!policyVersion || typeof policyVersion !== "string"))
       || (!enabled && policyVersion !== undefined)) return Promise.reject(new Error("INVALID_MEMORY_SETTING"));

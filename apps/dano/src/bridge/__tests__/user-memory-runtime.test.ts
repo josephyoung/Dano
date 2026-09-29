@@ -52,7 +52,33 @@ function bind(profile: ProtectedSessionTools, worker: Awaited<ReturnType<Protect
   return { handlers, tools };
 }
 
-it("does not record user provenance without a separate automatic-collection grant", async () => {
+it("ignores late settlement from an invalidated pi context without losing another session's provenance", async () => {
+  const h = await harness();
+  const profile = await h.start();
+  const oldSession = SessionManager.inMemory();
+  const activeSession = SessionManager.inMemory();
+  const cancelOld = h.runtime().provenance.capture(oldSession, "old input", "old input");
+  h.runtime().provenance.capture(activeSession, "active input", "active input");
+  oldSession.appendMessage({ role: "user", content: "old input", timestamp: Date.now() });
+  activeSession.appendMessage({ role: "user", content: "active input", timestamp: Date.now() });
+  const settled: Array<(event: unknown, context: unknown) => unknown> = [];
+  const pi = {
+    on(name: string, handler: (event: unknown, context: unknown) => unknown) {
+      if (name === "agent_settled") settled.push(handler);
+    },
+    registerTool() {},
+    appendEntry(type: string, data: unknown) { activeSession.appendCustomEntry(type, data); },
+  } as unknown as ExtensionAPI;
+  profile.createMemoryExtension!(h.worker.workspace, h.worker)(pi);
+  const staleContext = { get sessionManager(): never { throw new Error("This extension ctx is stale after session replacement or reload."); } };
+  for (const handler of settled) await expect(Promise.resolve().then(() => handler({}, staleContext))).resolves.toBeUndefined();
+  cancelOld();
+  for (const handler of settled) await handler({}, { sessionManager: activeSession });
+  expect(oldSession.getEntries().filter(entry => entry.type === "custom")).toHaveLength(0);
+  expect(activeSession.getEntries().filter(entry => entry.type === "custom")).toHaveLength(1);
+});
+
+it("does not record user provenance without a configured collector", async () => {
   const h = await harness();
   const profile = await h.start();
   const session = SessionManager.inMemory();
@@ -117,9 +143,10 @@ it("still rejects and releases a profile when tool isolation cannot be verified"
   expect(h.services.owners.get).not.toHaveBeenCalled();
 });
 
-it("keeps default-disabled sessions offline and does not expose private fields in status", async () => {
+it("keeps explicitly paused sessions offline and does not expose private fields in status", async () => {
   const h = await harness();
   const profile = await h.start();
+  await profile.memory!.setEnabled(false);
   const session = bind(profile, h.worker);
   const messages = [{ role: "user", content: "ordinary chat", timestamp: Date.now() }];
   session.handlers.get("before_agent_start")!({ prompt: "ordinary chat" });
@@ -131,7 +158,7 @@ it("keeps default-disabled sessions offline and does not expose private fields i
   expect(h.services.credentials.read).not.toHaveBeenCalled();
   expect(h.services.provisioner.provision).not.toHaveBeenCalled();
   expect(await h.runtime().status()).toEqual({ enabled: false, automaticCollection: false,
-    effectiveAt: expect.any(String), policyVersion: "v1", revision: 0 });
+    effectiveAt: expect.any(String), policyVersion: "v1", revision: 2 });
 });
 
 it("shares authorization between sessions and preserves ordinary context when the service is offline", async () => {
@@ -148,6 +175,36 @@ it("shares authorization between sessions and preserves ordinary context when th
   second.handlers.get("before_agent_start")!({ prompt: "query" });
   expect(await second.handlers.get("context")!({ messages })).toEqual({ messages });
   expect(h.services.provisioner.provision).toHaveBeenCalledTimes(1);
+});
+
+it("keeps export, targeted deletion and clear available while long-term memory is paused", async () => {
+  const h = await harness();
+  const profile = await h.start();
+  const uri = "viking://user/alice/memories/fact.md";
+  const documents = new Map([[uri, "fact"]]);
+  vi.spyOn(LazyMemoryClient.prototype, "listMemoryDocuments")
+    .mockImplementation(async () => [...documents.keys()].sort());
+  vi.spyOn(LazyMemoryClient.prototype, "readMemory")
+    .mockImplementation(async value => documents.get(value)!);
+  vi.spyOn(LazyMemoryClient.prototype, "memoryDocumentSize").mockResolvedValue(4);
+  vi.spyOn(LazyMemoryClient.prototype, "readMemoryLimited").mockResolvedValue("fact");
+  const remove = vi.spyOn(LazyMemoryClient.prototype, "removeMemory")
+    .mockImplementation(async value => { documents.delete(value); });
+  const clear = vi.spyOn(LazyMemoryClient.prototype, "clearMemoryScope").mockResolvedValue(undefined);
+
+  await profile.memory!.setEnabled(true);
+  await profile.memory!.setEnabled(false);
+  expect(await profile.memory!.status()).toMatchObject({ enabled: false, automaticCollection: false });
+  expect(await profile.memory!.governance().exportPage(10)).toMatchObject({
+    items: [{ uri, content: "fact" }],
+  });
+  expect((await profile.memory!.governance().forget(uri, "fact")).status).toBe("complete");
+  expect(remove).toHaveBeenCalledOnce();
+  expect(documents.size).toBe(0);
+  const receipt = await profile.memory!.governance().clear();
+  expect(receipt.status).toBe("complete");
+  expect(clear).toHaveBeenCalledOnce();
+  expect(await profile.memory!.status()).toMatchObject({ enabled: false, automaticCollection: false });
 });
 
 it("restores local authorization without needing management access", async () => {
@@ -283,11 +340,11 @@ it("serializes repeated enables without creating multiple consent boundaries", a
   expect((await h.runtime().status()).revision).toBe(1);
 });
 
-it("rejects malformed settings without enabling memory", async () => {
+it("rejects malformed settings without changing the enabled default", async () => {
   const h = await harness();
   await h.start();
   await expect(h.runtime().setEnabled("false" as unknown as boolean)).rejects.toThrow("INVALID_MEMORY_SETTING");
-  expect((await h.runtime().status()).enabled).toBe(false);
+  expect((await h.runtime().status()).enabled).toBe(true);
 });
 
 async function contentHarness() {
@@ -340,7 +397,49 @@ function configureCollection(services: UserMemoryServices) {
       leaseMs: 5000, initialBackoffMs: 50, maxBackoffMs: 100, maxAttempts: 2, maxRequestsPerBatch: 5 } };
 }
 
-it("binds provider fact capture to the authenticated runtime grant and disposal", async () => {
+it("atomically enables untouched accounts and collection without remote provisioning or a settings action", async () => {
+  const h = await harness(); configureCollection(h.services);
+  const first = await h.start();
+  expect(await first.memory!.status()).toMatchObject({ enabled: true, automaticCollection: true,
+    revision: 1, collection: { consent: { policyVersion: "collection-v1", revision: 1 } } });
+  expect(h.services.provisioner.provision).not.toHaveBeenCalled();
+  const session = SessionManager.inMemory();
+  await first.captureMemoryInput!(session, "I prefer concise reports.", "I prefer concise reports.");
+  session.appendMessage({ role: "user", content: "I prefer concise reports.", timestamp: Date.now() });
+  h.runtime().provenance.settle(session);
+  expect(session.getEntries().filter(entry => entry.type === "custom")).toHaveLength(1);
+  await first.dispose!();
+  const second = await h.start();
+  expect(await second.memory!.status()).toMatchObject({ enabled: true, automaticCollection: true, revision: 1 });
+});
+
+it("preserves explicit pause and collection opt-out across restart and policy updates", async () => {
+  const h = await harness(); configureCollection(h.services);
+  const first = await h.start();
+  await first.memory!.setAutomaticCollection(false);
+  await first.memory!.setEnabled(false);
+  await first.dispose!();
+  h.services.collection!.policyVersion = "collection-v2";
+  const second = await h.start();
+  expect(await second.memory!.status()).toMatchObject({ enabled: false, automaticCollection: false });
+  await second.memory!.setEnabled(true);
+  expect(await second.memory!.status()).toMatchObject({ enabled: true, automaticCollection: false });
+});
+
+it("refreshes a paused collector's policy on resume without collecting paused history", async () => {
+  const h = await harness(); configureCollection(h.services);
+  const first = await h.start();
+  await first.memory!.setEnabled(false);
+  await first.dispose!();
+  h.services.collection!.policyVersion = "collection-v2";
+  const second = await h.start();
+  expect(await second.memory!.status()).toMatchObject({ enabled: false, automaticCollection: true });
+  await second.memory!.setEnabled(true);
+  expect(await second.memory!.status()).toMatchObject({ enabled: true, automaticCollection: true,
+    collection: { consent: { policyVersion: "collection-v2" } } });
+});
+
+it("binds default provider fact capture to authenticated settings and disposal", async () => {
   const h = await harness(); configureCollection(h.services); h.context.user.id = oauthUserId("oa-alice");
   h.services.collection!.taskFacts = { key: Buffer.alloc(32, 9), config: { maxResponseBytes: 8192, maxFactBytes: 1024,
     contracts: [{ id: "report", method: "GET", path: "/report", success: { path: ["code"], equals: 0 },
@@ -349,21 +448,19 @@ it("binds provider fact capture to the authenticated runtime grant and disposal"
   const input = { toolName: "provider_request" as const, toolCallId: "call", loginSessionBound: true,
     request: { method: "GET", path: "/report" }, response: { ok: true as const, status: 200, headers: {},
       body: JSON.stringify({ code: 0, data: { owner: "oa-alice", reference: "REPORT-42" } }) } };
-  expect(await profile.captureTaskFact!(input)).toBeUndefined();
-  await profile.memory!.setEnabled(true);
-  expect(await profile.captureTaskFact!(input)).toBeUndefined();
-  await profile.memory!.setAutomaticCollection(true, "collection-v1");
   expect(await profile.captureTaskFact!(input)).toMatchObject({ data: expect.stringContaining("REPORT-42"), signature: expect.any(String) });
   await profile.memory!.setAutomaticCollection(false);
   expect(await profile.captureTaskFact!(input)).toBeUndefined();
   await profile.dispose!(); expect(await profile.captureTaskFact!(input)).toBeUndefined();
 });
 
-it("requires a separate current-policy grant and preserves its scope across pause/resume and revocation", async () => {
+it("preserves collection boundaries across explicit enable, pause/resume and disable", async () => {
   const h = await harness(); configureCollection(h.services);
   const profile = await h.start();
   const owner = await h.services.owners.get(h.context);
   const store = new FileStateStore({ owner, directory: join(profile.memoryStateDirectory!, "memory"), policyVersion: "v1" });
+  await h.runtime().setAutomaticCollection(false);
+  await h.runtime().setEnabled(false);
   const session = SessionManager.create(h.workspace, h.sessionRoot);
   const sessions = new CollectionSessionRegistry({ store, sessionRoot: h.sessionRoot });
   await sessions.register(session);
@@ -442,7 +539,7 @@ for (const boundary of ["credential", "isolation"] as const) it(`rechecks ${boun
   expect(h.services.provisioner.provision).not.toHaveBeenCalled();
 });
 
-for (const change of ["policy", "unconfigured"] as const) it(`invalidates obsolete collection consent before schedulers start: ${change}`, async () => {
+for (const change of ["policy", "unconfigured"] as const) it(`refreshes active collection policy before schedulers start: ${change}`, async () => {
   const deliveryStart = vi.spyOn(DeliveryScheduler.prototype, "start").mockImplementation(() => {});
   const collectionStart = vi.spyOn(CollectionScheduler.prototype, "start").mockImplementation(() => {});
   const h = await harness(); configureCollection(h.services);
@@ -465,9 +562,10 @@ for (const change of ["policy", "unconfigured"] as const) it(`invalidates obsole
   deliveryStart.mockClear(); collectionStart.mockClear();
   let entered = false, release!: () => void;
   const fence = new Promise<void>(resolve => { release = resolve; });
-  const revoke = MemoryDelivery.prototype.revokeCollection;
-  vi.spyOn(MemoryDelivery.prototype, "revokeCollection").mockImplementationOnce(async function (this: MemoryDelivery) {
-    entered = true; await fence; await revoke.call(this);
+  const method = change === "policy" ? "authorizeCollection" : "revokeCollection";
+  const original = MemoryDelivery.prototype[method];
+  vi.spyOn(MemoryDelivery.prototype, method).mockImplementationOnce(async function (this: MemoryDelivery, ...args: any[]) {
+    entered = true; await fence; await (original as Function).apply(this, args);
   });
   const creating = h.start();
   try {
@@ -477,14 +575,13 @@ for (const change of ["policy", "unconfigured"] as const) it(`invalidates obsole
   } finally { release(); }
   await creating;
   const state = await store.read();
-  expect(state.authorization).toMatchObject({ enabled: true, automaticCollection: false });
+  expect(state.authorization).toMatchObject({ enabled: true, automaticCollection: change === "policy" });
   expect(state.operations[automatic.id]).toMatchObject({ phase: "blocked_by_pause" });
   expect(state.operations[automatic.id]!.payload).toBeUndefined();
   expect(state.operations[explicit.id]).toMatchObject({ phase: "queued", payload: "explicit fact" });
   expect(state.operations[inflight.id]).toMatchObject({ phase: "message_unknown", payload: "inflight fact" });
   expect(deliveryStart).toHaveBeenCalledOnce();
   if (change === "policy") {
-    await h.runtime().setAutomaticCollection(true, "collection-v2");
     expect((await store.read()).authorization.collectionConsent!.revision).toBeGreaterThan(auth.collectionConsent!.revision);
     expect((await store.read()).operations[automatic.id]!.phase).toBe("blocked_by_pause");
   }

@@ -13,8 +13,9 @@ a new supervisor's host-state root with configuration: fresh worker identity
 initialization checks that associated data roots are empty. The configuration
 path belongs in an administrator launch profile, not in model parameters.
 
-The version-1 schema requires all of the following; there are no secret or
-policy defaults:
+The version-1 schema requires all of the following. Secrets and policy
+settings have no defaults; the tokenizer queue is the sole compatibility
+default for private configs created before Dano 0.2.42:
 
 - OpenViking origin, account ID and management key.
 - A 32-byte credential encryption key encoded as 64 hexadecimal characters,
@@ -23,8 +24,13 @@ policy defaults:
 - Request deadline, maximum displayed content bytes and policy version.
 - Save payload limit, recall timeout, token budget, result count and score threshold.
 - Scheduler polling, backoff, retry and per-tick operation limits.
-- Tokenizer asset/input limits, startup deadline and one or more explicit model
-  bindings to local tokenizer/config paths and SHA-256 hashes.
+- Tokenizer asset/input limits, startup deadline, and one or more explicit
+  model bindings to local tokenizer/config paths and SHA-256 hashes. The
+  `maxQueuedRequests` bound per model defaults to 8 only when omitted by an
+  older private config; an explicit value must be positive. Set the queue bound
+  at least as high as the expected
+  simultaneous recalls minus one. Requests still obey their individual recall
+  deadlines; a full queue omits recall without blocking ordinary chat.
 
 Unknown fields, duplicate model bindings, malformed keys, unsafe asset paths,
 nonpositive limits and inverted retry bounds are rejected. Tokenizer functions,
@@ -44,8 +50,8 @@ installation paths are not granted access by this projection.
 
 The private reader and parser have automated coverage for normal reads,
 configuration absence, corrupt input, permission violations, symlinks and hard
-links. Runtime service construction and protected-host startup wiring now use
-the published and pinned extension `0.1.5`. The supervisor's optional
+links. Runtime service construction and protected-host startup wiring use
+the published and pinned extension `0.1.13`. The supervisor's optional
 `memoryConfigDirectory` supplies only a private path; the non-root host reads
 the configuration, constructs owner/credential/provisioning services and starts
 the explicitly configured tokenizer workers. It composes these services with
@@ -54,17 +60,23 @@ The user runtime now drains the active delivery tick after settling its network
 client before releasing the worker. There is no local drain timeout that could
 be mistaken for completed persistence. Supervisor-level forced termination must
 still be treated as crash recovery, not a successful drain.
-Startup does not turn memory on, does not create remote identities and does not establish a
-production deployment or completed #465 acceptance.
+Startup initializes untouched authenticated accounts with memory enabled, without
+creating remote identities. Existing pause/collection settings remain unchanged.
+This does not establish production deployment or completed #465 acceptance.
 
 ## Optional automatic collection
 
 Add `collection` only when the protected deployment has a configured selector
-model. Omitting it preserves explicit memory without offering a new automatic
-grant. Configuration does not grant user consent: both main memory and the
-separate automatic switch still default off. Changing `collection.policyVersion`
-requires a new user grant. Keep that version tied to the reviewed selection
-policy, including any future trusted task-fact adapters.
+model. Omitting it preserves explicit memory without enabling collection.
+Untouched authenticated accounts default to memory on and, when configured,
+collection on in one durable transaction; there is no consent prompt. The browser exposes memory management only;
+manual enable/pause and collection controls are temporarily hidden. Trusted-host
+lifecycle controls remain available.
+Existing explicit pause or collection opt-out is preserved across restart and
+upgrade. Changing `collection.policyVersion` binds active collection to the new
+policy before schedulers start and stops old unsent automatic work. A paused
+collector binds the new policy on resume, using a fresh source boundary. Keep
+that version tied to the reviewed selection policy and trusted task-fact adapters.
 
 Example collection block (budgets are explicit administrator choices):
 
@@ -114,7 +126,8 @@ teardown. Model/provider errors never become browser-visible configuration.
 Keep this configuration in the protected memory file, never a Skill or user
 workspace. Without an approved contract, provider results remain excluded.
 Add or change a contract only with a new `collection.policyVersion`, so existing
-consent is invalidated before the new collector starts.
+active collection is rebound before the new collector starts, without
+reenabling a user-disabled collector.
 
 The following is a **synthetic contract**, not a shipped OA route. Replace it
 only after verifying the provider's actual response semantics:

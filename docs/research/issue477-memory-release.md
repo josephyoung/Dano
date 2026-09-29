@@ -1,0 +1,1950 @@
+# Issue 477: release and acceptance record
+
+## Fixed candidate
+
+The candidate manifest is `deploy/memory-release.json`; the Dano image build
+uses a frozen pnpm lockfile and an exact npm dependency. On 2026-09-23, the
+official `ghcr.io/volcengine/openviking:v0.4.20` multi-platform index resolved
+to `sha256:b9827753d035f4157b5b318865907fd18f738924ad6398c86feb1182f209825b`.
+Its Linux arm64 manifest was
+`sha256:d1f3730128f3bde654e7996a88909cb47e4ec08d407806a464da5d91aa64c870`
+and amd64 manifest was
+`sha256:571fb4e12c66365d3552464617cc9aee8edbdec63e0f7d3ced3beb19db15b742`.
+The isolated rootful Podman VM is Linux arm64; its pulled image inspection
+confirmed the index digest, platform and upstream entrypoint.
+
+The candidate overlay `deploy/compose/memory.yml` mounts protected config,
+model asset and persistent data separately, keeps ports 1933/8080 unpublished,
+and keeps the model-provider egress separate from Dano's internal memory
+network. Its independent official llama.cpp `b11118` image is pinned to index
+`sha256:fb8f521cdfee1b763a6ef0d6633922e780c1393c03b49945526550cf55010343`.
+The GGUF checksum is
+`ab9b81d9cd329c712eee379cf0068eabe6a5e2a01d0def61535eba9384085e2c`.
+`node scripts/check-memory-release.mjs` and its deployment mode passed with a
+private synthetic test configuration. Full Compose interpolation passed without
+printing its secret environment.
+
+## Executed official-image probe
+
+The first isolated container used the prior, locally successful GGUF
+`embedding.dense.provider=local` configuration. Its official image reported
+that `llama-cpp-python` was absent, and `/health` did not become ready. This is
+a real deployment incompatibility, not an OpenViking API failure. The container
+was stopped. The candidate uses an independently pinned upstream llama.cpp
+Embedding service. It returned a real 512-dimensional vector for a synthetic
+Chinese query. The first OpenViking start with this service also showed that
+Podman-injected HTTP proxy variables intercepted internal DNS; the overlay now
+sets `NO_PROXY`/`no_proxy` for the internal service names, with a deployment
+override for any model-provider hostname that needs direct TLS. The rebuilt
+OpenViking service answered its internal `/health` with HTTP 200. A patched
+private OpenViking image or runtime `pip install` is not used.
+
+The real, isolated model probe then created a synthetic account and USER key,
+wrote one preference message, committed it, and observed the task finish in
+30.2 seconds. A USER-scoped search found both the synthetic code word and
+Simplified-Chinese preference. The probe used MiMo-v2.5 for extraction and the
+512-dimensional local Embedding service; it printed status only and stored its
+test USER key in the mode-0600 isolated data volume. This is one functional
+sample, not the fixed evaluation set or p95/cost gate.
+
+## Clean Dano/Browser probe and upstream release blocker
+
+A second isolated Compose project, `dano477-clean`, started from empty Dano and
+OpenViking volumes, with the official OpenViking and llama.cpp images and the
+candidate Dano image. HTTPS `https://localhost:18711/` used the persistent
+trusted localhost certificate. The existing Codex in-app Browser completed
+production-OA SSO into this isolated Dano account. Both memory switches were
+initially off. Explicit memory consent left automatic collection off. A real
+MiMo-v2.5 `memory_save` moved from processing to ready; a new browser chat
+recalled the synthetic code word `青松47`. The management UI showed source,
+timestamp and current status.
+
+This probe exposed two release blockers in `pi-openviking@0.1.8`:
+
+1. One explicit save produced two documents. Correcting the code word removed
+   the unrelated language-preference document because both shared the same
+   upstream source session. The old extension lacked a durable copy of that
+   independent document before source removal. An isolated public OpenViking
+   API probe confirmed that `content/write` can recreate the missing user-bound
+   document, and a local extension change now stages a bounded, classified
+   preservation plan before deleting the source. A unit test covers a lost
+   deletion reply, restart and unrelated-document restoration. The temporary
+   image then corrected `银杏93→银杏94` while preserving the separate Simplified
+   Chinese preference document. Its initial source URI still contained the old
+   code word, so the candidate now relocates exclusive retained documents to
+   opaque user-bound URIs and labels their source as preserved after correction.
+   A further isolated real-service correction of `松柏95→松柏96` completed and
+   relocated two documents, including the independent language preference.
+   The Dano image pinned to published 0.1.9 displayed the preserved source
+   status and the two opaque document URIs in the real Browser. This revealed
+   another correction flaw: the extracted document title still said `松柏95`
+   although its body said `松柏96`. A new chat using MiMo answered the current
+   code correctly but explicitly identified the conflicting old title. The
+   0.1.10 extension guard rejects such a partial correction before any remote
+   mutation and requires selecting a complete passage. PR #8 was merged and
+   published. A full-content correction then exposed a second issue: moving
+   the document URI again left an earlier completed job's source reference
+   stale, so the task safely remained in `applying`. The local 0.1.11 candidate
+   updates historical URI lineage. In the real isolated service the persisted
+   task recovered to complete after restart, the browser refused a subsequent
+   narrow `松柏96→松柏97` edit, and full-content correction completed. A fresh
+   MiMo chat answered only `松柏97`, with no conflicting old memory. The
+   independent Simplified-Chinese preference remained in export. PR #9 was
+   merged and 0.1.11 appeared in the npm registry. The fixed image built and
+   its running package version was confirmed as 0.1.11 with Pi keywords. The
+   in-app Browser showed the current `松柏97` document and independently
+   preserved language preference in anonymous owner-bound URIs.
+2. A second save's OpenViking `session_commit` task completed and produced one
+   update, but the old extension stayed at processing. It searched the original
+   prompt with a result limit equal to the one changed document; an older
+   related memory could rank first indefinitely. A real public API probe found
+   the changed document through a search targeted at its validated USER URI.
+   The local extension change uses that search for ready verification. The
+   long retry period exhausted the configured bounded attempts before the
+   change was running; local code now performs one read-only reconciliation
+   of such exhausted processing tasks when a user runtime restarts. It never
+   replays the original append or commit. In the real Browser, the previously
+   blocked task changed to **ready** at 20:00:16 after the temporary 0.1.9
+   image restarted, and its content was visible in the management list.
+
+The extension fixes were merged as pi-openviking PRs #7, #8 and #9. Versions
+0.1.9, 0.1.10 and 0.1.11 were published through npm Trusted Publisher with
+provenance. All 250 package tests passed. The complete Dano suite passed with
+Node 22 and the tested Python environment at reduced Vitest concurrency:
+142 files, 1651 passed and one skipped. A first run with Node 24 failed to
+load the Node 22 `fs-ext` native module; a Node 22 run at default parallelism
+had one release-gate timeout, which passed alone and in the bounded full run.
+With the tested Python virtual environment on `PATH`, Dano's full suite passed
+142 files, 1651 tests and one skip; the host's default Python lacked `httpx`.
+
+## Stopped-stack recovery and post-snapshot deletion
+
+On 2026-09-23, the isolated `dano477-clean` stack was stopped before exporting
+all six named volumes and the private deploy-control directory. The private
+snapshot manifest at `/private/tmp/dano477-release-backup.iHNEgV/manifest.json`
+records SHA-256, byte length and entry count for each archive; the snapshot
+directory is mode 0700 and archives are mode 0600. The protected config archive
+includes the OA/client configuration, TLS trust material and memory-service
+configuration; the protected data archive includes encrypted USER credentials,
+owner state, queue and source mappings. This is a local synthetic test backup,
+not a production backup.
+
+After the snapshot, a real in-app Browser action forgot the full synthetic
+`松柏97` profile document. The completed governance job removed two old document
+URIs and its source session while preserving the independent Simplified-Chinese
+preference. A separate post-snapshot deletion ledger and owner-state overlay
+were saved outside the older snapshot. The ledger records owner, removed URIs,
+source IDs, expected current documents and the retained document body. It
+contains no API key or removed fact text. The state overlay SHA-256 was checked
+after import into a second set of volumes named `dano477-restore-*`.
+
+The older OpenViking archive was imported unchanged into the second volume:
+both deleted URI files were present before replay. Only internal OpenViking and
+Embedding services were started. With Dano and nginx still stopped, a USER-key
+client removed the old source and URIs, rewrote the retained preference, and
+checked the three expected public documents. OpenViking's physical Markdown
+file includes an internal `MEMORY_FIELDS` trailer; public read/write returns
+only the document body, which the replay used. A first attempt compared the
+physical trailer to the public readback and failed safely before Dano start;
+the corrected idempotent replay passed. A USER-scoped recall of the forgotten
+code returned no deleted fact. The replay result reported two deleted URIs,
+one removed source, one preserved document and no recalled deleted fact.
+
+Only after this readback were restored Dano and nginx started at the fixed
+`https://localhost:18711/` entry. Browser management showed the preserved
+preference and the two default documents, with no forgotten profile document.
+A fresh chat said it did not know the code and used Simplified Chinese; a
+second fresh chat used `memory_export`, found no code, and completed without
+the old fact. The first chat also displayed `SUPERVISOR_OPERATION_FAILED`
+despite a final answer; a minimal ordinary chat and the second memory query
+completed normally. This transient error remains under investigation and is
+not counted as a clean regression pass. A pre-deletion historical chat still
+renders its historical answer; §11.1 explicitly distinguishes that transcript
+from new-memory resurrection.
+
+This exercise proves the local snapshot and replay sequence for one synthetic
+deletion. A supported, repeatable backup/replay command, upgrade and matched
+rollback rehearsal, independent owner revocation, and the full evaluation
+remain release gates.
+
+The candidate protected image now includes
+`apps/dano/runtime/replay-memory-deletions.mjs`. Against the stopped restored
+app it rejected a changed post-browser owner state with
+`POST_SNAPSHOT_STATE_MISMATCH` before mutation. Restoring the exact
+post-snapshot owner-state overlay and rerunning the same command passed with
+two deleted URIs, one removed source, one retained document and three expected
+documents. This is a tested per-owner replay step; the general ledger capture,
+revocation and matched rollback procedure still need their release rehearsal.
+
+## Candidate upgrade and matched rollback rehearsal
+
+A third isolated stack began with Dano `0.2.34` and
+`@josephyoung/pi-openviking@0.1.8`, plus the same fixed official OpenViking
+`v0.4.20` and Embedding image. Its volumes and OpenViking account were new.
+The in-app Browser completed OA SSO, found both memory switches off, enabled
+only explicit memory, saved the synthetic `枫桥31` fact to ready, and recalled
+it from a separate chat. With OpenViking then stopped, a second `溪桥82` save
+entered `session_unknown`. All six volumes and private deploy-control files
+were exported after stopping Dano, nginx and Embedding. The private baseline
+manifest at `/private/tmp/dano477-upgrade-baseline.189h5urv/manifest.json`
+records the seven archive hashes. The baseline state had one ready operation
+and one pending `session_unknown` operation.
+
+The same stack's app was recreated with the actual `0.2.35` candidate image
+(`8b1524835ee3`), keeping the old volumes and fixed OpenViking version. The
+old ready fact remained visible in management and a fresh MiMo chat answered
+`枫桥31`. The old offline task became “结果待核实” and was **not** blindly
+resent; its remote session had never been confirmed. This is a safe ambiguity
+outcome, not a successful old-queue delivery. The candidate then saved a new
+synthetic dark-blue chart preference to ready. Its operation, document URI,
+digest and content were recorded in a private upgrade-window reconciliation
+file outside the old snapshot, alongside stopped candidate data and OpenViking
+archives.
+
+For matched rollback, a fourth isolated stack imported the **old** six-volume
+snapshot into fresh volumes and ran the old `0.2.34` image (`ff9dcbf3d807`).
+Before Dano started, the USER-bound replay command checked the restored
+owner-state hash and public document set: the old profile remained, while the
+candidate-window document and source were absent. The physical profile file
+had one trailing newline that OpenViking's public read omits, so its replay
+ledger used the exact public body. Browser management showed the old ready
+fact and the unresolved old queue. The new ready operation was not silently
+carried into the old state; its synthetic fact was explicitly resubmitted from
+the private reconciliation file through the old browser/model/tool path,
+reached ready under a **new** operation ID, and a fresh chat answered both
+`枫桥31` and the dark-blue preference. This demonstrates data-matched rollback
+and explicit reconciliation of one synthetic upgrade-window operation. It does
+not establish automatic operation migration or a production-safe resubmission
+policy for arbitrary users.
+
+Compatibility observed in this rehearsal: the `0.2.34`/`0.1.8` owner-state
+version 1 and OpenViking `v0.4.20` data were readable by `0.2.35`/`0.1.11`;
+the reverse path used the old snapshot and reissued the one newer operation.
+No OpenViking storage-format migration was exercised. The old ambiguous queue
+exposed a genuine extension recovery gap before #477 can pass.
+
+The gap was reproduced in two tests: a Session creation that failed before
+OpenViking accepted it left `session_unknown` forever, and pause after that
+failure left the payload pending across a new authorization epoch. The
+`pi-openviking@0.1.12` fix retries only creation of the **same empty Session
+ID** after USER-scoped absence and checks current authorization before that
+mutation. It does not retry an unknown message append or commit. The two tests
+were red on 0.1.11 and green on 0.1.12; all 252 extension tests passed. A
+one-off container from the candidate image with local 0.1.12 bits advanced
+the *actual old snapshot operation* against fixed OpenViking `v0.4.20` from
+`session_unknown` through `session_created`, `message_delivered`, `processing`
+to `ready`, with the original Session ID and one memory document. Extension
+PR [#10](https://github.com/josephyoung/pi-openviking/pull/10) merged;
+Trusted Publisher run `35879801711` succeeded and published 0.1.12. Dano's
+frozen lockfile installed the exact registry tarball after npm CDN propagation.
+The complete protected image `5dddd4a48172` reports Dano `0.2.35`, exact
+extension `0.1.12`, both Pi keywords and the replay command. A fresh fifth
+isolated stack imported the **old** six-volume snapshot, started the fixed
+OpenViking/Embedding services and this formal image, then passed real in-app
+Browser acceptance: the old pending `溪桥82` task became “已记住”, its profile
+document retained the earlier `枫桥31` fact, and a new MiMo chat correctly
+answered both codes. This closes the specific session-creation old-queue
+recovery gap, without changing the separate upgrade-window reconciliation
+policy requirement.
+
+## Frozen evaluation baseline, 2026-09-24
+
+The 80-case synthetic dataset was committed as
+[`issue477-evaluation.json`](fixtures/issue477-evaluation.json) at `5616f135`
+before executing it. It fixes 20 recall, 10 correction, 20 isolation,
+10 deletion, 10 irrelevant-request and 10 authorization cases, with three
+repetitions each; the five-user/100-request workload, model, machine,
+configuration, official MiMo list prices and acceptance thresholds are also
+frozen there. The tested Podman VM had four CPUs and 4,076,376,064 bytes of
+RAM. MiMo-v2.5 extraction of the five four-fact source Sessions completed in
+87.2–95.1 seconds, producing one to four documents per synthetic owner.
+This is batch extraction timing, not the single-fact explicit-save p95 metric.
+
+The real OpenViking `v0.4.20` USER-key run produced these sanitized per-attempt
+files: [recall](evidence/issue477-acceptance-archive.md#report-12),
+[isolation](evidence/issue477-acceptance-archive.md#report-11) and
+[irrelevant requests](evidence/issue477-acceptance-archive.md#report-10).
+All 60/60 recall searches found a document containing the expected fact and
+none returned the next owner's forbidden value; this is source retrieval,
+not a Dano/MiMo answer-correctness result. All 60/60 cross-user probes kept
+the target user's content and state isolated. Search, read, write and tree
+export returned 403 in 48 probes. The 12 same-named Session-message probes
+returned 200 because OpenViking wrote to the caller's own Session namespace;
+the target Session context was unchanged, and the caller's context contained
+its synthetic marker without the target fact.
+
+The initial relevance configuration **failed** its fixed requirement:
+0/30 irrelevant-request repetitions would avoid injection. Every real search
+returned at least one memory above the configured `minimumScore=0.1`; the
+published extension's context hook selects those entries under its token
+budget. This is a measured selection outcome, not 30 completed Dano chats.
+The irrelevant top scores ranged 0.354–0.535, while relevant top scores ranged
+0.396–0.755. A single higher vector-score cutoff would also discard some
+required facts. The candidate therefore needs a separately frozen and tested
+relevance stage; these failed baseline results remain part of the record.
+
+The formal `0.2.35`/`0.1.12` Browser regression also completed ordinary
+MiMo text chat, a model-triggered `bash ls` tool call, a real upload of the
+fixed synthetic `shapes.png` (model identified red circle, blue square and
+yellow triangle), and an `ask_user_question` radio card submitted as
+“咖啡” and returned to the model. These observations do not cover the remaining
+Skill, Field Assist, Heimdall, dual-user or 100-request gates.
+
+## Candidate 2: bounded local reranking
+
+The first relevance repair used Dano `0.2.36`, exact pi-openviking `0.1.12`,
+the same OpenViking/Embedding versions and a separately pinned upstream
+llama.cpp reranking service. Its `bge-reranker-v2-m3-Q4_K_M` asset has SHA-256
+`e186a244ed455b4ab66ec64339ce7427a6ae13f5c0b5e544de96e50f0f8b3673`.
+The unchanged 80-case dataset and the new private limits were frozen in
+[`issue477-evaluation-candidate2.json`](fixtures/issue477-evaluation-candidate2.json)
+before formal execution. OpenViking `v0.4.20` `/find` is a QUICK vector path,
+so merely enabling its server-side reranker cannot affect this extension's
+recall. Dano reranks USER-scoped candidates before injecting them, and a
+missing, timed-out or malformed reranking response omits memory for that
+request. The published extension and user-bound credential scope are unchanged.
+
+The formal image `46443b7b95aa` started with the private reranker configuration.
+All 143 Vitest files passed (1,655 tests, one skipped); type/Svelte checks had
+no diagnostics. The [candidate 2 retrieval results](evidence/issue477-acceptance-archive.md#report-14)
+contain 90 attempts: 60/60 expected source documents selected, 30/30
+irrelevant requests selected no memory, no cross-owner forbidden fact, and
+search plus reranking p95 324.45 ms. In the real in-app Browser, a fresh
+MiMo chat answered both stored upgrade codes after restart; an unrelated
+arithmetic chat returned 45. These are Browser observations, while the
+per-attempt file records service selection, not 90 Dano model answers.
+
+The first [five-user, 100-request selection probe](evidence/issue477-acceptance-archive.md#report-13)
+then exposed a concurrency flaw: reranking all five vector candidates with
+the 750 ms timeout selected only 7/70 relevant facts. 30/30 irrelevant
+requests omitted memory; steady selection p95 was 962.5 ms. This is a
+supplemental memory-selection workload, **not** the Spec's 100 complete user
+requests or a release pass. The failure is retained. The fixed corpus's
+expected fact was already in the first vector result for 20/20 distinct
+recall cases. Exploratory probes capped reranking at two candidates and used
+a 900 ms timeout; 70/70 relevant and 30/30 irrelevant requests then selected
+correctly, with steady selection p95 793.64 ms. A separately frozen candidate
+must still implement and repeat that result, including Dano host overhead.
+
+## Candidate 3: frozen bounded retrieval retest
+
+The unchanged 80-case dataset and the two-candidate, 900 ms reranker limits
+were frozen in [`issue477-evaluation-candidate3.json`](fixtures/issue477-evaluation-candidate3.json)
+at `cd064666` before the formal rerun. Dano `0.2.37` limits both the USER-scoped
+OpenViking `/find` request and the local reranker input to two candidates. The
+protected image `8cb0ff821faf` installed the exact published
+`pi-openviking@0.1.12`. Its running package metadata included both required
+Pi keywords. All 143 Vitest files passed (1,657 tests, one skipped), and the
+server and Svelte checks had no diagnostics.
+
+The [formal retrieval results](evidence/issue477-acceptance-archive.md#report-16)
+record all 90 unchanged recall and irrelevant-request attempts across three
+repetitions. Expected source selection was 60/60, irrelevant requests selected
+no memory in 30/30 attempts, and no next-owner forbidden fact was read.
+USER-scoped search plus reranking p95 was 223.25 ms; reranking alone p95 was
+209.41 ms. The [five-user concurrent selection results](evidence/issue477-acceptance-archive.md#report-15)
+record 100 attempts: relevant selection 70/70, irrelevant omission 30/30,
+first-round p95 690.97 ms and steady selection p95 817.31 ms. That workload
+uses real OpenViking and reranker requests on the four-CPU isolated Podman VM,
+but it does **not** include five complete Dano/MiMo user requests, model token
+usage, extraction cost, or Dano host overhead. It cannot satisfy the Spec's
+full latency and cost release gate by itself.
+
+The real in-app Browser on the running `0.2.37` image completed OA-backed
+MiMo chats through the fixed trusted `https://localhost:18711/` entry. In a
+fresh chat it answered both stored upgrade facts, `枫桥31` and `溪桥82`; a second
+fresh chat answered the unrelated `19×23` request as `437`, with no memory fact
+in the visible answer. This is direct model/browser evidence for those two
+requests, not a 60/30 model-answer audit.
+
+The same final image passed additional real Browser regressions: MiMo
+triggered `bash ls` and reported `uploads`; an `ask_user_question` radio card
+accepted “茶” and the model repeated it. A textarea question exposed Field
+Assist, and its MiMo-backed polish changed the synthetic value “处理个人事务” to
+“需处理个人事务”; the card was cancelled before any OA submission.
+
+The first “请假” quick action exposed a protected-stack configuration gap:
+the model could find no OA Skill. This stack's supervisor profile had an empty
+`trustedSkillPaths`. Copying the image seed into the Agent Config Directory
+did not enable it, because protected sessions load only the profile's trusted
+image paths. After adding the exact image-owned `open-websearch` Skill path to
+the **private local acceptance profile** and restarting Dano, a fresh Browser
+chat invoked and read that Skill's `SKILL.md`. A model-triggered Bash
+`test -r` found the trusted Skill readable and
+`/etc/dano-protected/agent/settings.json` unreadable. This validates generic
+Skill loading and the worker's Heimdall read boundary on this image. The
+business “请假” Skill itself is absent from the isolated stack, so its OA
+workflow remains unaccepted. The deployment contract now states the protected
+Skill allowlist requirement explicitly.
+
+A separate local acceptance initialization defect left `{产品名称}` in the
+protected Agent Config Directory's `SYSTEM.md`, although the repository product
+name is “小络助手”. It made the model answer “我是，公司内部OA智能助手” in a test
+conversation. With Dano stopped, the image's `render-system-prompt.mjs`
+replaced that template using the image's product configuration; a new Browser
+chat then answered “我是小络助手，公司内部 OA 智能助手。” The acceptance configuration
+must render the prompt before release. Sending `/compact` in the browser
+composer produced an ordinary model message rather than Pi compression, so
+that attempt is **not** counted as the required compression regression.
+
+## Candidate 4: review fixes and repeat acceptance
+
+The code and unchanged 80-case dataset were frozen in
+[`issue477-evaluation-candidate4.json`](fixtures/issue477-evaluation-candidate4.json)
+at `d243610b`. The protected image `204933dea05f` reports Dano `0.2.38` and
+the same published `pi-openviking@0.1.12`. The offline recovery command now
+uses Dano's `MemoryCredentialStore` rather than manually opening and
+decrypting the USER credential file; the existing store checks the file owner,
+mode, size, symlink boundary, key version and authenticated owner. The release
+checker parses the pnpm lockfile as YAML. The frozen lockfile install, full
+server/Svelte check, targeted credential/reranker/config tests and deployment
+release check passed.
+
+A one-off `0.2.38` container mounted the current private volumes read-only and
+an older ledger with no network. It rejected the mismatched state hash at
+`load` before any credential or remote operation. Against the previously
+restored isolated volumes, with only official OpenViking and Embedding running,
+the same image replayed the ledger successfully and checked two deleted URIs,
+one removed source, one retained document and all three expected documents.
+This revalidates the repaired credential path on the real service for the one
+synthetic owner; it does not create a general multi-owner ledger policy.
+
+The [candidate-4 formal retrieval results](evidence/issue477-acceptance-archive.md#report-18)
+record 60/60 relevant source selections, 30/30 irrelevant omissions and zero
+forbidden cross-owner reads; selection p95 was 279.75 ms. The
+[five-user concurrent selection results](evidence/issue477-acceptance-archive.md#report-17)
+record 70/70 relevant selections and 30/30 irrelevant omissions, with
+first-round p95 849.68 ms and steady p95 958.60 ms. The latter has only
+41.40 ms margin below the 1-second selection threshold **before** Dano host
+overhead; it is not a pass of the complete-request gate. In the real in-app
+Browser, a fresh MiMo chat answered `枫桥31` and `溪桥82`, but also volunteered
+an extra recently saved synthetic marker `山河58`; a separate unrelated
+arithmetic chat answered only `391` for `23×17`. The extra fact needs review
+in the model-answer quality audit, rather than being silently counted as a
+clean exact answer.
+
+## Candidate 5: single-candidate selection retest
+
+The unchanged 80-case dataset and thresholds were frozen with
+[`issue477-evaluation-candidate5.json`](fixtures/issue477-evaluation-candidate5.json)
+at `8c64029b` before this run. Only the maximum USER-scoped vector search and
+local reranker candidate count changed from two to one. The final image remains
+`0.2.38` with exact `pi-openviking@0.1.12`; official OpenViking, Embedding and
+reranker versions and the four-CPU Podman VM are unchanged. The separate
+[formal retrieval evidence](evidence/issue477-acceptance-archive.md#report-20)
+records 60/60 expected-source selections, 30/30 irrelevant omissions, zero
+cross-owner forbidden hits and 185.35 ms selection p95. The
+[five-user concurrent selection evidence](evidence/issue477-acceptance-archive.md#report-19)
+records 70/70 relevant selections and 30/30 irrelevant omissions across 100
+attempts, with 710.17 ms cold-round and 537.83 ms steady selection p95.
+These are **memory-selection-only** calls, not complete Dano/MiMo requests.
+
+The protected local acceptance config now uses one candidate. An app restart
+temporarily left nginx with its old upstream IP, producing HTTP 502; restarting
+nginx restored the fixed HTTPS entry to HTTP 200. The authenticated Browser
+restored its prior chat after reconnect. In a fresh MiMo chat asking for only
+the two saved codes, the model answered `枫桥31` and `溪桥82` but again volunteered
+the unrelated `山河58` marker despite the request not to add information.
+Reducing the candidate count improves measured selection latency but does not
+resolve this answer-quality concern. The final image's model-triggered
+`bash ls` also completed and reported `uploads` before this restart.
+
+Additional `0.2.38` Browser regressions completed on the same fixed HTTPS
+entry. MiMo invoked `ask_user_question`, rendered a two-option radio card,
+accepted “茶” and repeated the submitted choice. It invoked and read the
+image-approved `open-websearch` Skill and returned its frontmatter name. One
+real upload of the fixed external `shapes.png` reached the chat; MiMo correctly
+identified the red circle, blue square and yellow triangle in left-to-right
+order. The first, longer form prompt remained waiting and was cancelled; the
+shorter retry completed, so this does not establish a form failure root cause.
+
+The first `/compact` attempt on a one-turn chat failed because Pi had no
+history outside its configured 20,000-token recent window. For a controlled
+regression, the local acceptance profile temporarily enabled slash commands
+and set Pi's `keepRecentTokens` to one. After two ordinary turns, `/compact`
+showed the active compaction state, then completed. The newest persisted
+session contained one `compaction` entry between the second and third user
+turns; a subsequent MiMo turn correctly repeated the synthetic first-turn
+test word. Both temporary configuration overrides were removed, Dano/nginx
+restarted, and the fixed HTTPS entry returned HTTP 200. The original default
+settings remain in place; this is a real Pi compaction path check under a
+short acceptance window, not a long-context performance benchmark.
+
+## Candidate 6: multi-owner replay command, 0.2.39
+
+The protected image `ce3db0c7b493` contains Dano `0.2.39` and exact
+`pi-openviking@0.1.12`. The offline replay command now accepts the original
+version-1 single-owner ledger and a version-2 list of owner entries. It
+preflights all state hashes, owner bindings and USER credentials, then verifies
+every remote identity before the first remote mutation. A valid partial replay
+can be run again. Node syntax, the full Dano server/Svelte check, the server
+build and all 143 Vitest files (1,657 passed, one skipped) passed. Both release
+checker modes and the protected image's frozen lockfile build passed.
+
+The [sanitized replay summary](evidence/issue477-replay-v2/summary.json) records
+the real-service results. The old deletion ledger passed unchanged against
+the restored isolated OpenViking service: two deleted URIs, one removed source,
+one retained document and three expected documents. A new two-owner ledger
+used two existing isolated USER accounts; it removed one newly staged
+synthetic document from each account and left their nine original documents
+unchanged. An immediate second run passed, confirming idempotent replay.
+Duplicate owner entries were rejected as `INVALID_LEDGER` with networking
+disabled. Corrupting only the second owner's post-state hash yielded
+`POST_SNAPSHOT_STATE_MISMATCH` at `load`; both staged documents still existed
+after that failure, and a later valid replay removed them.
+
+This covers the mechanics of a supplied multi-owner ledger. It does **not**
+capture deletion/revocation events automatically outside older snapshots, nor
+does it define arbitrary upgrade-window reconciliation. Those remain hard
+release gates; the new command alone is not a recovery guarantee.
+
+The final `0.2.39` protected image was then started on the established
+`https://localhost:18711/` acceptance entry. The app container reported
+healthy, the existing localhost CA verified HTTPS 200, and the authenticated
+in-app Browser restored its prior Pi session after reload. In a new chat,
+MiMo answered the synthetic prompt `0.2.39 验收：仅回复“服务可用”。` with `服务可用。`.
+This confirms final-image browser connectivity and one complete ordinary
+request, not the fixed memory-answer or five-user load gates.
+
+The same final image's installed `pi-openviking` manifest reported version
+`0.1.12`, Pi keywords `pi-package` and `pi-extension`, and the standard
+`dist/standard.js` entry. In a fresh Node 22 `pi 0.85.1` RPC session, loading
+that exact standard entry produced the expected notice that unprotected Pi
+does not enable long-term memory, and `get_state` succeeded without a provider
+request. A first attempt with Node 24 could not load the Node 22 `fs-ext`
+binary; the tested runtime is Node 22. On the protected final image, a new
+authenticated Browser chat asked for the two digits after the previously saved
+`枫桥` code; MiMo answered exactly `枫桥31`. This adds one final-image model
+answer, not the fixed 20-case, three-run recall acceptance.
+
+The final-image Browser also completed the three required ordinary runtime
+checks at the fixed HTTPS entry: MiMo answered a plain-text request, invoked
+`bash ls` and confirmed `uploads`, and read one real upload of the fixed
+synthetic `shapes.png`. It identified the red circle, blue square and yellow
+triangle in order. The same screenshot showed the uploaded image and answer.
+This is a single final-image pass, not all T-12 repetitions or the absent
+business OA Skill.
+
+## Remaining release gates
+
+### Candidate 0.2.40 recovery journal (2026-09-24)
+
+The candidate adds a separate, host-owned memory-recovery volume. A stopped
+service one-off bootstrap copied one existing owner's state into that volume;
+the protected app then restarted on the fixed HTTPS entry with image
+`localhost/dano477-protected:0.2.40`, and both the app health check and HTTPS
+request passed. The deployment release checker passed with the distinct
+recovery volume. New owner-state revisions are mirrored there; destructive
+remote methods write an owner-bound, fsynced intent first. Unit coverage
+includes missing/mismatched mirrors, partial event tails, and a failed mirror
+that poisons later memory access. The full repository check, tests, server build
+and release checker passed for this candidate.
+
+In the authenticated Browser, an explicit `memory_save` for the synthetic
+`栀霞72` fact reached `已记住` and merged into `profile.md`. A selective
+correction was rejected with `MEMORY_TARGET_AMBIGUOUS`. Diagnosis showed that
+the target text occurred once in the three live OpenViking documents, but the
+owner ledger had multiple operations pointing at the merged document. The
+package governance barrier requires one matching source digest in that case
+and rejected the operation before creating a job. This is a real selective
+governance acceptance gap; it must not be counted as a successful correction.
+
+No Browser deletion intent was recorded during this test. An attempted click
+on the final `确认清空` control was rejected by automatic approval review because
+the browser session was not independently proved to be a disposable test
+account whose entire memory could be erased. The confirmation dialog was
+cancelled. No workaround or indirect deletion was used. The journal's remote
+deletion path therefore has unit evidence but no real-service Browser proof.
+Automatic replay of the new journal, checkpointing against arbitrary older
+snapshots, and credential/upgrade-window reconciliation are still missing.
+This candidate is **not** a rollback or release acceptance.
+
+The journal reader now validates each event's version, unique ID, timestamp,
+exact owner and mutation fields, including owner-bound document URIs. A failed
+append poisons that owner's memory runtime before any remote deletion can be
+sent. The updated candidate passed 144 Vitest files (1664 tests passed, one
+skipped) when the existing `httpx`-capable local Python was selected; the
+default Python lacked `httpx`, and one full-suite concurrent run timed out in
+an unrelated Skill test, which passed in isolation. Type/Svelte checks, server
+build and release check passed. The final rebuilt protected image
+`localhost/dano477-protected:0.2.40-journal-final` rejected a cross-owner
+tampered event in a disposable container probe. The isolated app and nginx
+were recreated from that exact image; the fixed HTTPS entry returned 200
+without changing the localhost CA. Its health check reached `healthy`, and a
+fresh in-app Browser tab reconnected to Alice's existing chat on that entry.
+
+### Recovery checkpoint and automatic journal replay candidate
+
+The protected image now contains `runtime/reconcile-memory-recovery.mjs`.
+Its stopped-stack `checkpoint` binds each owner-state hash to a validated
+journal prefix. `preflight` checks the restored state, full owner set,
+checkpoint prefix and encrypted USER credential before remote work. `replay`
+verifies all identities, applies only post-checkpoint events in order, reads
+back the affected sources/documents, and writes the newer owner states only
+after every owner's readback succeeds. A partial remote failure is retryable.
+The current candidate writes a private receipt bound to the exact checkpoint
+and newer state before overlay. A post-overlay retry requires that receipt;
+the targeted regression test first reproduced acceptance of an altered old
+state hash and now rejects it before any remote contact. A removed receipt
+also fails preflight. The updated code is in the rebuilt `0.2.41-receipt`
+image described below. The targeted eight-test suite also confirms that a
+bad checkpoint for Bob prevents replay of Alice's deletion before either
+remote client is contacted; a valid two-owner checkpoint replays both
+deletions. This uses simulated remote clients, not a two-owner real-service
+rollback.
+
+With the isolated finalqueue app/nginx stopped, image
+`localhost/dano477-protected:0.2.40-reconcile` created a private checkpoint
+for one existing owner. Its preflight and real OpenViking-backed replay passed
+with **zero** post-checkpoint events; the app returned healthy at the same
+HTTPS entry and the in-app Browser restored the existing chat. This verifies
+the real deployment's file paths, credential and clean no-op recovery only.
+The executable test suite also covers two post-checkpoint deletions (one
+source session and one document) through the actual HTTP client against a
+local simulated service, old-state restoration, idempotent retry, altered
+journal prefix, new owner and remote failure before state overlay. The test
+uses no real OpenViking deletion, so it is not a real-service deletion replay.
+
+Automatic approval review initially rejected creation of a dedicated
+OpenViking test USER and synthetic remote data. After the operator explicitly
+confirmed that permission, a new USER named
+`dano477_reconcile_synthetic_01` was created in the isolated OpenViking
+service. Its encrypted USER credential and owner state were kept in separate
+`dano477-reconcile-test-data` and `dano477-reconcile-test-recovery` volumes;
+the existing OA Browser owner was not changed. A synthetic document and empty
+Session were present before a one-owner checkpoint (`journalBytes=0`). Two
+later recovery intents targeted only that USER's Session and document. The
+rebuilt image `adab70014794` passed preflight with `owners=1, events=2`,
+then replay removed both on the real OpenViking service. USER-bound readback
+reported neither document nor Session present. An immediate second replay
+also passed, proving this two-event path is retryable. A second checkpoint
+captured the existing journal prefix, then the recovery mirror advanced to
+revision 2 while the stopped test data volume retained revision 1. Another
+two intents were replayed against a restaged document and Session. The
+readback found neither target and the restored local state advanced to
+revision 2. A further stopped-stack rehearsal copied the current protected
+data and OpenViking volumes into distinct old-volume clones and compared their
+contents before resuming the original stack. After two new deletion intents,
+the current service removed the synthetic document and Session. A separate
+official `v0.4.20` OpenViking instance booted from the **old** clone, where
+USER-bound readback still found both. Its matched old protected data was at
+revision 2, while the independent recovery mirror was at revision 3. The
+one-owner/two-event preflight and replay passed; readback then found neither
+document nor Session, and the restored state advanced to revision 3. A second
+replay passed. The alternate instance was stopped and removed. Sanitized
+per-step evidence is in
+[`issue477-recovery-journal/summary.json`](evidence/issue477-recovery-journal/summary.json).
+The exact synthetic USER was then removed through the official admin API, and
+the separate old-volume clones, test data/recovery/checkpoint volumes and
+probe script were removed. The original `dano477-finalqueue` stack remained
+healthy on the fixed HTTPS entry.
+This proves one synthetic matched old-volume deletion replay on the same
+candidate version; it does not cover an arbitrary old-version migration or
+general upgrade-window operations. The command deliberately fails closed for new owners,
+new writers, pending governance, retirement and invalid/stale credentials;
+general upgrade-window reconciliation and arbitrary old snapshots remain
+release gates, as do the full AC/T Browser and quality matrices.
+
+On the rebuilt `0.2.41-receipt` image, a second real-service rehearsal used
+two temporary synthetic USERs in one temporary account. Each had a distinct
+encrypted credential, protected owner state and real OpenViking document.
+After a two-owner checkpoint, both independent recovery mirrors advanced one
+revision and logged a deletion; the old local states were restored. Preflight
+reported two owners and two later events. Replay removed both public
+documents, overlaid both newer states and wrote private checkpoint-bound
+receipts; a second replay passed. USER-bound readback found neither document.
+The temporary account was deleted through the official admin API. The
+[sanitized run summary](evidence/issue477-two-owner-receipt/summary.json)
+records the image and aggregate assertions. This tests
+two-owner state restoration and remote deletion on the current service; it
+does not recreate an older image/data-volume pair or cover source Session
+removal, revocation, new writers or credential rotation.
+
+For this candidate, the rebuilt protected image completed successfully.
+`pnpm run check` reported no server or Svelte diagnostics, the release checker
+passed, and the bounded full Vitest run passed 145 files (1,670 tests passed,
+one skipped). An earlier concurrent full run had one unrelated provider Skill
+gate timeout; that test passed alone and in the bounded full rerun.
+
+The exact rebuilt image `adab70014794` replaced the local app container and
+reached `healthy`; the persistent localhost HTTPS entry returned 200. In a
+fresh authenticated in-app Browser chat, MiMo returned the requested plain
+text, invoked `bash ls` and reported `uploads`, then read one upload of the
+fixed external `shapes.png` and identified red circle, blue square and yellow
+triangle in order. These three final-image checks cover the repository's
+Podman runtime regression floor, not the remaining §11.2 business Skill,
+dual-user or full model-quality release gates.
+
+### Merged-document correction package 0.1.13 (2026-09-24)
+
+The ambiguous live correction above exposed a package defect: OpenViking
+coalesced two source operations into one document and paraphrased the selected
+fact, so neither stored source digest equaled the unique document sentence.
+[pi-openviking PR #11](https://github.com/josephyoung/pi-openviking/pull/11)
+now accepts that case only after the selected sentence occurs exactly once and
+the remaining text is classified unrelated. It revokes the complete source
+group to prevent old Session replay and checks the exact operation-ID set in
+the state transaction, so a writer appearing during inspection fails closed.
+
+The independent package's 254 tests and type check passed. An isolated
+official OpenViking v0.4.20 account with two real USER-bound source Sessions
+completed the corrected-document readback; the unrelated fact remained, both
+Sessions were deleted, the old URI was relocated, and export marked both old
+sources revoked. The synthetic account and one-off container were deleted.
+GitHub Trusted Publisher
+[run 35923522460](https://github.com/josephyoung/pi-openviking/actions/runs/35923522460)
+published `0.1.13` with provenance; the npm registry's exact-version metadata
+and integrity matched the Dano lockfile. Dano `0.2.41` pins it exactly.
+The repository check passed and a complete Vitest rerun with Python `httpx`
+passed 145 files, 1670 tests, with one existing skip.
+
+The first `0.2.41` protected image was built from that source revision with the exact
+published `0.1.13`. Because the builder's direct GitHub TLS connection failed
+while installing the pinned `open-webSearch` Skill, the build-only Git source
+was routed through a temporary read-only local mirror of upstream
+`v2.1.11` (`3094fa5`); the shipped Dockerfile's Skill installer and pinned
+source stayed in use. The mirror service and clone were removed after the
+build. The image reported both package versions and both required Pi keywords.
+The fixed HTTPS Compose stack passed health and the deployment smoke check
+(anonymous Cookie, Client, SSE, message and disconnect).
+
+In the authenticated in-app Browser on `0.2.41`, the merged `profile.md`
+contained four synthetic facts and the selected `栀霞72` phrase once. The UI
+corrected that phrase to `清禾93`, relocated the retained document to an opaque
+URI, preserved the other three facts, and showed all old sources as revoked.
+A fresh chat asked for the recovery-test code; MiMo answered only `清禾93`.
+The same `0.2.41` Browser session also invoked `bash ls` and returned
+`uploads`, then uploaded the fixed external `shapes.png` once; MiMo identified
+red circle, blue square and yellow triangle in order. The active per-User
+workspace was on the named XFS data volume; a `bwrap` write/remove probe as
+the deployed app UID passed against that exact workspace with the deployed
+no-`/proc` binding configuration. This closes the previously observed
+merged-document Browser blocker, but it is one correction case, not the full
+§11 correction, deletion, two-user or performance acceptance.
+
+The installed published `0.1.13` was also loaded through the actual pinned Pi
+`DefaultResourceLoader` using both entries, twice each, locally and in the
+rebuilt protected image `3d8569c7463f`. The ordinary Pi
+entry registered eight tools including `memory_save` and the `user_bash`
+handler; the Dano factory registered one memory tool. Neither produced an
+error or duplicate registration. This checks loading and registration; an
+ordinary protected Pi CLI chat was then tested separately as described below.
+
+A disposable probe layer on the rebuilt image used the **published**
+`0.1.13` standard entry and pinned Pi `0.85.1` through the public protected
+Pi CLI RPC interface. It used the same MiMo-v2.5 model, its pinned tokenizer
+revision and a fresh synthetic USER in the isolated OpenViking service. The
+CLI showed default-off memory and separate collection consent, accepted its
+own confirmation prompt, let the real model call `memory_save`, reached
+`ready`, displayed the saved content and source, recalled the fact after
+`new_session`, and paused memory. Automatic collection stayed unauthorized;
+the USER key did not appear in captured RPC events or stderr. The synthetic
+account was deleted through the official admin API. The
+[sanitized result](evidence/issue477-published-cli/summary.json) records these
+assertions. This is one ordinary CLI functional path; it does not establish
+the complete pair audit or the Dano multi-user/browser and quality matrices.
+
+The later `0.1.17` package now has a separate
+[publication and pair audit](evidence/issue477-0117-package-pair-audit.json).
+The npm registry tarball SHA-512 matches the Dano lockfile; its package
+manifest carries `pi-package`, `pi-extension`, the standard entry and the host
+factory export. The version-triggered GitHub Actions run for source commit
+`2a120e7e9d5ae27159948ef5e2a045db786c4a96` completed type check,
+build/test and npm publish. The `0.2.60` image contains that package and one
+Pi `0.85.1` instance. The actual Pi loader loaded each entry twice locally and
+inside the offline image without errors, duplicate registration or network
+requests. This is package and loader evidence; the ordinary Pi CLI model
+save/new-session recall above ran on `0.1.13`, so the current `0.1.17` pair
+still needs its own functional repetition.
+
+The updated `0.2.41-receipt` image contains product `0.2.41`, published
+pi-openviking `0.1.13` and the checkpoint receipt code. The fixed HTTPS
+Compose stack started with this image, all five services reached healthy or
+running state, and `smoke:deploy` passed Cookie, Client, SSE, message and
+disconnect. In a fresh authenticated in-app Browser chat on this image,
+MiMo recalled `清禾93`, executed `bash ls` and returned `uploads`, then read
+one upload of the fixed synthetic image and answered “红色圆形、蓝色正方形、黄色三角形”。
+This reruns the image-sensitive chat/tool/upload checks; it does not repeat
+the complete governance or multi-user matrix.
+
+On the same rebuilt image and fixed HTTPS entry, two authenticated Browser
+tabs sharing Alice's account exercised one reversible pause transition. The
+initial state was memory enabled and automatic collection unauthorized.
+After pausing in the first tab, the second tab displayed the paused state;
+a fresh chat asked for the already saved synthetic recovery code and MiMo
+answered “不知道。” After enabling memory again in the first tab, another fresh
+chat in the second tab answered “清禾93”. The final state was memory enabled
+and automatic collection still unauthorized. This is one same-owner,
+cross-tab pause/recall/resume observation, not an independent second user or
+the full three-repetition pause and in-flight-save matrix.
+
+The same Browser account then separately authorized automatic collection and
+sent one synthetic stable preference in a new chat, explicitly without a
+`memory_save` request. The management UI showed an automatic-collection
+operation move from processing to ready, with an automatic source. A fresh
+MiMo chat recalled the preference. After revoking collection consent, the UI
+showed automatic collection unauthorized while a fresh chat still recalled
+the previously saved fact. The UI then forgot only that synthetic sentence;
+its source changed to revoked, a new chat answered that it did not know the
+preference, and a separate new chat still recalled an unrelated saved code.
+Long-term memory remained enabled; collection authorization remained revoked.
+The [sanitized Browser summary](evidence/issue477-auto-collection-browser/summary.json)
+records the assertions. This is one real Browser case, not the sensitive-data
+exclusion, inference-filter, in-flight revocation or three-repetition matrix.
+Two additional fresh chats, one with only a fake API key and one with a benign
+preference alongside a different fake API key, produced no new visible save
+operation or management document during the observation window. Collection
+authorization was revoked afterward. Because the selector's execution and
+fact-level decision were not independently observed, these are negative
+Browser observations, not proof of the full sensitive-data exclusion gate.
+
+The business OA Skill regression was probed without writing to OA. A
+read-only production inventory found the generated “请假申请” Skill and the
+configured OA URL/tenant-key entries; the older documented
+`dano-a-oa-qingjia` path is not the installed Skill. A disposable layer on
+the candidate image loaded that Skill as a protected trusted resource with
+the two OA configuration entries. In the authenticated in-app Browser, the
+“请假” quick action discovered the Skill, rendered the four-operation choice,
+and then rendered all six fields of the new-leave form. The form was cancelled
+without any business mutation. Its dynamic user-list selector failed because
+the same-origin business path returned `200 text/html` from the Dano entry,
+not JSON. An independent request to that path reproduced the response.
+
+The model's ordinary protected `bash` worked. The original broker PATH
+omitted the image's Python virtual environment; Python discovery and the
+Skill's read-only commands surfaced `SUPERVISOR_OPERATION_FAILED`. Adding
+that virtual environment to the **probe profile only** let a
+Browser-triggered Python command import `httpx`. A direct app-container
+read-only option lookup still returned
+`authentication unavailable`: the available OA URL/tenant-key settings did
+not yield a usable business authorization header for this generated Skill. Passing
+business credentials directly into model-triggered bash would violate the
+protected worker boundary and was not done. The probe layer/profile and OA
+environment were removed from the running stack; the original receipt image,
+supervisor profile, fixed HTTPS entry and smoke check were restored. The
+[sanitized OA summary](evidence/issue477-oa-skill/summary.json) records the
+observations. Functional business choices, authenticated requests and the
+complete OA Browser regression remain release blockers.
+
+The direct app-container option lookup had no Browser Login Session binding,
+so that call alone does not establish a login-bound failure. Read-only review
+of the installed generated Skill found that its `auth_headers()` runs before
+the OA request and requires its own environment or browser-state credential
+source. The protected broker deliberately projects neither production tenant
+keys nor browser storage into a worker. Correcting `broker.path` alone cannot
+make this unchanged Skill reach the Dano provider transport; a login-bound
+Browser retest and a reviewed credential-boundary integration are still needed.
+The Python path requirement is now documented for protected deployment.
+
+### Five-user complete-request diagnosis (2026-09-24)
+
+The `0.2.42` candidate replaces the tokenizer's single-flight rejection with a
+bounded per-model FIFO. Five simultaneous Dano/MiMo requests then recalled the
+correct owner fact and answered it in a first pilot. The canonical protected
+image was built and ran with published `pi-openviking@0.1.13`. The matched
+[100-request memory-on](evidence/issue477-acceptance-archive.md#report-22)
+and [memory-off](evidence/issue477-acceptance-archive.md#report-21)
+workloads each completed 100 real Dano/MiMo requests for five authenticated
+synthetic owners. With memory on, strict answer matching passed 63/70 recall
+attempts; all 30 irrelevant answers contained no owner fact. The memory-off
+workload answered 6/70 recall questions by chance. The on/off prompt p95s
+were 20.145/25.466 s and estimated model costs were $0.01209/$0.01859.
+Answer length and cache variation prevent attributing the cost difference to
+memory alone.
+
+The same frozen workload on a disposable container with sanitized extension
+and transport tracing produced [direct evidence](evidence/issue477-acceptance-archive.md#report-23):
+70/70 expected sources returned, 70/70 relevant contexts injected, 30/30
+irrelevant contexts omitted, 759 ms recall-wait p95, 837 ms maximum, and 213
+injected tokens maximum. It completed 100/100 requests, but strict answer
+matching fell to 57/70. Two additional context logs were cache reuses within
+an existing request, not extra requests. The one-candidate reranker and the
+tokenizer were not the remaining source of those wrong answers. A targeted
+answer probe showed both weekday paraphrases (for example, `星期三` for `周三`)
+and the model misclassifying a personal-memory question as an unsupported OA
+business operation. The production OA capability boundary remains intact; a
+generic clarification for memory-only answers is being evaluated separately.
+
+In the [next disposable candidate](evidence/issue477-candidate7/instrumented-full-workload.json),
+the shipped SYSTEM.md template clarifies that answering an authorized personal
+memory fact does not require an OA Skill, while remembered text grants no OA
+business authority. The 100 complete Dano/MiMo requests passed 70/70 expected
+source hits, 70/70 context injections, 70/70 semantically correct recall
+answers, and 30/30 irrelevant requests with no injection or personal fact in
+the answer. Literal matching was 64/70; six answers used `星期` where the frozen
+fact used `周`. Recall wait p95/max were 452/694 ms, and injection was at most
+213 tokens. This used a copied runtime prompt in a disposable container;
+at that point, a full-source image repeat and matched memory-off cost
+comparison were still necessary.
+An image made by copying only this prompt template onto the previously
+full-built `0.2.42` queue image then completed [matched on/off
+workloads](evidence/issue477-candidate7/matched-workload-summary.json):
+100/100 requests in each arm, 69/70 semantic recall answers with memory on,
+30/30 irrelevant answers without personal facts, and estimated model cost
+$0.01068 on versus $0.01932 off (observed increment −44.7%). One relevant
+request still received an OA-capability refusal. Because this candidate used a
+single-file image layer after a full-source rebuild hit Podman disk capacity,
+the full-source image and Browser/provider gates were still open at that
+point. The cost result also cannot isolate memory overhead from answer-length
+or cache variation.
+After scoped removal of this issue's stopped test containers and obsolete
+images, the complete Dockerfile `protected-runtime` build succeeded as image
+`c490cc97f45e`. Its built server tree and SYSTEM.md template hashes match
+the prompt-layer image byte for byte. On the full-source image, a further
+[five-user 100-request run](evidence/issue477-candidate7/full-source-summary.json)
+completed 100/100 Dano/MiMo requests, answered 70/70 recall cases correctly
+under the weekday-equivalence rubric, and kept owner facts out of 30/30
+irrelevant answers. Literal recall matching was 64/70; no OA refusal occurred
+in this run. The matched memory-off arm was not repeated on the new image tag;
+its runtime code and prompt are byte-identical to the already measured arm.
+The tokenizer, host-config and SYSTEM prompt focused tests passed 23/23;
+`pnpm run check` and the full-source image build passed. On 2026-09-24,
+the full Vitest suite was rerun without a concurrent image build, with
+`/private/tmp/dano465-openviking-venv/bin` first on `PATH` so the Python
+provider tests could import `httpx` 0.28.1: **145 test files,
+1674 passed, 1 skipped** in 49.82 s. The ordinary shell's `python3` lacked
+`httpx` and produced six environment-only failures; that run is not counted.
+An earlier concurrent full run was also stopped after startup/timeouts and is
+not counted. This proves the repository test suite, not the outstanding real
+Browser, full evaluation matrix, save-ready, or rollback release gates.
+
+After the isolated evaluation, the shared OpenViking account contained seven
+USERs. Five matched the exact synthetic `eval477_` OA subject → Dano OAuth ID
+→ memory-owner ID derivation. Those five were removed through the official
+single-USER admin endpoint; a fresh listing contained the two original USERs
+and no synthetic USER. The temporary copied credential directory was removed.
+The original fixed HTTPS entry remained healthy. This is test-resource cleanup,
+not a multi-user rollback or deletion-non-resurrection acceptance result.
+
+### Existing-config upgrade regression (2026-09-24)
+
+Switching the fixed isolated stack from `0.2.41` to the first full-source
+`0.2.42` image exposed a real startup regression: its existing private
+`memory-service.json` had no `tokenizerLimits.maxQueuedRequests`, and the new
+parser rejected it before the HTTP host started. The container restarted
+repeatedly; the original `0.2.41` image was restored and passed HTTPS health.
+The version-1 parser now supplies a bounded queue of eight only when that
+new field is absent. Explicit zero and other invalid values still fail.
+The release manifest was also updated to match root version `0.2.42`.
+
+The repaired complete Dockerfile image `b7a9f62c395f` was built from the
+current source. Its fixed public open-webSearch tag was cloned on the host,
+verified as commit `3094fa558fce35a8373e45ed5a6c43362e206906`, and
+mounted read-only for the last build step after the VM's GitHub proxy returned
+502; the Dockerfile still installed the same tag. The original private config
+and named volumes were left in place. The repaired image started with no
+restart, became healthy at `https://localhost:18711/`, and the Codex in-app
+Browser restored the authenticated session, prior chat, and memory management
+view. In a new chat, MiMo answered `7+5` as `12`, executed `bash ls` and
+reported `uploads`, then read the fixed synthetic `shapes.png` upload and
+identified its red circle, blue square, and yellow triangle in order.
+The repaired source passed `pnpm run check`, the release-manifest check,
+13 targeted tokenizer/config tests and a non-concurrent full Vitest run:
+145 files, 1675 passed, 1 skipped. Screenshots and the sanitized summary are
+in [the upgrade evidence](evidence/issue477-upgrade/). This
+proves the existing-config upgrade and three browser regressions, not the
+remaining dual-user, business OA, full quality matrix, or rollback gates.
+
+### Live #465 PRD/Spec audit (2026-09-24)
+
+The first case of the independently frozen
+[save-ready workload](fixtures/issue477-save-ready.json) failed on the
+`0.2.42`/`0.1.13` image. In the real Browser, the user supplied synthetic
+`云汀201`, but MiMo's `memory_save` argument was `云汀2020`. The operation then
+became `ready` after 173 seconds (UI timestamp precision), above the 60-second
+limit, and the exported content held the wrong fact. The
+[sanitized failure receipt](evidence/issue477-acceptance-archive.md#report-34)
+records both observations and the exact-document cleanup. A retryable VLM
+connection error appeared during extraction; its contribution to latency is
+not yet isolated. The other nine fixed cases were not run against this failed
+candidate, so no p95 is claimed. The independent package fix was published as
+`@josephyoung/pi-openviking@0.1.14` and locked in Dano `0.2.43`. Its
+`MEMORY_SOURCE_MISMATCH` guard checks the proposed content against the current
+user message before creating an operation. The rebuilt protected image
+`1f1eea87390f` passed package/version inspection, release-manifest check,
+`pnpm run check`, full Vitest (1675 passed, one skipped), and `pnpm run build`.
+In the [same frozen S-01 Browser retest](evidence/issue477-acceptance-archive.md#report-38),
+MiMo again proposed content that did not match the source; the guard blocked it
+and the save-record list gained no new operation. This establishes the
+fail-closed correction, but S-01 still fails successful-save acceptance and no
+healthy save-ready p95 is established. The remaining fixed cases and release
+gates remain open.
+
+The next full-source `0.2.44` image with the published `0.1.15` retry guidance
+also failed [S-01](evidence/issue477-acceptance-archive.md#report-36).
+MiMo repeatedly read the source's `201` as `202`, retried the mismatched call,
+and did not converge; the Browser response was cancelled. No save operation
+was created. The independent extension gained a tested repair for a
+unique, one-digit source alignment and kept ambiguous or broader edits
+blocked; that candidate was then published for a full-source Browser retest. No
+successful-save or latency claim follows from either blocked attempt.
+
+The `0.2.45`/`0.1.16` full-source Browser retest again failed
+[S-01](evidence/issue477-acceptance-archive.md#report-35): MiMo proposed
+`云汀2020`, which differs from source `云汀201` by two numeric edits. The
+single-digit rule correctly blocked the call; no operation was created. A
+subsequent tested extension revision permits only one uniquely aligned
+ASCII digit run with at most two edits and continues to block ambiguous or
+non-numeric rewrites. That revision was published before the fixed Browser
+workload was rerun.
+
+The published `0.1.17` package in Dano `0.2.46` produced the first
+[successful fixed S-01 Browser receipt](evidence/issue477-acceptance-archive.md#report-37):
+the operation moved from created at 16:12:55 to `ready` at 16:13:26 (31 seconds
+at UI timestamp precision), and the memory content read back `云汀201` rather
+than the model's altered number. This meets the per-case 60-second target for
+S-01 only. The subsequent
+[complete ten-case Browser run](evidence/issue477-save-ready/healthy-ten-case-browser.json)
+finished S-01–S-10 in the frozen order with one new chat each. All ten reached
+`ready` and their Browser content views matched the source markers. Durations
+from operation creation to ready, at UI second precision, were 24–35 seconds;
+the nearest-rank p95 was 35 seconds, below the 60-second threshold. This
+closes the healthy save-ready latency subgate, while the other fixed categories,
+two-user Browser proof and release/rollback gates remain open.
+
+After a host restart, the original isolated Podman VM and five stopped
+`dano477-finalqueue` containers were recovered with the same persistent data
+volumes. The `/private/tmp` model mounts had been cleared, so both GGUF files
+were restored outside the checkout and verified against the pinned SHA-256
+values before the original containers started. The private OpenViking config
+was regenerated from the retained acceptance credentials without changing the
+stored index or user data. `check-memory-release.mjs --deployment` passed, the
+Embedding, reranker, OpenViking and Dano health checks were healthy, and the
+trusted fixed HTTPS entry returned 200. In a fresh Codex in-app Browser tab,
+the same isolated OA test account reauthenticated; management still showed
+the ten ready operations and the `岚渡210` source content. A new chat asked
+for the saved acceptance station code and MiMo answered `岚渡210`. The
+[sanitized receipt](evidence/issue477-save-ready/restart-recall-browser.json)
+and [Browser screenshot](evidence/issue477-save-ready/restart-recall-browser.jpg)
+prove this single cross-chat recall after restart. They do not replace the
+frozen recall matrix or independent Bob Browser acceptance.
+
+The frozen 20 cross-USER isolation cases ran three times each against the
+real OpenViking public API in the protected local stack. The
+[executable matrix](fixtures/issue477-isolation-matrix.py) and
+[sanitized per-attempt receipt](evidence/issue477-acceptance-archive.md#report-28)
+record 60/60 passes: search, direct read, direct write and export returned
+403 in all 48 attempts. In the 12 Session-ID replay attempts, OpenViking
+returned 200 but created an actor-owned Session at a distinct URI; the
+target Session's message count remained one. Target facts did not appear in
+responses or change on readback. Each round created five synthetic USERs;
+all 15 were removed, and the original USER set was restored after each round.
+This proves the upstream USER-key boundary for these frozen cases. It does
+not establish Dano routing, project scope, or two independent OA Browser
+sessions, which remain separate acceptance gates.
+
+The frozen correction and deletion source mappings also ran through a
+disposable OpenViking `v0.4.20` service with the pinned local Embedding model.
+The [public API probe](fixtures/issue477-public-api-correction-delete.py) and
+[sanitized receipt](evidence/issue477-acceptance-archive.md#report-33) record
+30/30 replacement readbacks and 30/30 deletions with 404 readback and no
+search hit, across three fresh synthetic accounts. The MiMo model key was
+deliberately disabled. This establishes only the upstream direct-write and
+direct-delete primitives. It does not exercise Dano correction/forget flows,
+new-chat model answers, old queues, asynchronous extraction, restored backups
+or Browser, and does not count as passing the frozen correction/deletion
+evaluation cases.
+
+Compared with the live [Issue #465 PRD](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465)
+and [Spec](https://github.com/zhengchengqiaobusiness-arch/Dano/issues/465#issuecomment-5674833976).
+"Partial" identifies evidence already collected; it is **not** acceptance.
+All thirteen ACs and fourteen T cases remain open until their complete
+requirement and required real-service/browser method pass. Historical
+retrieval and selection counts measure source hits, while the new 30/30
+correction and deletion counts measure direct public API effects; none
+establish Dano model answers.
+
+| PRD | Current evidence | Missing acceptance |
+|---|---|---|
+| AC-01/02 | Published independent package `0.1.17`, registry tarball integrity matching the exact Dano lockfile, two Pi keywords, successful version-triggered npm publish, rebuilt image with one Pi and one memory package, and real Pi loader double-reload of both entries in local and image environments; an earlier real-service ordinary Pi CLI save/new-session recall used `0.1.13` | Ordinary Pi CLI functional save/recall using the current `0.1.17` pair and Dano integration repetition |
+| AC-03 | Browser explicit save, ready status/source and new-chat recall, including one correct model answer after host restart | Repeat fixed cases with model-answer review |
+| AC-04 | Collection filters and consent have automated coverage; one Browser collection reached ready and was recalled after separate consent; two synthetic-key chats produced no visible save | Sensitive-data/inference exclusions with observed selector decisions, revocation race and fixed repetitions |
+| AC-05/06 | Frozen 20 cross-USER cases ×3 passed against real OpenViking with forged headers, including isolated Session-ID replay; protected file boundary | Two independent authenticated Browser users, Dano routing and project scope |
+| AC-07 | Browser merged correction with model answer on `0.2.41`, package isolated real-service correction, one targeted collected-fact forget and one post-snapshot deletion replay | Ten correction and ten deletion cases ×3, old queue/cache/inflight/backup non-resurrection |
+| AC-08 | Browser defaults-off, separate collection consent/revocation, management and one same-owner cross-tab pause/recall/resume flow; runtime tests cover export, targeted forget and clear while paused, and authenticated HTTP tests cover export and clear while paused | All governance transitions, independent two-Session pause, real Browser export and blocked-write recovery ×3 |
+| AC-09/10 | Old ambiguous queue recovered on real service; a stopped-volume restore kept one `session_unknown` operation and resumed its source through `message_delivered`; ordinary chat survived selected memory failures | Full lifecycle/fault matrix, ready completion, truthful explicit failure and no duplicate/cross-owner replay |
+| AC-11 | Final-image Browser form, generic Skill, image, bash and Pi compression; an isolated production-generated leave Skill was discovered and rendered its operation choice and six-field form | Business options/authentication failed; complete OA and final-image regression matrix |
+| AC-12 | Clean stack, old-snapshot replay, two-owner supplied-ledger replay, candidate upgrade and matched rollback; automatic-journal matched old-volume two-owner deletion replay and current-service two-owner deletion/retry; two-owner deletion replay against restored old OpenViking volumes followed by healthy `0.2.55` binary rollback; focused synthetic recovery of new queued, `session_unknown` and later-phase writers; one real-service clear plus pre-commit source replay with synthetically restored old document; clear-plus-settled writer fails closed; real-service message-phase recovery and cross-owner deletion guard with old/new OpenViking volume generations | Full real multi-owner source/revocation, queued/new writer through ready including clear plus newer writer, and old-binary rollback with credential rotation |
+| AC-13 | Frozen 80-case dataset; 20 isolation cases ×3 passed against real OpenViking; candidate-7 traced workload had 70/70 semantic recall answers and 30/30 irrelevant omissions; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image has matched on/off cost evidence; final 0.2.46 Browser save-ready run reached `ready` with correct readback in all 10 cases, p95 35 s | Other five categories ×3, Dano/Browser isolation and causal latency interpretation |
+
+| Spec test | Current evidence | Missing acceptance |
+|---|---|---|
+| T-01 | Published `0.1.17`, exact registry/lockfile integrity and image package identity, real Pi loader double-reload of both entries; current `0.2.62`/`0.1.17` ordinary Pi CLI real MiMo save to ready, source read, new-session recall and pause | Remaining repeated functional checks and lifecycle matrix; do not repeat the completed current-pair run merely because other gates remain open |
+| T-02/03 | Real USER-key isolation matrix 20×3, including header forgery and Session-ID collision | Dano/Peer/project scope and independent Bob Browser across fixed repetitions |
+| T-04/05 | Automated lifecycle/collection tests; one real Browser automatic collection/recall/revocation path | Full multi-viewer/rebind/branch/dispose and collection exclusions |
+| T-06/07 | Actual old `session_unknown` recovery and credential-store replay; one restored-volume queue resumed to `message_delivered` without duplicate operation; after real USER-key rotation the protected Dano process restarted against its retained state and owner-only exports succeeded | All crash windows, ready completion, restored multi-volume deployment with rotation, user switch and anonymous transfer on fixed service |
+| T-08 | Real Browser new-chat recall, including one correct post-restart answer; bounded reranker selection | Short-session extraction, no-result/timeout and model-answer repetitions |
+| T-09/10 | Real-service correction/deletion/replay; Browser targeted forget with unrelated recall preserved, defaults-off and cross-tab pause; runtime and authenticated HTTP paused-management tests | Complete correction/forget/pause/restore state matrix ×3 |
+| T-11 | Protected file access denied; real USER-key 403 probes; `0.2.52` and `0.2.53` protected images passed synthetic HTTP/tool isolation; `0.2.55` protected image with real OpenViking passed two real USER-key bindings, 36 Dano memory HTTP identity probes, one forged-header cross-user content read denial and own-only Dano exports | Complete operation-content and cross-route readback with real USER keys, then repeat with independently authenticated OA Browser users |
+| T-12 | Final-image Browser form, generic Skill, image, bash and Pi compression; generated leave Skill choice/form rendered in a disposable layer | Working business options/authentication and complete final-image repetition |
+| T-13 | Clean deploy, candidate upgrade, matched old-data rollback, two-owner supplied-ledger replay; automatic-journal old-volume two-owner deletion replay and current-service two-owner deletion/retry; two-owner deletion reconciliation with restored old OpenViking volumes and healthy `0.2.55` binary rollback; one restored-volume old queue resumed through source append; focused synthetic new queued, `session_unknown` and later-phase writer overlay; one real-service clear plus pre-commit source replay with synthetically restored old document; clear-plus-settled writer fails closed; real-service message-phase and cross-owner guard across old/new OpenViking volume generations | Old queue through ready, multi-user queue, real credential/new writer through commit and ready including clear plus newer writer, and old-binary rollback with those in-flight writers |
+| T-14 | Five-user, 100-complete-request MiMo candidate-7 run passed semantic recall, injection, wait and token limits in an instrumented disposable container; full-source image repeated 100 complete requests with 70/70 recall answers; byte-identical prompt-layer image passed matched on/off cost; final fixed Browser save-ready p95 35 s with 10/10 source readbacks | Complete other fixed categories, integration and causal interpretation |
+
+Review found that older correction intents keep document bodies inline in the
+append-only recovery journal after later forget, clear or owner retirement.
+New intents now keep a private, hash-checked payload outside the immutable
+journal bytes; a later replacement, removal, scope clear or owner clear prunes
+obsolete payloads. Targeted tests cover active correction replay, older
+checkpoint deletion replay after payload pruning, missing-payload fail-closed
+behavior and restart orphan cleanup. This is a forward fix, not a migration of
+existing inline events or a retained-backup policy. Those old bodies and their
+backup generations still need a validated retirement/migration procedure
+before AC-07/12 and T-09/13 can close. The supplied-ledger replay separately
+rejects linked or exposed ledger, config and owner-state files before remote
+mutation.
+The current replay skips any legacy inline correction superseded by a later
+correction, deletion or clear; a stopped-service regression proves the old body
+is never sent to OpenViking on a post-checkpoint deletion replay. This prevents
+transient resurrection during replay but does not remove retained legacy bytes.
+A one-owner [real-service replay](evidence/issue477-legacy-inline-replay.json)
+then ran the current host recovery command against pinned OpenViking v0.4.20
+and embedding Compose services. A method-counting loopback proxy observed zero
+replacement writes on both replay and retry; the deleted document returned 404.
+This is a model-free subgate and does not resolve legacy journal or backup
+retention.
+The protected recovery command now has a read-only `audit-retention` mode that
+reports aggregate legacy-inline and current-payload counts without owner IDs,
+URIs or body text. Its synthetic test covers both formats; the actual recovery
+volume has not yet been audited.
+The stopped-service `migrate-legacy` command now takes the private memory
+configuration root, current protected data root, old recovery root, a
+**pre-created empty private** recovery root, and a new checkpoint path. It
+validates every owner against the stopped data, verifies current USER-key
+identity and remote deletion/readback effects before any new owner file is
+written, and refuses unsettled writers or governance jobs. It then
+rewrites old inline corrections as hash-checked sidecars only when still live,
+and omits both the body and its digest for retired corrections. It verifies the
+new generation and writes a fresh checkpoint; the old root and checkpoint stay
+untouched. An old checkpoint must fail against the new journal. This is a
+candidate upgrade path, with a synthetic regression; it has not run against an
+actual retained volume. Operators must first settle any restore against the
+old generation, stop writers, create the new root, run the command, back up the
+new data/recovery/checkpoint together, and switch the recovery volume as one
+release. Old recovery and backup generations still contain the deleted bytes
+and must be retired under the configured backup retention policy. The command
+does not delete them or claim that a retained backup has expired. Run it as the
+protected host UID; if it stops after creating only part of the new root, do
+not switch volumes or reuse that root. Inspect and discard only that new,
+unpublished generation, then retry with another empty private root.
+On 2026-09-27, the current host build replayed one synthetic USER's
+post-checkpoint deletion and correction through the real HTTP client against
+the pinned OpenViking and embedding Compose services in a dedicated Podman VM.
+Preflight and replay each counted two events; the deleted document read returned
+404, the corrected body was read back, and an immediate replay succeeded.
+The new-format recovery volume had one active payload and no legacy inline
+bodies. The [aggregate evidence](evidence/issue477-current-recovery-summary.json)
+contains no credentials, owner IDs, URIs or document text. This is one
+model-free recovery subgate. A protected container built from the same tree
+also passed preflight, replay, immediate idempotent retry and retention audit;
+real USER-key readback returned 404 for the deletion and 200 for the corrected
+document. This build changed only the build-stage Debian mirror in a temporary
+Dockerfile to avoid a slow download. Bit-exact release-image, multi-owner,
+memory-enabled OAuth, MiMo and Browser acceptance remain open.
+The same isolated protected image and nginx passed the repository HTTPS smoke
+check with production OA client settings and the fixed localhost callback.
+In the in-app Browser, two real OA authorization round trips returned to a
+clean Dano URL and showed the authenticated account in the menu. Logout
+restored a usable anonymous session; a subsequent login succeeded. The
+[sanitized OAuth evidence](evidence/issue477-oauth-browser-summary.json)
+contains no provider address, account name, credential or token. This run
+intentionally omitted memory and model credentials, so it does not close
+memory-enabled Browser, transcript, image or bash acceptance.
+Another stopped-stack rehearsal used two synthetic USERs. It backed up the
+OpenViking named data volume, protected owner state and private configuration,
+then recorded and applied one new deletion per USER in the separate recovery
+journal. Restoring the older OpenViking and protected volumes made both deleted
+documents readable again (HTTP 200). With the newer recovery journal retained,
+preflight and replay each counted two owners and two events; both deleted
+documents then returned 404 while each USER's unrelated document still
+returned 200. The owner states advanced from the restored revision 1 to 2,
+and an immediate replay passed. The
+[sanitized two-owner evidence](evidence/issue477-two-owner-old-volume-replay.json)
+does not claim old-version binary rollback, pending-queue reconciliation or
+source-session revocation.
+In a separate real-service old-queue rehearsal, a synthetic lost
+`createSession` response left the local operation at `session_unknown` while
+its USER-bound remote Session existed. OpenViking was stopped, its data volume
+exported and imported into a new volume, and the checkpointed Dano owner state
+restored while the recovery journal remained separate. Preflight and replay
+both returned one owner and zero newer events. The restored service retained
+the Session; two delivery advances reconciled it and appended the source,
+ending at `message_delivered`. The real service confirmed the source, and
+repeating the save reused the same operation ID. The
+[sanitized old-queue evidence](evidence/issue477-old-queue-volume-restore.json)
+does not cover commit, extraction, `ready`, newer recovery events, or a second
+USER. These remain required before the queue and rollback gates close.
+The rollback preflight now compares every stable field of an operation present
+at the checkpoint, including its source and collection provenance. It permits
+the existing blocked-state transition and transient retry metadata, but rejects
+changed source identity before any remote request. The focused tests cover both
+the rejection and a legitimate queued-to-blocked transition. New operations
+created after the checkpoint in the `queued` phase with their payload intact
+can be overlaid: the published delivery state machine persists
+`session_unknown` before its first remote request, so these writers have not
+sent data. A new `session_unknown` writer can also be overlaid only when its
+payload remains and the restored OpenViking service reports its fixed Session
+ID absent under the same USER key. `preflight` reports the number of required
+remote writer checks without contacting the service; `replay` verifies every
+owner and every such absence before replaying any deletion or correction. In
+that `0.2.53` path, a present Session or missing payload fails closed.
+Focused rollback tests cover these boundaries, but the new
+`session_unknown` path has not yet run against a real restored volume and does
+not close the broader upgrade-window writer gate.
+The `0.2.54` recovery candidate additionally permits a new later-phase
+writer only when the restored service provides the phase-specific read-only
+proof: Session existence with no source, source presence, a terminal bound
+commit task, or for `ready` the same archive and retrievable memory URI set.
+Every owner and writer is checked before any deletion or correction replay.
+Synthetic phase and cross-owner regressions cover missing receipts and
+unfinished tasks; a real old-volume run and concurrent governance/credential
+rotation remain required before the upgrade-window gate can close.
+A separate [real USER-key rotation fixture](fixtures/issue477-real-key-rotation.mjs)
+ran on the default-apt `0.2.55` protected image and pinned OpenViking service.
+It created Alice's Session and source, rotated Alice's key through the public
+admin API, observed old-key rejection, rejected Bob's key for Alice, rewrote
+Alice's encrypted Dano credential and reopened the store. The new key read the
+same Session and message. The [sanitized receipt](evidence/issue477-0255-real-user-key-rotation.json)
+records this T-07 subgate. It does not exercise a complete Dano host restart,
+post-commit `ready`, old-volume rollback or concurrent governance.
+The follow-up [protected host restart receipt](evidence/issue477-0255-real-rotation-host-restart.json)
+uses the same fixed service and image with a disposable persistent state root.
+The complete `protected-main` process stopped, Alice's real USER key was rotated,
+and a host-UID helper verified and durably replaced the encrypted credential.
+The old key could not read Alice's protected content URI, while the new key
+could. After the process restarted with the same state root, Alice's Dano export
+still contained that content and Bob's did not; 36 HTTP identity probes passed.
+Generic `/health` status alone was not treated as revocation proof. This is
+real-service process restart evidence, not a restored multi-volume/old-version
+rollback, model-`ready` or independently authenticated OA Browser result.
+The first `0.2.56` operator command incorrectly treated OpenViking `/health`'s
+service-wide `auth_mode=api_key` as proof that a revoked USER key was still
+active. The `0.2.57` command now verifies the new key's owner through `/health`
+and requires the saved old key to receive 401/403 from the protected Sessions
+API before replacing the encrypted record. In the final `0.2.57` protected
+image, the real OpenViking and Embedding rehearsal rotated Alice's USER key,
+denied old-key content and Sessions access, ran the image-native command as
+host UID, and restarted the full Dano host against the same state root. Alice's
+export retained the content; Bob's did not; 36 HTTP identity probes passed.
+The [sanitized operator-command receipt](evidence/issue477-0257-real-operator-key-rotation.json)
+also records image/script hashes, 1710 passing Vitest tests and cleanup. It
+does not establish OA Browser identity, model extraction/`ready`, restored
+multi-volume or old-binary rollback.
+The protected `0.2.54` image built successfully from commit `ca9c12f41`.
+Its embedded product version and recovery script SHA-256 match the checkout;
+the release manifest check passed. The [build receipt](evidence/issue477-acceptance-archive.md#report-01)
+does not count as restored-volume or Browser acceptance.
+The same image then used pinned OpenViking v0.4.20 and local Embedding with
+synthetic USER keys. After restoring checkpointed owner state, one later-phase
+writer with no remote source stopped a deletion before mutation; after its
+source append, replay deleted the document, preserved the writer and succeeded
+again without duplication. A two-owner run confirmed that Bob's unproven
+post-checkpoint writer also stops Alice's deletion globally, then permits it
+after Bob's source is read back. The [sanitized real-service receipt](evidence/issue477-0254-real-writer-replay.json)
+records both results. This did not clone an older OpenViking volume or exercise
+commit, extraction, `ready`, credential rotation or OA.
+Code review of the release branch found that the container's fixed Aliyun apt
+rewrite disagreed with the repository's CA bootstrap ADR and that bootstrap
+duplicated private-path checks. Dano `0.2.55` now shares those path checks;
+the default image build installs CA from the base Debian source before using
+Tencent HTTPS, while isolated builders can supply a build-only HTTP mirror.
+The protected image built with that override, retained no apt-mirror build
+argument at runtime, matched the committed recovery script hashes, and
+accepted a private empty recovery root while rejecting a world-readable one.
+All 145 Vitest files passed (1705 tests, one skipped), as did type/Svelte
+checks, local build and release manifest check. The [sanitized build receipt](evidence/issue477-acceptance-archive.md#report-04)
+does not establish real-volume replay or OA/model/Browser acceptance for 0.2.55.
+The default apt/CA branch of the same bootstrap script was subsequently run
+without `DANO_APT_MIRROR` in the exact Node 22 Debian base image. Debian CA
+installation, switching to Tencent HTTPS apt sources, a second apt update and
+curl installation all succeeded; the CA bundle was present. The [default apt receipt](evidence/issue477-acceptance-archive.md#report-03)
+also records a subsequent complete `protected-runtime` Dockerfile build with
+`DANO_APT_MIRROR` omitted. The resulting `0.2.55` image uses the Tencent HTTPS
+source, retains CA and no apt mirror runtime variable, and embeds release and
+recovery script hashes matching the checkout. The build still supplied a PyPI
+mirror and GitHub proxy for unrelated dependencies; it is not a Compose,
+rollback, OA, model or Browser acceptance result.
+The same default-apt `0.2.55` image subsequently started via the actual
+base + protected + memory Compose configuration in an isolated project with
+no published ports. Dano, OpenViking, Embedding and Reranker all became healthy;
+Dano's container-local `/api/health` returned 200. The candidate recovery
+volume required Podman's `volume create --uid 1000 --gid 1000` for ownership to
+persist across mounts. The [sanitized Compose receipt](evidence/issue477-acceptance-archive.md#report-02)
+records this startup subgate. The existing OA stack at 18710/18711 remained
+running. This did not exercise MiMo, OA callback, Browser acceptance or recovery
+replay.
+In a separate `0.2.55` rehearsal, OpenViking was stopped and its named volume
+exported into a second volume before a two-owner post-checkpoint writer ran.
+After Bob's message source reached the newer volume, checkpointed Dano owner
+state was restored while its recovery journal retained one Alice deletion
+intent. Starting the old OpenViking volume showed Bob's new Session absent;
+replay rejected before deleting Alice's still-readable document and left the
+owner state unchanged. Starting the newer volume verified Bob's source, then
+replayed Alice's deletion, preserved Bob's operation and passed an immediate
+retry. The [sanitized old-volume receipt](evidence/issue477-0255-old-volume-writer.json)
+records this narrow result. It does not cover commit, extraction, `ready`, an
+old Dano binary, credential rotation, governance transition, OA or MiMo.
+The operator-supplied deletion ledger now shares the recovery journal's
+owner-bound document-URI validation. Its preflight rejects path traversal,
+encoded traversal, hidden files and query strings before verifying remote
+identity or replaying any owner's changes. The installed-layout subprocess
+test covers those cases; it does not replace the broader T-11 security matrix.
+The `0.2.52` protected-runtime image (`e6e07445891b`) passed
+`protected-supervisor-http.mjs --cli --memory` in a disposable,
+network-disabled container. The fixture asserted 401 for missing and invalid
+JWTs and 403 for Bob accessing Alice's memory settings, operation list,
+operation content, export, and settings mutation. In the same image,
+`isolated-memory-tool-worker.mjs` denied Pi read/write/edit through both
+absolute and symlink paths, denied Bash file and environment access, and
+returned 401 to a tool worker lacking its parent process's synthetic key.
+Both containers were removed after their checks. These synthetic checks do
+not establish real OA authentication, real OpenViking USER-key authorization,
+model behavior, or Browser acceptance.
+The `0.2.53` protected-runtime image (`950263cc2c48`) repeated the
+synthetic protected supervisor HTTP and Pi native-tool isolation checks in
+disposable network-disabled containers. The [sanitized receipt](evidence/issue477-0253-protected-contract.json)
+records the image and source commit, the two worker identities, memory HTTP
+boundary, child cleanup, denied absolute/symlink file access, denied Bash
+credential access and denied unauthenticated HTTP request. It remains a
+synthetic subgate; the separate `0.2.53` ordinary-entrypoint Compose startup
+passed HTTPS and deployment smoke, but its OA Browser login stopped at the
+provider's slider CAPTCHA before callback and it is not a protected-memory
+deployment.
+The `0.2.55` protected-runtime image then ran the HTTP fixture against the
+official OpenViking v0.4.20 service with local Embedding on an isolated network.
+Two synthetic JWT owners each exported memory through Dano, which provisioned
+separate real OpenViking USER keys. Management lookup and each key's `/health`
+identity confirmed the expected account and derived user binding. Four Dano
+memory read routes rejected missing/invalid JWTs with 401 and a foreign JWT
+with 403; settings mutation did likewise. The [sanitized receipt](evidence/issue477-0255-real-user-key-http.json)
+records this narrower T-11 result. It does not prove OA login, Browser identity,
+model behavior or the full HTTP matrix. A follow-up on the same protected image
+wrote Alice's synthetic content to the real service and read it with Alice's
+USER key. Bob's USER key could not read that content even with forged identity
+headers, and each user's Dano export contained only that user's content. The
+same [receipt](evidence/issue477-0255-real-user-key-http.json) records this
+single cross-user content check, not the full T-11 matrix.
+The default-apt `0.2.55` protected image subsequently executed the updated
+HTTP fixture with no network or credentials. Twelve Dano memory route/method
+combinations each rejected missing and invalid JWTs with 401 and a foreign JWT
+with forged OpenViking account/user headers with 403: 36/36 assertions passed.
+Settings, operation list/detail/content, export, and governance status/review
+routes were included. Graceful shutdown reclaimed the host, search daemon and
+workers. The [sanitized boundary receipt](evidence/issue477-0255-memory-http-boundary.json)
+is Dano-entry synthetic-JWT evidence; it does not establish real OA identity,
+OpenViking-backed content for every route, model behavior or full T-11 release
+acceptance.
+The same fixture then ran in the default-apt `0.2.55` protected image against
+an isolated real OpenViking service and local Embedding, using a fresh random
+test root key and unavailable dummy VLM. Both Dano synthetic JWT owners obtained
+distinct real USER keys. All 36 Dano memory HTTP identity probes passed, Alice
+wrote and read back synthetic content, Bob's USER key with forged account/user
+headers could not read it, and Dano exports exposed only each owner's content.
+The [real-service receipt](evidence/issue477-0255-real-service-memory-http-matrix.json)
+records the image digests and cleanup. The run still lacks real OA users,
+model-driven operation content, Browser identity and the full T-11 release
+matrix.
+
+Read-only inventory of the configured production host on 2026-09-27 showed
+`dano-app:rel-20260922-143917`; its container mount destinations did not
+include `/var/lib/dano-memory-recovery`, and the Dano-related Docker volume
+list contained only `dano_agent-config` and `dano_workspaces`. Therefore that
+current production container has no mounted old-format recovery journal to
+migrate. This does not prove the candidate volumes elsewhere are empty, nor
+replace first-deployment and rollback acceptance for the new format.
+The default local Podman VM was also inventoried read-only on 2026-09-27.
+Its volume directory contained the older `dano465-browser-nibutlhc` config,
+data, runtime and workspace volumes, plus unrelated `dano478` and base Dano
+volumes; it contained no `dano477-finalqueue` or memory-recovery volume.
+The retained Browser runtime volume contained `.pi` and `workspaces` but no
+recovery journal. The separate `dano-465-acceptance-cachetest` VM had no
+volumes after its disposable security checks. Thus the historical retained
+`finalqueue` recovery generation is not currently available in the accessible
+local VMs for a real-volume `migrate-legacy` run. This is an inventory result,
+not evidence that old backups have expired or that migration is unnecessary.
+
+The fixed §11.1 minima are 20 recall, 10 correction, 20 isolation, 10 deletion,
+10 irrelevant and 10 authorization cases, each independently repeated three
+times. Correction, isolation, deletion and authorization require every attempt
+to pass. Recall needs at least 90% required-source hits **and** at least 90%
+correct model answers; irrelevant requests need at least 90% without injected
+memory. Five distinct concurrent users must run at least 100 **complete Dano
+requests**, with steady recall-added p95 ≤1 s, wait hard limit 2 s, measured
+injection ≤1,500 tokens, healthy save-ready p95 ≤60 s and incremental model
+cost ≤20% against the same memory-off workload. The earlier 100-attempt probe
+called OpenViking/reranker only; candidate 7 now supplies complete matched
+requests and a full-source image repeat. The healthy save-ready subgate passed
+on the final image; the other five fixed categories and full cross-category
+matrix remain open.
+
+The executable attempt-coverage audit is
+documented with its external report paths in the [archive catalog](evidence/issue477-acceptance-archive.md#future-runs).
+On the frozen 80 cases ×3 it finds 120 reported attempts: 60 OpenViking-only
+isolation and 30 each for public-API correction and deletion. Another 120
+attempts remain missing (recall 60; irrelevant and authorization 30 each).
+This checks IDs, repetition bounds and duplicate attempts and exits nonzero
+while any attempts are missing or reported failed. It does not independently
+validate outcomes or count these API-only attempts as Dano/Browser acceptance.
+Model answers, source hits, latency and cost retain their separate gates above.
+
+The §11.2 Browser flow also requires a separately authenticated Bob context;
+a second tab sharing Alice's cookie cannot supply it. The current local stack
+has only Alice's authenticated Browser context. No production go/no-go decision
+or issue closure follows from this partial evidence.
+
+- Package and validate the recovery procedure as a repeatable command,
+  including deletion/revocation records across arbitrary rollback points.
+- Define and test the multi-user upgrade-window reconciliation policy beyond
+  one controlled synthetic resubmission.
+- Retain the failed vector-only and candidate-2 concurrency results alongside
+  the passing candidate-3/4/5 selection evidence; finish full model-answer review.
+- Complete correction, deletion and authorization cases three times each,
+  remaining model-answer review and the independent dual-user in-app Browser
+  scenario.
+- Complete the business OA Skill Browser flow, remaining final-image Field
+  Assist/Heimdall/SSE regressions, close each audited AC/T gap and clean test
+  resources.
+
+No production deployment or release conclusion is implied by this record.
+
+The `0.2.58` recovery checkpoint now uses the same 1 MiB manifest limit when
+writing and reading, without a separate 256-owner cap at replay. A targeted
+257-owner fixture completed checkpoint and read-only replay preflight. This
+closes the self-incompatible checkpoint found in review; the remaining T-13
+in-flight writer and credential-rotation gates above remain open.
+The formal `0.2.58` protected image reports the matching product version and
+contains byte-identical recovery and USER-key replacement scripts; the build
+receipt is [archived receipt](evidence/issue477-acceptance-archive.md#report-06). Image
+construction alone does not satisfy deployed rollback or Browser acceptance.
+
+An isolated two-owner rollback then exercised the actual old and candidate
+binaries (`0.2.55` → `0.2.58` → `0.2.55`) with real OpenViking volumes. Both
+owners began with one document to delete and one to retain. After candidate
+governance completed both targeted forgets, the test restored old volume
+snapshots while retaining the newer recovery journal. The restored remote
+temporarily returned both deleted documents; candidate preflight and replay
+each reported two owners and two events, and a second replay was idempotent.
+Both deleted documents returned 404 and both retained documents returned 200
+before the old binary restarted. The old binary was healthy, retained both
+owners' enabled settings and completed governance state, and returned isolated
+own-document exports without foreign markers. The aggregate, snapshot hashes,
+and cleanup receipt are in
+`docs/research/evidence/issue477-0258-old-binary-two-owner-rollback.json`.
+This closes the deletion-only old-binary subcase; it does not cover an
+in-flight queue/new writer through `ready`, credential rotation, MiMo/OA or
+Browser acceptance, or the full T-13 release gate.
+
+Review of the `0.2.58` candidate found two further recovery hazards, fixed in
+the `0.2.59` source. A request canceled immediately after local state commit
+can no longer cancel its durable mirror read. Recovery preflight now rejects a
+restored owner with both a post-checkpoint whole-scope/owner clear and a new
+remote writer: merely proving that writer existed before replay is insufficient,
+because the clear would remove its documents. Targeted tests reproduce both
+windows. This fail-closed rule prevents silent loss; it does not yet reconcile
+such a clear plus new writer or close the upgrade-window T-13 gate. The formal
+`0.2.59` protected image contains the matching product version and byte-identical
+recovery script; the build receipt is
+[archived receipt](evidence/issue477-acceptance-archive.md#report-07). A real-volume
+clear/new-writer regression and model/OA Browser acceptance remain open.
+
+The `0.2.60` recovery command can now carry a post-checkpoint writer across a
+memory-scope clear while it is still before remote commit. It first proves an
+unknown session is absent, or proves the created/appended session has the
+expected source and no commit task. Only then does it replay the clear and
+overlay the newer local writer state. A hidden commit fails before any replay
+mutation. An owner-data clear, or a writer that reached commit/processing/ready,
+still fails closed because replaying the whole-tree clear could remove its new
+documents. Targeted recovery tests cover each pre-commit phase and the hidden
+commit rejection. Real OpenViking volume replay, later-phase preservation and
+the complete T-13 gate remain open.
+The formal protected image reports `0.2.60` and contains the byte-identical
+recovery script. Its [build receipt](evidence/issue477-acceptance-archive.md#report-08)
+records 41 targeted recovery tests, 1718 passing full-suite tests, checks,
+build, and release-manifest validation. This image has not yet passed deployed
+Compose, old-volume restoration, MiMo or OA Browser acceptance.
+
+The same image then ran an isolated one-owner recovery probe against official
+OpenViking `v0.4.20` and the pinned local Embedding model. After a checkpoint,
+the probe cleared real remote memory, created a newer source-tagged Session
+without committing it, restored the old local state, and reinserted one old
+document to represent asymmetric old-memory content. Preflight, replay and a
+second replay passed: the old document was removed, the new source stayed
+readable, and the local operation remained `message_delivered`. The
+[sanitized receipt](evidence/issue477-0260-real-precommit-clear.json) records
+the setup corrections, cleanup and limits. This did not clone an actual old
+volume or reach commit/`ready`; the full T-13 gate remains open.
+
+On 2026-09-28 the retained `0.2.53` OA stack still owned the fixed loopback
+ports 18710/18711 and was healthy. The served localhost leaf matched the
+persistent certificate, had valid localhost/loopback SANs through 2027-09-11,
+and passed macOS system trust plus curl and Node validation with the existing
+CA. The in-app Browser entered Dano without a security interstitial, connected,
+opened the login menu, and reached the real OA login using a fresh redirect.
+Submitting the filled login showed the provider's slider CAPTCHA. The
+[sanitized stage receipt](evidence/issue477-acceptance-archive.md#report-29)
+records that callback and authenticated identity remain unverified and that
+this older retained stack cannot count as final `0.2.60` Browser acceptance.
+
+### Clear followed by settled writers, candidate 0.2.61
+
+The recovery command now preserves post-clear writers whose remote commit is
+settled, including local `commit_unknown`, `processing` and `ready` states.
+The final completed clear job's pre-barrier writer set proves the ordering;
+wall-clock timestamps do not. Owner retirement, missing clear provenance,
+unsettled tasks, removed sources and a conflicting current document deletion
+continue to reject replay before destructive requests.
+
+After checking every owner's identity and source/commit receipts, replay reads
+the current verified documents through the bounded USER client and atomically
+fsyncs a private `replay-preservation.json` in that owner's separate recovery
+directory. The plan is bound to the checkpoint, latest state and full event
+stream. Every owner is staged before any clear runs. Whole-tree clear still
+removes old documents and derived indexes; replay then restores the staged new
+documents and verifies the final document set before overlaying local state.
+The local replay receipt retains the new writer IDs, so a repeated replay after
+the overlay still verifies and preserves those writers.
+
+If clear or restoration fails, retain the preservation file and the same
+checkpoint/recovery generation, keep Dano stopped, and repeat the same replay
+command after resolving the remote failure. A pending plan blocks opening the
+owner runtime and taking a new checkpoint. Do not delete the file to bypass
+`MEMORY_RECOVERY_REPLAY_PENDING`. A changed journal or checkpoint rejects a
+stale plan. Successful readback and local overlay remove and fsync the staged
+body file; the durable receipt contains metadata only.
+
+Automated tests cover three settled phases, a lost clear reply, replays after
+overlay, pending-runtime/checkpoint fences, stale/foreign staged documents,
+deletion priority and staging both owners before either is cleared. These are
+synthetic transport tests. Real old-volume preservation, extraction through
+ready, multi-user credential rotation and old-binary rollback remain required
+for AC-12/T-13; this candidate does not close that gate.
+
+Review also corrected the old-operation governance transition: completed
+selective forget/correction may remove or relocate its `memoryUris`, and a
+completed clear strips the field. Recovery accepts these mapping changes only
+with a newly completed, matching-scope writer barrier and corresponding final
+deletion/replacement evidence. Live forget can remove its only derivative via
+source deletion alone; replay records and explicitly enforces that old URI's
+absence, including a retry after its source is already absent. Current task,
+archive and source identity remain immutable. Actual published extension
+`MemoryGovernanceService.forget/correct` with the journal-bound host client is
+used in the automated regressions, rather than appending synthetic mutations
+without the governance state transition.
+
+The private replay receipt uses one 64 MiB read/write limit checked before
+remote changes. A 65-writer fixture exceeds the previous 4 KiB limit and
+successfully repeats after overlay with its staging file still present.
+Preservation binds each document to a staged writer/task/archive receipt and
+requires the exact URI union; additional same-owner or foreign documents and
+malformed existing plans are rejected. Targeted deletion replay also rejects
+overlap with a newer verified document before deleting anything.
+
+Multiple settled writers whose historical diffs successively change the same
+merged document remain a recovery limitation: the public client requires each
+recorded writer's current document to match its own diff. An earlier matching
+diff cannot prove that a newer differing result was legitimately superseded.
+These combinations stay fail-closed until a verified update chain or explicit
+reconciliation establishes the final result; they are not counted as passing
+the multi-writer T-13 gate.
+
+The final `0.2.61` source passed checks, the full build and Vitest (146 files,
+1735 passing tests and one skip). The formal protected image reports the same
+product version and byte-identical recovery script. A disposable no-network
+container exercised its compiled pending-runtime and pending-checkpoint fences;
+both rejected an incomplete preservation plan. The container and its synthetic
+runtime were removed, while the existing fixed-port OA stack stayed healthy.
+The [build/review receipt](evidence/issue477-acceptance-archive.md#report-09) records
+the image, commit, checks and explicit limits. The image is retained for the
+remaining acceptance; it is not a deployed or real old-volume T-13 pass.
+
+### OA account login and missing client registration, 2026-09-28
+
+OA login was rechecked on 2026-09-28 through the retained `0.2.53` stack at
+`https://localhost:18711`. With the user's action-time confirmation, the real
+slider CAPTCHA completed and the OA account signed in. The provider consent
+page then reported `OAuth2 客户端不存在` for `danoProduction`. The authenticated
+current-tenant client management page contained five records and no such
+client. A registration form was prepared with the configured local and
+production callbacks, authorization-code/refresh grants and `user.read` scope;
+at that stage the required client secret and icon were empty and the form was not
+submitted. This is an OA account-login result and a confirmed registration
+blocker, not Dano OAuth or final-image acceptance. The aggregate, secret-free
+receipt is [recorded separately](evidence/issue477-acceptance-archive.md#report-30).
+
+Later the same day, the user explicitly authorized filling the test OA form.
+The existing configured Dano client secret was entered without publishing it;
+the public Dano SVG icon was uploaded through the supported file chooser and
+its preview was observed. The prepared form contained both callbacks and the stated
+grants/scope. Automatic approval rejected final submission because permission
+to fill did not explicitly authorize persistent OAuth client creation. A
+specific action-time submission confirmation was requested; that stage did not
+prove client registration or a Dano callback. The [prepared-form receipt](evidence/issue477-acceptance-archive.md#report-31)
+contains metadata and the public asset hash only.
+
+The user then explicitly authorized persistent OAuth client creation. Submission
+succeeded, and `danoProduction` appeared in the server-loaded client table.
+Reopening its edit form confirmed enabled status, authorization-code/refresh
+grants, `user.read`, token validity and both registered callbacks. A fresh login
+from the fixed local Dano entry reached the provider's Dano consent page; after
+consent it returned to Dano and showed the authenticated account and logout
+control. Reopening the entry preserved the authenticated identity. The
+[registration and login receipt](evidence/issue477-oa-client-registration-login-20260928.json)
+contains only public configuration and aggregate observations; the authenticated
+browser screenshot remains outside the repository. This removes the observed
+missing-client blocker for the retained `0.2.53` stack. Production login,
+final `0.2.62` and independent dual-user acceptance were still unverified at
+that stage.
+
+The user subsequently explicitly authorized continuing with the existing MiMo
+configuration. Requiring a replacement model key was an additional agent-imposed
+condition, not a PRD/Spec release criterion, and has been removed. Credentials
+remain in host-private configuration and are excluded from output and evidence.
+The existing configuration produced a real `mimo-v2.5` response on the final
+`0.2.62` protected image.
+
+### Final-image real OA and model Browser checks, 2026-09-28
+
+The final protected image `1297fc14a8f8` ran through the shipped Compose path,
+with isolated Linux volumes and the existing trusted fixed HTTPS entry. Real
+OA login displayed the authenticated account. MiMo answered the plain-text
+probe, described the actually uploaded synthetic image as a left red circle
+and right blue square, and triggered `bash` with command `ls`, followed by
+the complete answer `uploads`. Reopening the page retained those messages;
+logout returned to a connected fresh Anonymous User and login authenticated
+again. The current implementation and existing regression explicitly create a
+new chat after login; the transferred anonymous probe was retained in the
+authenticated user's session files. This does not claim automatic display of
+the old chat after login.
+
+The first bash attempt returned a successful tool result, but its post-tool
+answer repeated thinking and was cancelled. That attempt is retained separately
+and is not a complete-answer pass. The later explicit empty-result handling
+probe completed. The actual user's workspace resolved to an `xfs` named-volume
+mount and passed a minimal Bubblewrap write check using its worker identity.
+API/anonymous-cookie/SSE smoke also passed. The
+[Browser receipt](evidence/issue477-0262-real-oa-model-browser-20260928.json) and
+[screenshot](evidence/issue477-0262-browser/image-bash.jpg) record these outcomes.
+Memory was not configured during these checks. Real final-image memory,
+independent dual-user OA, complete quality/cost and recovery gates remain open.
+
+### Stopped live-state seal, candidate 0.2.62
+
+Inspection of the pinned official `v0.4.20` compressor confirms lock-free patch
+merge: prepared old content supplies `before`, while `after` reads the current
+file following application. Those fields do not establish a causal order for
+overlapping writes. Recovery therefore does not infer an update chain or accept
+an earlier matching diff as proof of a newer writer's result.
+
+The `seal-live` command captures the stopped current service's actual document
+set before replacing any volume. It checks the latest local/mirrored state,
+completed governance, terminal tasks, source markers and stable reads, and
+authenticates a bounded private body file with a domain-separated key derived
+from the host credential encryption key. Every owner passes preflight before
+any seal is published. Pending seals block runtime and new checkpoint creation.
+Replay requires the same checkpoint/state/journal generation, verifies all known
+tasks against the restored service, rebuilds the memory tree from the seal, and
+checks exact contents before local overlay. Lost replies retain the seal for
+retry. Success removes the body and keeps only MAC/URI metadata; repeated
+completed replay verifies that metadata without another clear.
+
+This path needs a matched full remote snapshot containing the newer source,
+archive and task receipts; a content-only seal does not reconstruct missing
+remote history or turn processing into ready. Without a pre-rollback seal,
+ambiguous shared diffs remain fail-closed. Automated shared-document, old-body
+rollback, lost-reply, tampering, active-task, missing-source and changing-capture
+tests exercise the new path. Real multi-owner volume restoration, extraction,
+rotation and old-binary rollback remain required by T-13. No release gate is
+closed by these synthetic tests.
+
+Review additionally required proof of each completed task's exact result,
+original archive, archive source marker and canonical owner-bound diff mapping.
+The command obtains these through the same official SDK version already used
+by the extension; changed/failed tasks and missing archives fail before remote
+mutation. Every replay, including a completed read-only repeat, rechecks tasks
+and sources. Native exclusive locks serialize checkpoint, seal, replay and
+migration through body cleanup, preventing a concurrent command from deleting
+another command's only recovery body. A separate Node process exercises actual
+lock contention in the regression suite.
+
+The final source passed checks (Svelte zero errors/warnings), the complete build,
+frozen offline installation and release-manifest verification. Vitest passed
+146 files with 1750 tests and one skip in 61.52 seconds; targeted recovery
+coverage now contains 83 tests. Both review axes found no remaining actionable
+defect in these changes. An independent two-process review probe also confirmed
+that killing a lock-holder releases the native lock and permits a subsequent
+checkpoint. These results do not replace real volume or Browser acceptance.
+
+The formal `0.2.62` protected image reports the matching product version and
+byte-identical recovery script; a disposable no-network container verified the
+compiled pending-seal runtime/checkpoint fences and actual native lock
+contention/release. Its synthetic runtime and probe containers were removed.
+An initial build exhausted VM storage: an explicit inventory and allowlist
+removed seven obsolete named Dano images and nine verified Dano build-stage
+heads, reducing reported image storage from 20.25 GB to 7.537 GB before the
+next build. The current OA stack stayed healthy, and fallback/rollback images,
+volumes, official bases, model assets and permanent TLS were retained.
+
+The next attempt hit the fixed Skill source's direct GitHub clone timeout.
+A read-only local mirror of that same `v2.1.11` tag completed the build;
+source and installed Skill SHA-256 matched. The
+[sanitized build receipt](evidence/issue477-0262-protected-build.json) records
+both failures, the exact image/source identity, cleanup, reviews and limits.
+This is an image/fence check, not a real-volume, model or Browser T-13 pass.
+
+
+### Existing MiMo configuration and current real entrypoints (2026-09-28)
+
+The user explicitly authorized continued acceptance with the existing MiMo
+configuration. Replacing the model key is not a #465 acceptance prerequisite.
+The private inputs remain in the user-designated `~/tmp` credentials directory;
+no model or USER credential is printed or committed.
+
+The immutable `0.2.62` image with published `pi-openviking@0.1.17` now completed
+an ordinary Pi RPC CLI run through the package's standard protected launcher:
+default-off consent, explicit enablement leaving collection unapproved, real
+MiMo save to ready, content/source viewing, new-session recall and pause. The
+fixed MiMo tokenizer assets were checked before launch. The isolated synthetic
+USER was removed and absence read back; an empty test account remains. This
+[ordinary Pi receipt](evidence/issue477-0117-ordinary-pi-real-20260928.json)
+replaces the functional-repeat gap for the current package. The first attempt
+failed and is retained in the receipt; its asynchronous cleanup returned 202.
+The operator fixture now waits for removal rather than treating acceptance as
+completed deletion. This CLI run does not establish OAuth or Browser identity.
+
+The final Compose image also completed real OA single-user Browser save,
+source/content viewing and new-chat recall. Its first extraction failed with
+401 because the operator had copied Pi's `$XIAOMI_TOKEN_PLAN_CN_API_KEY`
+reference literally into OpenViking's `api_key`. Resolving that reference from
+the already authorized private configuration fixed the upstream model call;
+no model-key rotation occurred. A second save exhausted a five-query operator
+status budget while the remote service produced the document. After restoring
+the real-service fixture's bounded 90-query policy, runtime restart reconciled
+the same task read-only to ready. Its roughly seven-minute delay is retained
+and excluded from the healthy latency sample. A selective cleanup of the failed
+extraction required confirmed clear because partial upstream effects could not
+be established; only this dedicated synthetic account was cleared.
+
+From the clean state, a new model-triggered synthetic save reached ready in
+29.649 seconds. Browser full-document correction changed `柏舟62` to `柏舟63`,
+and a fresh chat answered only the current code. Browser forget completed,
+management removed the target, and a fresh chat reported that no code was
+recorded. The first deletion-answer request with high thinking was cancelled
+without a completed answer; the completed retest and Dano restart retained the
+unknown result. The isolated stack's default thinking setting was then made
+explicitly `off` for subsequent acceptance, matching ordinary Pi's setting;
+no runtime source or image changed. Actual new-session JSONL confirms `off`.
+See the [current Browser receipt](evidence/issue477-0262-real-memory-browser-20260928.json)
+and screenshots in `evidence/issue477-0262-browser/`. One healthy save is not
+a p95 sample gate. These single-user paths do not close the full frozen matrix,
+independent dual-user OA Browser, business regression or matched-volume
+recovery/rollback gates.
+
+Separate Browser automatic-collection consent then produced one ready operation
+in 45.157 seconds, with its automatic source and content visible in management;
+a fresh chat recalled the report-ending preference. The same ordinary user
+request also caused the chat model to call `memory_save`, although it did not
+request explicit saving. That explicit operation failed with
+`MEMORY_NO_EXTRACTED_FACT`. The original tool receipt and persisted user-entry
+hashes match. The selector has exclusion context for explicit saves, but this
+observation does not yet prove where that exclusion failed. Preserve both
+operations and investigate the affected automatic/explicit overlap; this is not
+a complete AC-04 deduplication pass and must not be hidden by the successful
+automatic operation.
+
+One current-pair, same-owner Browser pause/resume flow also completed. A second
+chat showed the paused state, did not recall the stored preference, and declined
+to save a new synthetic format preference. While paused, the Browser downloaded
+`dano-memory-export.json`; the actual 1,847-byte JSON contained the existing
+preference and excluded the paused request. Targeted forget completed from the
+same paused management UI. After resume, a new chat reported both formats
+unrecorded, and selection created no new operation. The restored authorization
+used a fresh epoch and collection revision. Automatic consent was withdrawn at
+handoff, leaving explicit memory enabled; the light theme stayed unchanged.
+This is one observation, not the complete three-repetition/in-flight-send matrix
+or independent Bob identity proof. See the current Browser receipt and
+`memory-resumed.jpg` / `memory-collection-revoked.jpg`.
+
+The bounded remaining execution order is in
+[the current acceptance runbook](issue477-remaining-acceptance.md). Existing
+applicable passes remain evidence; a configuration repair or code fix only
+triggers rechecks for the affected paths and the mandatory final release gates.
+
+### Same-source overlap guard and candidate 0.2.63 (2026-09-28)
+
+Read-only digest comparison establishes that the earlier automatic operation
+selected the exact explicit saved fact. Raw historical selection input/response
+was not captured, so whether the old model ignored or lacked its exclusion
+context remains unknown. Independent Pi PR #17 adds a receipt-bound exact-quote
+guard and keeps a combined saved/new quote retryable. Later source turns and
+independent facts remain eligible. It passed 264 extension tests and independent
+Standards/Spec reviews; the version bump automatically published `0.1.18`
+through GitHub Actions OIDC. The registry tarball matches the Dano lockfile and
+retains both Pi keywords. Six real MiMo probes pass on baseline and fixed
+versions, so the deterministic deviating-model regressions establish the guard's
+benefit; those real probes alone do not reproduce the historical failure.
+See the [package fix receipt](evidence/issue477-pi-0118-summary-20260928.json).
+
+Dano pins `0.1.18` and bumps the root/release version to `0.2.63`. The real
+Dockerfile built protected image
+`b771b66b5480acaf63dab0b4ddcf623c94fcc612169a8d1c420dd390a8fda629`.
+Only the exact package/version/lock/manifest inputs changed; the isolated Compose
+stack retains its named volumes, private configuration and trusted fixed entry.
+Type/Svelte, release manifest, full build and all 146 Vitest files pass:
+1750 passed, 1 skipped. Retained test attempts include the default Python's
+missing `httpx` and a multi-child Node integration test exceeding Vitest's 5s
+launcher deadline. A 15s launcher deadline leaves all assertions and product
+thresholds unchanged. At the user's request, `httpx==0.28.1` was installed in the
+default Python's user site; its 35 OA/Python tests also pass directly.
+See the [build receipt](evidence/issue477-0263-protected-build.json).
+
+The real OA-authenticated in-app Browser sent a stable synthetic fact with
+explicit-save intent while automatic collection was separately enabled. Exactly
+one explicit operation reached ready in 35.259 seconds, its source/document was
+read in the Browser, and automatic selection completed with no new operation.
+A fresh chat recalled the fact, answered `7+5=12`, and actually executed `bash
+ls`. The same fixed synthetic image was uploaded and read through the model's
+`read` tool; its answer preserves correct colors/order but calls the red circle
+an ellipse. Keep this original answer, without claiming exact geometric
+accuracy. The Browser then revoked automatic consent (revision 5); explicit
+memory and the original light theme remain enabled. The
+[Browser receipt](evidence/issue477-0263-overlap-browser-20260928.json) and
+screenshots in `evidence/issue477-0263-browser/` cover this affected path.
+
+This is one current-image observation, not a full semantic exclusion matrix,
+three-repetition lifecycle/fault gate, 80-case quality matrix, five-user matched
+workload, independent OA Bob, or matched real recovery/rollback completion.
+The remaining original gates stay in the current acceptance runbook.
+
+
+## Current-pair protocol quality and matched workload (2026-09-28)
+
+Dano `0.2.63` / published Pi `0.1.18` completed 90 frozen recall/irrelevant
+attempts and 100 complete requests per matched arm, with five synthetic owners
+and measured peak concurrency five. The [brief summary](evidence/issue477-0263-quality-workload-summary-20260928.json)
+points to all raw attempts, first-driver failures, frozen execution scripts and
+independent source reviews in the external archive; all archive members were
+hash-verified and scanned for actual credential values before delivery.
+
+Recall's literal scorer reports 57/60 correct. Reading all 60 answers against
+the frozen personal facts finds 59/60: two false positives mention other colors
+as optional palette suggestions without claiming another owner's preference.
+The missing first Alice answer stays incorrect. Independent public USER
+identity/task/archive/diff/content correlation establishes 54/60 required source
+hits and 68/70 in the matched on arm. Initial source booleans were retained:
+Alice's timed-out seed wait prevented that scorer from populating her URI map.
+Actual missing references are still counted as misses. All 30 irrelevant
+attempts contain no injected memory; the matched on arm answers 70/70 recall
+questions correctly and also leaves all 30 irrelevant requests uninjected.
+
+Per-request context time sums every observed context callback. Matched on's
+first request per owner has p95 1,078 ms; the other 95 requests have p95 346 ms
+and maximum 607 ms. Actual injection peaks at 203 tokens, with no unmeasured
+injected token count. The raw all-request quality-window p95 remains 1,007 ms;
+it includes initial requests and is not relabeled as steady. Context timing does
+not cover every lifecycle callback, so it alone does not close all foreground
+wait assertions. Chat-only Token Plan consumption is 5,948,564 Credits on versus
+17,879,428 off using the [verified published weights](https://mimo.mi.com/docs/zh-CN/price/token-plan).
+The matched difference is observational; different responses and cache usage
+prevent attributing its entire value to memory. Extraction/embedding call and
+infrastructure data remain incomplete, so no total-cost gate passes.
+
+The fixture copies the frozen shipped SYSTEM template, while the existing
+Browser service uses its rendered product-name variant. The template's literal
+placeholder appears in two model replies. This protocol measurement does not
+establish canonical Browser identity/business behavior. One seed wait exceeded
+180 seconds; several parallel saves exceeded 60 seconds. These records remain
+unchanged after the eventual local ready transition. Full healthy-save latency,
+50 other frozen cases x3, real independent OA Browser and the remaining recovery
+and lifecycle gates stay open. The stopped evaluation container was removed;
+its dedicated runtime volume remains solely for the unfinished Goal's recovery
+work. The existing Browser stack and fixed entrypoint remain healthy.
+
+## Default-on memory and management-only UI (2026-09-28)
+
+The user's revised PRD/Spec defaults authenticated memory and configured
+automatic collection on, without a consent step. Untouched accounts persist both
+settings atomically before sessions and schedulers become visible. Explicit
+pause/opt-out survives restart and upgrade; policy changes rebind active
+collection with fresh boundaries. Anonymous sessions remain excluded.
+
+The header menu and dialog are now **Memory management**, exposing content,
+receipts, correction, forgetting, clear and export. Manual enable/pause and
+collection controls are temporarily hidden; trusted-host lifecycle APIs remain.
+The root/release version is `0.2.64`; Pi remains pinned to published `0.1.18`.
+The revised frozen fixture changes only three authorization expectations and
+candidate metadata; case counts, repetitions and thresholds remain unchanged.
+
+Type/Svelte checks report zero errors/warnings. All 146 Vitest files pass:
+1756 tests passed, one skipped. Seven recovery CLI input variants now run as
+separate cases with their original assertions and 5-second deadlines, avoiding
+one aggregate timeout. Initial failed attempts remain archived. Both independent
+Standards/Spec reviews of this delta report no findings.
+
+Five fresh synthetic authenticated users verified default-on settings with no
+initial settings mutation and no model calls. Restart retained both defaults and
+explicit opt-outs. The final protected image is
+`5c0794071128d4a62c381c6d216f9aab2982c07dd86f2039752353b0489e162c`;
+the existing OA Browser login, fixed ports, volumes, certificate and light theme
+were reused. One stable synthetic preference automatically reached ready in
+30.028 seconds and was read with its source in the management surface. This is
+one affected-path observation; complete quality/lifecycle/business/recovery
+gates remain open. Raw build/test attempts and the initial Browser screenshot
+are in the [brief receipt's archive](evidence/issue477-0264-managed-defaults-20260928.json).
+
+## Real recovery fixes, candidate 0.2.65 (2026-09-28)
+
+The two-owner real-service rehearsal reproduced two recovery defects. A ready
+operation's working context may be cleared after commit while its exact source
+remains in the bound archive. A pending checkpoint writer may finish and acquire
+receipts before a later clear. The native operator now verifies archive/source,
+task and diff bindings, accepts only newly added receipts covered by completed
+revocation, and checks actual terminal tasks before replay can mutate content.
+Existing owner/source/receipt immutability remains enforced. Root version and
+release manifest are `0.2.65`; Pi remains `0.1.18`.
+
+The pinned final image passed restored old-local/latest-remote matched replay
+and repeated replay, checking two owners, six governance events and eight remote
+writers. All six document bytes remained unchanged. Current `0.2.65` and actual
+old `0.2.63` hosts read exact latest exports and sources, preserved owner
+isolation, recalled each owner's newer facts, and did not revive cleared queued
+facts. The old-remote negative probe found six absent task receipts, refused
+replay with `INVALID_MEMORY_RESPONSE`, and left documents unchanged; it used the
+exact final helper copied into the prior image, rather than a native-final-image
+negative rerun. Three real public USER credential rotations also passed actual
+Dano restarts with old-key rejection and content isolation.
+
+Type/Svelte checks and all 82 focused recovery cases pass. The serial rerun of
+nine earlier failed files passed 330 tests. Broad local runs still returned
+failures (mostly deadlines), including the redundant final run; they are retained
+and not relabeled as clean passes. Independent Standards and Spec reviews
+reported zero findings for the recovery code delta. The final image contains the
+tracked helper byte-for-byte. All raw successful and failed attempts, snapshot
+archives, operator scripts, usage receipts and cleanup are stored privately in
+the [brief recovery receipt's archive](evidence/issue477-0265-real-recovery-20260928.json).
+
+One model request timed out at 180 seconds; post-clear saves include 60.293,
+75.235 and 96.980 seconds. One later old-image client creation returned HTTP 500
+with an unknown cause; its finite diagnostic retry exited 0. These observations
+do not establish healthy-save latency or reliability thresholds. The full frozen
+80-case repetitions, total matched cost, independent OA Bob checks and
+remaining repeated lifecycle/fault cases still prevent #465/#477 closure. Only
+the two independent recovery containers and six test volumes were removed; the
+main fixed-port Browser stack, private credentials, TLS and candidate image stay
+available for the unfinished Goal.
+
+
+## Frozen-matrix supplement, candidate 0.2.65 (2026-09-28)
+
+The [current supplement](evidence/issue477-0265-matrix-supplement-20260928.json)
+adds 60 real OpenViking isolation attempts, 30 real-model correction/source
+attempts, 12 deletion/old-ledger attempts and 18 real Dano authorization attempts.
+Raw literal scorers, semantic review reasons and rejected requests are retained.
+Together with the retained 90 quality attempts this covers 70 of 80 frozen cases
+at three repetitions. The remaining ten cases and all other unfinished gates are
+listed in [remaining acceptance](issue477-remaining-acceptance.md).
+
+The eight supplemental ready measurements include 60.230 seconds; they do not
+pass the 60-second p95 threshold or erase previous slower saves. Native task
+usage is now available for the 20 original seed tasks; full query embedding
+accounting and matched-workload lifecycle waiting still need evidence. No
+additional USER key rotation, image build, broad regression or OA business
+acceptance is required merely by this evidence supplement.
