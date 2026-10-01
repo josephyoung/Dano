@@ -1706,6 +1706,7 @@ describe("BridgeServer HTTP/SSE transport", () => {
     });
     expect(uploaded.path).toBe(path.join(workspaceDir, "uploads", `${hash}.txt`));
     expect(fs.existsSync(uploaded.path)).toBe(true);
+    expect(fs.statSync(uploaded.path).mode & 0o777).toBe(0o660);
 
     const previewResponse = await fetch(`${origin}${uploaded.previewUrl}`);
     expect(previewResponse.status).toBe(200);
@@ -1722,6 +1723,21 @@ describe("BridgeServer HTTP/SSE transport", () => {
       `${origin}/api/workspace-files/preview?clientId=${encodeURIComponent(created.client.id)}&path=..%2Fsecret.txt`,
     );
     expect(outsidePreview.status).toBe(403);
+  });
+
+  it("does not expose filesystem paths when upload storage fails", async () => {
+    const { server, workspaceDir } = createServer();
+    fs.writeFileSync(path.join(workspaceDir, "uploads"), "not a directory");
+    const address = await server.start();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const created = await postJson<{ client: { id: string } }>(`${origin}/api/clients`);
+    const response = await postBytes(
+      `${origin}/api/uploads?clientId=${created.client.id}&name=notes.txt&mimeType=text/plain`,
+      new TextEncoder().encode("synthetic upload"),
+      { "Content-Type": "text/plain" },
+    );
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Upload storage is unavailable" });
   });
 
   it("rejects uploads when the workspace uploads directory resolves outside the workspace", async () => {
