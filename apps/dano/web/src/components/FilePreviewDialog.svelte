@@ -5,6 +5,7 @@
   import X from "@lucide/svelte/icons/x";
   import ZoomIn from "@lucide/svelte/icons/zoom-in";
   import ZoomOut from "@lucide/svelte/icons/zoom-out";
+  import { untrack } from "svelte";
   import { t } from "../i18n";
 
   export interface FilePreviewData {
@@ -236,7 +237,8 @@
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    if (!shell.open) shell.showModal();
+    // Native dialog focus events must not become dependencies of this effect.
+    if (!shell.open) untrack(() => shell.showModal());
     return () => {
       if (shell.open) shell.close();
       queueMicrotask(() => {

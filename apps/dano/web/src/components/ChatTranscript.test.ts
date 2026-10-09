@@ -600,6 +600,120 @@ describe("ChatTranscript compaction presentation", () => {
 });
 
 describe("ChatTranscript Activity Trail", () => {
+  it.each(["inline", "orphan"])("expands %s read images and opens the attachment preview", async (projection) => {
+    const images = [
+      { type: "image", data: "Zmlyc3Q=", mimeType: "image/png" },
+      { type: "image", data: "c2Vjb25k", mimeType: "image/png" },
+    ];
+    const result = {
+      id: "result-images",
+      role: "toolResult",
+      toolCallId: "read-images",
+      toolName: "read",
+      content: images,
+    };
+    const messages = [
+      { id: "user-1", role: "user", content: "查看图片" },
+      ...(projection === "inline"
+        ? [{
+            id: "assistant-images",
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "read-images", name: "read", arguments: { path: "/private/docs/chart.png" } },
+              { type: "toolResult", content: images, sourceMessageId: result.id },
+            ],
+          }]
+        : [result]),
+      { id: "answer", role: "assistant", content: "已查看。" },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, "showModal")
+      .mockImplementation(function (this: HTMLDialogElement) {
+        this.open = true;
+        this.querySelector<HTMLButtonElement>("button")?.focus();
+      });
+    const component = createClassComponent({
+      component: ChatTranscript,
+      target,
+      props: { messages: messages as never },
+    });
+
+    try {
+      await tick();
+      const trigger = target.querySelector<HTMLButtonElement>(".tool-activity-trigger")!;
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      const thumbnails = target.querySelectorAll<HTMLButtonElement>(".tool-activity-image-button");
+      expect(thumbnails).toHaveLength(2);
+      thumbnails[1]!.focus();
+      await tick();
+      thumbnails[1]!.click();
+      await tick();
+      const preview = target.querySelector<HTMLDialogElement>(".file-preview-shell");
+      expect(preview?.open).toBe(true);
+      expect(preview?.querySelector("img")?.getAttribute("src"))
+        .toBe("data:image/png;base64,c2Vjb25k");
+      expect(preview?.querySelector('[aria-label="放大图片"]')).not.toBeNull();
+      expect(target.querySelector(".image-lightbox-shell")).toBeNull();
+      expect(showModal).toHaveBeenCalledOnce();
+      preview?.querySelector<HTMLButtonElement>('[aria-label="最大化"]')?.click();
+      await tick();
+      expect(preview?.querySelector(".file-preview-dialog.maximized")).not.toBeNull();
+      preview?.querySelector<HTMLButtonElement>('[aria-label="关闭"]')?.click();
+      await tick();
+      expect(target.querySelector(".file-preview-shell")).toBeNull();
+
+      trigger.click();
+      await tick();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      component.$set({
+        messages: [...messages, { id: "final", role: "assistant", content: "已查看。" }] as never,
+      });
+      await tick();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      trigger.click();
+      await tick();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    } finally {
+      component.$destroy();
+      target.remove();
+      showModal.mockRestore();
+    }
+  });
+
+  it("expands a read when images arrive while keeping text reads collapsed", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const pending = assistantToolCall("read-image", "read", { path: "/private/docs/chart.png" });
+    const textRead = assistantToolCall("read-text", "read", { path: "/private/docs/notes.md" }, { text: "notes" });
+    const component = createClassComponent({
+      component: ChatTranscript,
+      target,
+      props: { messages: [pending, textRead] as never, isStreaming: true },
+    });
+    const expansion = () => [...target.querySelectorAll(".tool-activity-trigger")]
+      .map(trigger => trigger.getAttribute("aria-expanded"));
+    try {
+      await tick();
+      expect(expansion()).toEqual(["false", "false"]);
+      component.$set({
+        messages: [{
+          ...pending,
+          content: [...pending.content, {
+            type: "toolResult",
+            content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+          }],
+        }, textRead] as never,
+      });
+      await tick();
+      expect(expansion()).toEqual(["true", "false"]);
+      expect(target.querySelectorAll(".tool-activity-image-button")).toHaveLength(1);
+    } finally {
+      component.$destroy();
+      target.remove();
+    }
+  });
+
   it("shows a sanitized activity summary and controlled inline details", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
