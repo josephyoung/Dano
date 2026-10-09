@@ -1,11 +1,11 @@
 ---
 name: dano-production-deploy
-description: Safely update and release Dano production on 1.15.173.22 from the latest upstream/main, preserving runtime data, secrets, TLS, nginx routing, skills, and adjacent services, then complete API/SSE and real in-app-browser acceptance. Use for requests such as "update deploy", "更新部署", "部署最新 upstream/main", "发布 Dano 到生产", or equivalent Dano production update/release requests.
+description: Update the existing Dano deployment on 1.15.173.22 from upstream/main, preserve data and adjacent services, then accept it at its existing URL. Use for 更新部署, 生产环境验收, 直接部署再验收, or equivalent server deployment requests. The user determines whether this server is used as production or testing.
 ---
 
 # Deploy Dano Production
 
-Deploy only when the user explicitly requests a production update. Treat completion as: the exact latest `upstream/main` commit is running, every required acceptance check passes, cleanup is safe, and the evidence report is complete.
+Follow the deployment and acceptance mode in the root `AGENTS.md`. A request to deploy and then accept authorizes updating the existing service and using its existing URL, TLS and OA client. The historical "production" name does not require an additional isolated stack. Treat completion as: the exact latest `upstream/main` commit is running, every required acceptance check passes, cleanup is safe, and the evidence report is complete.
 
 ## Non-negotiable boundaries
 
@@ -22,7 +22,7 @@ Deploy only when the user explicitly requests a production update. Treat complet
 - Keep Heimdall protection enabled. Stop if `HEIMDALL_PROTECT_CONFIG_OVERLAY=0` would reach the app. Do not weaken Bubblewrap, sandbox, runtime mounts, or secret filtering to make acceptance pass.
 - Every formal release synchronizes `SYSTEM.md` from the new image template using the effective product name. Preserve `settings.json` and `heimdall.json` unless the release explicitly requires their synchronization. Ordinary entrypoint starts initialize missing files only. Use the strict synchronization and read-back gate in `deploy/README.md`; prove the effective target, owner, permissions, exact rendered content, and absence of placeholders before any Compose switch. Do not add pre-1.0 layout migrations unless explicitly requested.
 - Do not substitute HTTP, `agent-browser`, API smoke, or screenshots for the required Codex in-app Browser run against `https://1.15.173.22/`.
-- Do not commit, push, open a PR, or change source code as part of a deploy request.
+- A deployment-only request uses the existing source. When the user also requests fixes or rule changes, complete that authorized work and merge its verified PR before beginning the deployment phases below.
 
 ## Phase 1: Re-read the current contract
 
@@ -34,7 +34,7 @@ Before touching local or remote state, read the current versions of:
 - `scripts/deploy-release.mjs`, `scripts/deploy-compose.mjs`, `scripts/deploy-exposure.mjs`, `scripts/smoke-dano-deploy.mjs`, and relevant acceptance helpers
 - this skill's `scripts/summarize-logs.mjs` and `scripts/summarize-compose-config.mjs` before production log or resolved-Compose diagnostics
 
-Apply this precedence rule: explicit host invariants in this skill identify the authorized production target and required directory boundaries; the current repository defines shipped build/runtime behavior; live read-only inventory defines environment-owned topology and configuration. Stop on an unexplained conflict instead of choosing one source silently. Prefer repository scripts when they preserve the inventoried production environment. Compare `deploy:release` staging behavior with the live layout before using it so environment-owned routing or adjacent-service configuration remains intact.
+The user's current instructions select the environment and acceptance mode; the root `AGENTS.md` records workflow defaults; the current repository defines shipped build/runtime behavior; live read-only inventory defines topology and configuration. Resolve routine workflow differences using that precedence. Pause only the dependent action when a concrete data, credential or service conflict remains unresolved. Prefer repository scripts when they preserve the inventoried environment. Compare `deploy:release` staging behavior with the live layout before using it so environment-owned routing or adjacent-service configuration remains intact.
 
 Record the local worktree status before switching branches. Stop rather than stash, discard, or overwrite unrelated user changes.
 
@@ -98,6 +98,8 @@ node scripts/deploy-product-identity.mjs /opt/dano/deploy "$target_sha"
 Require exit zero and record its JSON `productName`, `source`, and `targetSha` in the release manifest. The command reads only public source config and the managed overlay and reuses the target runtime resolver. On missing/empty/placeholder names, invalid overlays or source mismatch, stop before build and follow the repair steps in `deploy/README.md`. Ask for a name only when missing or ambiguous. Valid configuration proceeds without a question.
 
 Build from the proven target checkout and current Dockerfile. Prefer a no-cache build for production updates. Pass registry selection only through the current supported build arguments; follow the Dockerfile's current npm and Debian apt mirror order exactly. Do not patch mirrors on the server or inject secrets into build arguments or logs.
+
+Prepare every disposable Git build checkout with `node scripts/deploy-build-context.mjs prepare <checkout> <target_sha>` before building. The helper verifies tracked content against the exact Git tree and sets directories/files/executables to 0755/0644/0755, rejecting dirty/untracked/ignored inputs, links and special files. `deploy:release` calls this gate automatically. When a verified Git archive is required, use `node scripts/deploy-build-context.mjs archive <clean-checkout> <temporary-parent> <target_sha>`; use its returned directory and SHA for the build manifest and remove only that directory afterward. Do not use a permission-preserving root tar extraction or run this helper on runtime/deploy-control directories. Include the exact revision OCI label when building manually.
 
 Capture the build exit status and structured stage results without returning raw output that may contain credentials. Reject a pre-existing target tag unless its image ID and proven provenance already match this exact run. Then verify inside the built image:
 
@@ -173,6 +175,7 @@ Complete all of these on the new deployment:
 5. Inspect the Dano page console and confirm there are no deployment-related errors or warnings.
 6. When SYSTEM/productName changes or this run repairs prompt drift, create a new session and ask for the assistant identity. Verify that the answer uses the effective product name and contains no `{产品名称}`.
 7. Execute any PR-specific UI/mobile acceptance in addition to this baseline, preserving necessary screenshots or browser evidence.
+8. For workspace-permission/auth changes, exercise the deployed service's real flow: upload the fixed synthetic image as an Anonymous User, log in to an existing provider user whose persisted workspace has not initialized in this app process, and verify identity, transcript/attachment preservation, model read and logout. Reuse the existing OA client and callback. Deterministic old-permission and rollback fixtures belong in the built login-transfer preflight with disposable data; do not manufacture those states in an existing user's files. Reuse completed preflight evidence for the same candidate code instead of requiring another isolated service.
 
 If a previously working step fails, inspect the final URL, TLS state, active tab, browser-control connection, visible DOM, model chain, network requests, loaded static assets, container state, and safe structured diagnostics. Recover and retry the same path. Do not lower the bar or silently replace it with API checks. If in-app Browser access is unavailable or any item remains incomplete, deployment acceptance is incomplete.
 
@@ -190,6 +193,8 @@ End the run in exactly one reported state: `accepted`, `rolled back`, or `held p
 ## Phase 9: Cleanup and rollback discipline
 
 Keep the previous image until every acceptance item passes. If a release regression is confirmed, restore the previous `DANO_IMAGE` and saved repository-managed deploy config, run the minimal Compose recreate for Dano app/nginx, and repeat health checks. Do not roll back runtime data or user config unless a release-specific migration explicitly requires and documents it.
+
+Image rollback does not undo persistent permission metadata. Check managed upload access with the rollback image's effective host/worker identity contract, including anonymous attachment transfer. A rollback image predating the managed-upload repair may fail on old worker-owned directories; choose a compatible accepted image or perform only a reviewed repair through the same trusted provisioning authority. Never compensate with recursive chown/chmod, 0777, root HTTP execution or disabling isolation.
 
 After success:
 
