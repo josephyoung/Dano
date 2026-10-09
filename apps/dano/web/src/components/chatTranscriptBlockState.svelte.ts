@@ -1,12 +1,12 @@
 import { buildToolDetailModel, buildToolInlineModel } from "../utils/toolBlock";
-import type { ImageContentBlock, ToolContentBlock } from "../utils/transcript";
+import type { ToolContentBlock } from "../utils/transcript";
 
 // ---------------------------------------------------------------------------
 // Tool block expand/collapse state
 // ---------------------------------------------------------------------------
 
 export function createChatTranscriptBlockState() {
-  let expandedToolBlocks = $state(new Set<string>());
+  let expandedToolBlocks = $state(new Map<string, boolean>());
   let expandedProcessGroups = $state(new Set<string>());
 
   const toolBlockModelCache = new WeakMap<
@@ -18,10 +18,9 @@ export function createChatTranscriptBlockState() {
     ReturnType<typeof buildToolDetailModel>
   >();
 
-  function toggleToolBlock(blockKey: string) {
-    const next = new Set(expandedToolBlocks);
-    if (next.has(blockKey)) next.delete(blockKey);
-    else next.add(blockKey);
+  function toggleToolBlock(blockKey: string, defaultExpanded = false) {
+    const next = new Map(expandedToolBlocks);
+    next.set(blockKey, !isToolBlockExpanded(blockKey, defaultExpanded));
     expandedToolBlocks = next;
   }
 
@@ -37,8 +36,8 @@ export function createChatTranscriptBlockState() {
     expandedProcessGroups = new Set([...expandedProcessGroups, groupKey]);
   }
 
-  function isToolBlockExpanded(blockKey: string): boolean {
-    return expandedToolBlocks.has(blockKey);
+  function isToolBlockExpanded(blockKey: string, defaultExpanded = false): boolean {
+    return expandedToolBlocks.get(blockKey) ?? defaultExpanded;
   }
 
   function isProcessGroupExpanded(groupKey: string): boolean {
@@ -75,52 +74,5 @@ export function createChatTranscriptBlockState() {
     isProcessGroupExpanded,
     toolBlockModel,
     toolBlockDetail,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Image lightbox state
-// ---------------------------------------------------------------------------
-
-export function createChatTranscriptLightboxState() {
-  let lightboxImages = $state<ImageContentBlock[]>([]);
-  let lightboxIndex = $state(0);
-
-  function openImageLightbox(
-    images: readonly ImageContentBlock[],
-    idx: number = 0,
-  ) {
-    if (images.length === 0) return;
-    lightboxImages = [...images];
-    lightboxIndex = Math.min(Math.max(idx, 0), images.length - 1);
-  }
-
-  function closeImageLightbox() {
-    lightboxImages = [];
-    lightboxIndex = 0;
-  }
-
-  function showPreviousLightboxImage() {
-    if (lightboxImages.length <= 1) return;
-    lightboxIndex =
-      (lightboxIndex + lightboxImages.length - 1) % lightboxImages.length;
-  }
-
-  function showNextLightboxImage() {
-    if (lightboxImages.length <= 1) return;
-    lightboxIndex = (lightboxIndex + 1) % lightboxImages.length;
-  }
-
-  return {
-    get lightboxImages() {
-      return lightboxImages;
-    },
-    get lightboxIndex() {
-      return lightboxIndex;
-    },
-    openImageLightbox,
-    closeImageLightbox,
-    showPreviousLightboxImage,
-    showNextLightboxImage,
   };
 }

@@ -69,7 +69,6 @@
   } from "../utils/transcript";
   import {
     createChatTranscriptBlockState,
-    createChatTranscriptLightboxState,
   } from "./chatTranscriptBlockState.svelte";
   import {
     TRANSCRIPT_START_NOTICE_DURATION_MS,
@@ -84,7 +83,6 @@
     type ToolActivity,
   } from "../utils/toolPresentation";
   import FilePreviewDialog from "./FilePreviewDialog.svelte";
-  import ImageLightbox from "./ImageLightbox.svelte";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import QuestionToolCard from "./QuestionToolCard.svelte";
   import ToolActivityRow from "./ToolActivityRow.svelte";
@@ -220,7 +218,6 @@
 
   // ---- state modules ----
   const blockState = createChatTranscriptBlockState();
-  const lightbox = createChatTranscriptLightboxState();
 
   // ---- derived ----
   let streamDisplayMessages = $derived.by(() => {
@@ -995,6 +992,7 @@
   }
 
   function openImageBlock(block: ImageContentBlock) {
+    filePreviewRequestId += 1;
     filePreview = {
       block: { kind: "file", name: block.alt || t("transcript.imageAttachmentAlt"), path: "" },
       src: block.src,
@@ -1006,6 +1004,10 @@
   function closeFilePreview() {
     filePreviewRequestId += 1;
     filePreview = null;
+  }
+
+  function isImageReadActivity(activity: ToolActivity): boolean {
+    return activity.kind === "read" && activity.images.length > 0;
   }
 
   function isImageFile(block: FileContentBlock): boolean {
@@ -1578,9 +1580,9 @@
           <ToolActivityRow
             {activity}
             treeEntryId={item.message.id}
-            expanded={blockState.isToolBlockExpanded(activity.key)}
-            onToggle={() => blockState.toggleToolBlock(activity.key)}
-            onOpenImage={(imageIndex) => lightbox.openImageLightbox(activity.images, imageIndex)}
+            expanded={blockState.isToolBlockExpanded(activity.key, isImageReadActivity(activity))}
+            onToggle={() => blockState.toggleToolBlock(activity.key, isImageReadActivity(activity))}
+            onOpenImage={(imageIndex) => openImageBlock(activity.images[imageIndex]!)}
           />
         </div>
       </div>
@@ -1685,10 +1687,10 @@
                     <ToolActivityRow
                       activity={projected.activity}
                       treeEntryId={block.resultSourceMessageId}
-                      expanded={blockState.isToolBlockExpanded(projected.activity.key)}
+                      expanded={blockState.isToolBlockExpanded(projected.activity.key, isImageReadActivity(projected.activity))}
                       active={projected.activity.key === toolActivityProjection.activeKey && isStreaming && !initialLoading}
-                      onToggle={() => blockState.toggleToolBlock(projected.activity!.key)}
-                      onOpenImage={(imageIndex) => lightbox.openImageLightbox(projected.activity!.images, imageIndex)}
+                      onToggle={() => blockState.toggleToolBlock(projected.activity!.key, isImageReadActivity(projected.activity!))}
+                      onOpenImage={(imageIndex) => openImageBlock(projected.activity!.images[imageIndex]!)}
                     />
                   {/if}
                 {/if}
@@ -1899,15 +1901,6 @@
       </button>
     </div>
   {/if}
-
-  <ImageLightbox
-    open={lightbox.lightboxImages.length > 0}
-    images={lightbox.lightboxImages}
-    index={lightbox.lightboxIndex}
-    onClose={lightbox.closeImageLightbox}
-    onPrevious={lightbox.showPreviousLightboxImage}
-    onNext={lightbox.showNextLightboxImage}
-  />
 
   <FilePreviewDialog
     preview={filePreview
