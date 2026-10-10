@@ -96,6 +96,8 @@ import {
   DANO_SESSION_PERSISTENCE_ERROR,
   DEFAULT_BRIDGE_CONFIG,
   type RpcCommand,
+  type RpcResponse,
+  type RpcUploadedFileRef,
   type RpcExtensionUIResponse,
   type RpcWorkspaceEntry,
   type BridgeClient,
@@ -1861,7 +1863,7 @@ describe("BridgeRpcAdapter", () => {
       const sessionManager = SessionManager.create(root, path.join(root, "sessions"));
       const baseContext = createMockContext();
       const integrationContext = { ...baseContext, state: { ...baseContext.state, cwd: root, sessionManager } };
-      const responses: any[] = [];
+      const responses: RpcResponse[] = [];
       const config = {
         ...DEFAULT_BRIDGE_CONFIG, host: "127.0.0.1", port: 0,
         upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir: path.join(root, ".uploads") },
@@ -1875,7 +1877,7 @@ describe("BridgeRpcAdapter", () => {
       };
       const headers = authorization("alice");
       const server = new BridgeServer(config, ctx => new BridgeRpcAdapter(
-        ctx.client, message => { responses.push(message); ctx.send(message); }, integrationContext,
+        ctx.client, message => { if (message.type === "response") responses.push(message.payload); ctx.send(message); }, integrationContext,
         ctx.config, ctx.eventBus, ctx.emitEvent, ctx.uploadRegistry,
         undefined, { userId: ctx.user!.user.id, sessionsRootPath: path.join(root, "sessions"),
           ownsSessionPath: candidate => candidate.startsWith(root + path.sep), ownsWorkspacePath: candidate => candidate === root },
@@ -1884,22 +1886,22 @@ describe("BridgeRpcAdapter", () => {
       try {
         const { port } = await server.start();
         const origin = `http://127.0.0.1:${port}`;
-        const created = await fetch(`${origin}/api/clients`, { method: "POST", headers }).then(r => r.json()) as any;
+        const created = await fetch(`${origin}/api/clients`, { method: "POST", headers }).then(r => r.json()) as { client: BridgeClient; eventsUrl: string; messagesUrl: string };
         await fetch(`${origin}${created.eventsUrl}`, { signal: stream.signal, headers });
-        const sendCommand = async (payload: Record<string, unknown>) => {
+        const sendCommand = async (payload: RpcCommand) => {
           const response = await fetch(`${origin}${created.messagesUrl}`, {
             method: "POST", headers: { ...headers, "Content-Type": "application/json" },
             body: JSON.stringify({ type: "command", payload }),
           });
           expect(await response.json()).toEqual({ status: "accepted" });
-          await vi.waitFor(() => expect(responses.find(r => r.payload?.id === payload.id)).toBeDefined());
-          return responses.find(r => r.payload?.id === payload.id).payload;
+          await vi.waitFor(() => expect(responses.find(r => r.id === payload.id)).toBeDefined());
+          return responses.find(r => r.id === payload.id)!;
         };
         const body = "FORM_DOCUMENT_OK";
         const hash = createHash("sha256").update(body).digest("hex");
         const uploaded = await fetch(`${origin}/api/uploads?${new URLSearchParams({
           clientId: created.client.id, name: "evidence.custom", mimeType: "application/octet-stream", sha256: hash,
-        })}`, { method: "POST", body, headers }).then(r => r.json()) as any;
+        })}`, { method: "POST", body, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
         expect(uploaded.relativePath).toBe(`uploads/${hash}.custom`);
         const turn = new AbortController();
         const pending = askUserQuestionCoordinator.wait("file-form", {
@@ -1922,9 +1924,9 @@ describe("BridgeRpcAdapter", () => {
           expect(askUserQuestionCoordinator.state("file-form")).toBe("presented");
         }
         const bobHeaders = authorization("bob");
-        const bob = await fetch(`${origin}/api/clients`, { method: "POST", headers: bobHeaders }).then(r => r.json()) as any;
+        const bob = await fetch(`${origin}/api/clients`, { method: "POST", headers: bobHeaders }).then(r => r.json()) as { client: BridgeClient };
         const bobUpload = await fetch(`${origin}/api/uploads?${new URLSearchParams({ clientId: bob.client.id, name: "private.custom", sha256: hash })}`,
-          { method: "POST", body, headers: bobHeaders }).then(r => r.json()) as any;
+          { method: "POST", body, headers: bobHeaders }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
         expect(await sendCommand({ id: "foreign-file", type: "answer_question", toolCallId: "file-form", cancelled: false,
           answer: { document: bobUpload.relativePath }, fileIds: { document: bobUpload.id } })).toMatchObject({ success: false });
         expect(await sendCommand({ id: "wrong-file-id-map", type: "answer_question", toolCallId: "file-form", cancelled: false,
@@ -1955,18 +1957,39 @@ describe("BridgeRpcAdapter", () => {
         const replacementBody = "REVISED_DOCUMENT";
         const replacementHash = createHash("sha256").update(replacementBody).digest("hex");
         const replacement = await fetch(`${origin}/api/uploads?${new URLSearchParams({ clientId: created.client.id, name: "replacement.txt", sha256: replacementHash })}`,
-          { method: "POST", body: replacementBody, headers }).then(r => r.json()) as any;
+          { method: "POST", body: replacementBody, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
         const revisionAnswers = { "file-form": { reason: "Updated", document: replacement.relativePath, optional: "" } };
         expect(await sendCommand({ id: "file-stale-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 3, answers: revisionAnswers })).toMatchObject({ success: false });
         expect(await sendCommand({ id: "file-save-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 4,
           answers: revisionAnswers, fileIds: { "file-form:document": replacement.id } })).toMatchObject({ success: true });
         expect(await sendCommand({ id: "file-confirm-answer", type: "answer_question", toolCallId: "file-confirm", expectedRevision: 5, cancelled: false, answer: true })).toMatchObject({ success: true });
         await expect(confirmation).resolves.toMatchObject({ status: "confirmed", answer: revisionAnswers["file-form"] });
+        const lookupCopy = (name: string) => fetch(`${origin}/api/uploads/lookup?${new URLSearchParams({
+          clientId: created.client.id, name, sha256: hash,
+        })}`, { headers }).then(r => r.json() as Promise<RpcUploadedFileRef & { relativePath: string }>);
+        const firstCopy = await lookupCopy("first.custom");
+        const secondCopy = await lookupCopy("second.custom");
+        expect(firstCopy.id).not.toBe(secondCopy.id);
+        expect(firstCopy.relativePath).toBe(secondCopy.relativePath);
+        const twoFiles = askUserQuestionCoordinator.wait("two-files", { questions: [
+          { id: "first", question: "First material", inputType: "file", required: true },
+          { id: "second", question: "Second material", inputType: "file", required: true },
+        ] }, turn.signal);
+        expect(await sendCommand({ id: "two-files-answer", type: "answer_question", toolCallId: "two-files", cancelled: false,
+          answer: { first: firstCopy.relativePath, second: secondCopy.relativePath }, fileIds: { first: firstCopy.id, second: secondCopy.id } }))
+          .toMatchObject({ success: true });
+        await expect(twoFiles).resolves.toMatchObject({ status: "answered", files: {
+          first: { id: firstCopy.id, name: "first.custom" }, second: { id: secondCopy.id, name: "second.custom" },
+        } });
+        const unusedCopy = await lookupCopy("unused.custom");
+        await fetch(`${origin}/api/uploads/${unusedCopy.id}/orphan?clientId=${created.client.id}`, { method: "POST", headers, body: "{}" });
         const converted = await fetch(`${origin}/api/uploads?${new URLSearchParams({ clientId: created.client.id,
           name: "converted.webp", originalName: "original.png", sha256: replacementHash, mimeType: "image/webp" })}`,
-          { method: "POST", body: replacementBody, headers }).then(r => r.json()) as any;
+          { method: "POST", body: replacementBody, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
         expect(converted.name).toBe("original.png");
         expect(converted.relativePath).toBe(`uploads/${replacementHash}.webp`);
+        expect(await fetch(`${origin}${firstCopy.previewUrl}`, { headers }).then(r => r.text())).toBe(body);
+        expect(await fetch(`${origin}${secondCopy.previewUrl}`, { headers }).then(r => r.text())).toBe(body);
       } finally {
         stream.abort();
         askUserQuestionCoordinator.cancelAll();

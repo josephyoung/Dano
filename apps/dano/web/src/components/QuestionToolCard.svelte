@@ -188,11 +188,12 @@
       ? result.answer
       : undefined,
   );
-  const interactionFormAnswer = $derived(
+  const interactionForm = $derived(
     result?.status === "answered"
-      ? interaction?.forms.find(form => form.formId === result.formId)?.answer
+      ? interaction?.forms.find(form => form.formId === result.formId)
       : undefined,
   );
+  const interactionFormAnswer = $derived(interactionForm?.answer);
   let initializedRequestKey = $state("");
   let selectedOption = $state<Record<string, string>>({});
   let selectedOptions = $state<Record<string, string[]>>({});
@@ -265,7 +266,9 @@
         revisionForm !== undefined || interactionFormAnswer !== undefined;
       const fallbackDefault = authoritativeAnswer ? undefined : item.default;
       if (item.kind === "file") {
-        const savedFile = item.file ?? (result?.status === "answered" ? result.files?.[item.id] : undefined);
+        const authoritativeQuestion = (revisionForm ?? interactionForm)?.questions.find(question => question.id === (item.originalId ?? item.id));
+        const savedFile = (authoritativeQuestion?.kind === "file" ? authoritativeQuestion.file : undefined)
+          ?? item.file ?? (result?.status === "answered" ? result.files?.[item.id] : undefined);
         fileAnswer[item.id] = savedFile?.relativePath === savedAnswer ? savedFile : undefined;
       } else if (item.kind === "text") {
         textAnswer[item.id] = typeof savedAnswer === "string"

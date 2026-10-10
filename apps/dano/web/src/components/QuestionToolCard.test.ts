@@ -81,10 +81,17 @@ it("uploads an arbitrary file in a required field and submits its relative path"
   } finally { await unmount(component); vi.useRealTimers(); }
 });
 
-it.each(["failed", "oversized"])("blocks an optional %s file until it is removed without losing other answers", async mode => {
+it.each(["failed", "oversized", "retry"])("recovers an optional %s file without losing other answers", async mode => {
   vi.useFakeTimers();
   const response = vi.fn(async () => ({ success: true } as never));
-  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => new Response("", { status: init?.method === "GET" ? 404 : 500 }));
+  let uploads = 0;
+  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "GET") return new Response("", { status: 404 });
+    uploads += 1;
+    return mode === "retry" && uploads === 2
+      ? new Response(JSON.stringify({ id: "retry-file", name: "material.any", size: 8, mimeType: "application/octet-stream", relativePath: "uploads/retried.any" }))
+      : new Response("", { status: 500 });
+  });
   vi.stubGlobal("fetch", fetchMock);
   const block = pendingGroupedFormBlock();
   block.questionRequest = { batch: true, title: "Material", questions: [
@@ -104,10 +111,15 @@ it.each(["failed", "oversized"])("blocks an optional %s file until it is removed
     expect(target.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
     expect(target.querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Keep this answer");
     if (mode === "oversized") expect(fetchMock).not.toHaveBeenCalled();
-    target.querySelector<HTMLButtonElement>('button[aria-label="移除 material.any"]')!.click(); await tick();
+    if (mode === "retry") {
+      [...target.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes("重试上传"))!.click();
+      await vi.waitFor(() => expect(target.querySelector('[role="alert"]')).toBeNull());
+    } else {
+      target.querySelector<HTMLButtonElement>('button[aria-label="移除 material.any"]')!.click(); await tick();
+    }
     const submit = target.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     expect(submit.disabled).toBe(false); submit.click(); await tick();
-    expect(response).toHaveBeenCalledWith(block.toolCallId, expect.objectContaining({ answer: { reason: "Keep this answer", file: "" } }));
+    expect(response).toHaveBeenCalledWith(block.toolCallId, expect.objectContaining({ answer: { reason: "Keep this answer", file: mode === "retry" ? "uploads/retried.any" : "" } }));
   } finally { await unmount(component); vi.useRealTimers(); }
 });
 
@@ -1634,5 +1646,26 @@ describe("QuestionToolCard", () => {
     expect(target.querySelector<HTMLInputElement>('input[type="text"]')?.value)
       .toBe("");
     unmount(component);
+  });
+
+  it("shows the replacement file in the latest Submitted Form", async () => {
+    const response = vi.fn(async () => ({ success: true } as never));
+    const oldFile = { id: "old-file", name: "old.pdf", size: 10, mimeType: "application/pdf", relativePath: "uploads/old.pdf" };
+    const replacement = { ...oldFile, id: "replacement-file", name: "replacement.pdf", relativePath: "uploads/replacement.pdf" };
+    const block = submittedFormBlock("awaiting_confirmation");
+    block.questionRequest = { batch: true, title: "材料", questions: [{ id: "document", kind: "file", question: "材料？" }] };
+    block.resultDetails = { status: "answered", formId: "form-1", answer: { document: oldFile.relativePath }, files: { document: oldFile } };
+    block.formInteraction!.forms = [{
+      formId: "form-1", title: "材料", revision: 2,
+      questions: [{ id: "document", kind: "file", question: "材料？", file: replacement }],
+      answer: { document: replacement.relativePath },
+    }];
+    const target = document.createElement("div");
+    const component = mount(QuestionToolCard, { target, props: { block, active: true, onPresent: response, onRespond: response, onRevise: response, onSubmitRevision: response } });
+    await tick();
+    expect(target.textContent).toContain("replacement.pdf");
+    expect(target.textContent).not.toContain("old.pdf");
+    expect(target.querySelector('input[type="file"]')).toBeNull();
+    await unmount(component);
   });
 });
