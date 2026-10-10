@@ -136,8 +136,8 @@ export function reduceFormInteraction(
         },
       };
     case "submit_revision": {
-      const answers = new Map(
-        transition.forms.map(form => [form.formId, form.answer]),
+      const revisedForms = new Map(
+        transition.forms.map(form => [form.formId, form]),
       );
       return {
         kind: "transitioned",
@@ -147,7 +147,8 @@ export function reduceFormInteraction(
           revision: current.revision + 1,
           forms: current.forms.map(form => ({
             ...form,
-            answer: { ...(answers.get(form.formId) ?? form.answer) },
+            questions: [...(revisedForms.get(form.formId)?.questions ?? form.questions)],
+            answer: { ...(revisedForms.get(form.formId)?.answer ?? form.answer) },
           })),
         },
       };

@@ -1887,7 +1887,12 @@ describe("BridgeRpcAdapter", () => {
         const { port } = await server.start();
         const origin = `http://127.0.0.1:${port}`;
         const created = await fetch(`${origin}/api/clients`, { method: "POST", headers }).then(r => r.json()) as { client: BridgeClient; eventsUrl: string; messagesUrl: string };
-        await fetch(`${origin}${created.eventsUrl}`, { signal: stream.signal, headers });
+        const eventsResponse = await fetch(`${origin}${created.eventsUrl}`, { signal: stream.signal, headers });
+        const eventsReader = eventsResponse.body!.getReader();
+        void (async () => {
+          try { while (!(await eventsReader.read()).done) { /* Keep the command client connected. */ } }
+          catch { /* The stream is aborted during cleanup. */ }
+        })();
         const sendCommand = async (payload: RpcCommand) => {
           const response = await fetch(`${origin}${created.messagesUrl}`, {
             method: "POST", headers: { ...headers, "Content-Type": "application/json" },
@@ -1960,8 +1965,14 @@ describe("BridgeRpcAdapter", () => {
           { method: "POST", body: replacementBody, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
         const revisionAnswers = { "file-form": { reason: "Updated", document: replacement.relativePath, optional: "" } };
         expect(await sendCommand({ id: "file-stale-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 3, answers: revisionAnswers })).toMatchObject({ success: false });
-        expect(await sendCommand({ id: "file-save-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 4,
-          answers: revisionAnswers, fileIds: { "file-form:document": replacement.id } })).toMatchObject({ success: true });
+        const savedRevision = await sendCommand({ id: "file-save-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 4,
+          answers: revisionAnswers, fileIds: { "file-form:document": replacement.id } });
+        const latestForms = [{ formId: "file-form", answer: revisionAnswers["file-form"], questions: expect.arrayContaining([
+          expect.objectContaining({ id: "document", file: expect.objectContaining({ id: replacement.id, name: "replacement.txt", relativePath: replacement.relativePath }) }),
+          expect.objectContaining({ id: "optional", kind: "file" }),
+        ]) }];
+        expect(savedRevision).toMatchObject({ success: true, data: { forms: latestForms } });
+        expect(readFormInteractions(sessionManager.getBranch()).get("file-confirm")).toMatchObject({ forms: latestForms });
         expect(await sendCommand({ id: "file-confirm-answer", type: "answer_question", toolCallId: "file-confirm", expectedRevision: 5, cancelled: false, answer: true })).toMatchObject({ success: true });
         await expect(confirmation).resolves.toMatchObject({ status: "confirmed", answer: revisionAnswers["file-form"] });
         const lookupCopy = (name: string) => fetch(`${origin}/api/uploads/lookup?${new URLSearchParams({
