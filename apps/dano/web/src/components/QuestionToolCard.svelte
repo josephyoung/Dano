@@ -6,6 +6,7 @@
     AskUserQuestionDataSource,
     AskUserQuestionOptionId,
     AskUserQuestionResult,
+    AskUserQuestionFileRef,
     FieldAssistAction,
     FieldAssistCommandPayload,
     FieldAssistResult,
@@ -33,6 +34,7 @@
   import type { ToolContentBlock } from "../utils/transcript";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import QuestionDateField from "./QuestionDateField.svelte";
+  import QuestionFileField from "./QuestionFileField.svelte";
   import QuestionFieldLabel from "./QuestionFieldLabel.svelte";
   import QuestionRemoteCombobox from "./QuestionRemoteCombobox.svelte";
   import SubmittedAnswerValue from "./SubmittedAnswerValue.svelte";
@@ -74,6 +76,7 @@
         | {
             cancelled: false;
             expectedRevision?: number;
+            fileIds?: Record<string, string>;
             answer: AskUserQuestionAnswer | Record<string, AskUserQuestionAnswer>;
         },
     ) => Promise<RpcResponse>;
@@ -83,6 +86,7 @@
       toolCallId: string,
       expectedRevision: number,
       answers: Record<string, Record<string, AskUserQuestionAnswer>>,
+      fileIds?: Record<string, string>,
     ) => Promise<RpcResponse>;
     onFocusChange?: (target: QuestionFocusChange) => void;
     onFieldAssist?: (payload: FieldAssistCommandPayload) => Promise<FieldAssistResult>;
@@ -194,6 +198,8 @@
   let selectedOptions = $state<Record<string, string[]>>({});
   let textAnswer = $state<Record<string, string>>({});
   let dateAnswer = $state<Record<string, string | undefined>>({});
+  let fileAnswer = $state<Record<string, AskUserQuestionFileRef | undefined>>({});
+  let fileBlocked = $state<Record<string, boolean>>({});
   let customAnswer = $state<Record<string, string>>({});
   let remoteOptions = $state<Record<string, NormalizedAskUserQuestionOption[]>>({});
   let remoteSearch = $state<Record<string, string>>({});
@@ -228,6 +234,8 @@
     selectedOptions = {};
     textAnswer = {};
     dateAnswer = {};
+    fileAnswer = {};
+    fileBlocked = {};
     customAnswer = {};
     remoteOptions = {};
     remoteSearch = {};
@@ -256,7 +264,10 @@
       const authoritativeAnswer =
         revisionForm !== undefined || interactionFormAnswer !== undefined;
       const fallbackDefault = authoritativeAnswer ? undefined : item.default;
-      if (item.kind === "text") {
+      if (item.kind === "file") {
+        const savedFile = item.file ?? (result?.status === "answered" ? result.files?.[item.id] : undefined);
+        fileAnswer[item.id] = savedFile?.relativePath === savedAnswer ? savedFile : undefined;
+      } else if (item.kind === "text") {
         textAnswer[item.id] = typeof savedAnswer === "string"
           ? savedAnswer
           : typeof fallbackDefault === "string"
@@ -379,6 +390,7 @@
     try {
       const rpc = await onRespond(block.toolCallId, {
         ...response,
+        ...(!response.cancelled && fileIdsForAnswer() ? { fileIds: fileIdsForAnswer() } : {}),
         ...(interaction ? { expectedRevision: interaction.revision } : {}),
       });
       applyAuthoritativeInteraction(rpc);
@@ -456,8 +468,16 @@
     answers: Record<string, Record<string, AskUserQuestionAnswer>>,
   ) {
     await requestInteraction((toolCallId, expectedRevision) =>
-      onSubmitRevision(toolCallId, expectedRevision, answers)
+      fileIdsForAnswer()
+        ? onSubmitRevision(toolCallId, expectedRevision, answers, fileIdsForAnswer())
+        : onSubmitRevision(toolCallId, expectedRevision, answers)
     );
+  }
+
+  function fileIdsForAnswer(): Record<string, string> | undefined {
+    const entries = questionItems.flatMap(item => item.kind === "file" && fileAnswer[item.id]
+      ? [[item.id, fileAnswer[item.id]!.id]] : []);
+    return entries.length ? Object.fromEntries(entries) : undefined;
   }
 
   async function cancelRevision() {
@@ -498,6 +518,11 @@
   }
 
   function answerForItem(item: AskUserQuestionItem): AskUserQuestionAnswer | null | undefined {
+    if (item.kind === "file") {
+      if (fileBlocked[item.id]) return null;
+      const answer = fileAnswer[item.id]?.relativePath ?? "";
+      return item.required && !answer ? null : answer;
+    }
     if (item.kind === "single" || item.kind === "select" || item.kind === "treeSelect") {
       const selected = selectedOption[item.id] ?? "";
       if (!selected) return item.required ? null : undefined;
@@ -1138,6 +1163,14 @@
               {#if aiAssistError[item.id]}
                 <div class="question-error" role="alert">{aiAssistError[item.id]}</div>
               {/if}
+            {:else if item.kind === "file"}
+              <QuestionFileField
+                id={`question-${block.toolCallId}-${item.id}`}
+                label={item.question}
+                value={fileAnswer[item.id]}
+                disabled={!formEnabled || submitting}
+                onChange={(file, blocked) => { fileAnswer[item.id] = file; fileBlocked[item.id] = blocked; }}
+              />
             {:else if item.kind === "date"}
               <label class="sr-only" for={`question-${block.toolCallId}-${item.id}-trigger`}>{item.question}</label>
               <QuestionDateField

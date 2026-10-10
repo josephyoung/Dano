@@ -29,7 +29,8 @@
 
 每次模型响应最多原生调用一次 `ask_user_question`。需要多个相关答案时，必须
 使用一个 `title + questions[]` 分组表单。每个非确认问题都要提供来自当前业务
-上下文的非空推荐 `default`；`required` 只决定用户能否清空或省略答案。
+上下文的非空推荐 `default`，文件字段除外：文件必须由用户实际选择，不能虚构
+默认路径。`required` 决定用户能否清空或省略答案。
 
 ## 三种调用形状
 
@@ -111,6 +112,17 @@
     },
     "controlShape": {
       "anyOf": [
+        {
+          "properties": { "inputType": { "const": "file" } },
+          "required": ["inputType"],
+          "not": {
+            "anyOf": [
+              { "required": ["default"] }, { "required": ["options"] },
+              { "required": ["dateFormat"] }, { "required": ["dataSource"] },
+              { "required": ["multiple"] }, { "required": ["fieldAssist"] }
+            ]
+          }
+        },
         {
           "properties": {
             "inputType": { "enum": ["text", "textarea"] },
@@ -239,7 +251,7 @@
           "items": { "$ref": "#/$defs/option" }
         },
         "inputType": {
-          "enum": ["text", "textarea", "date", "radio", "checkbox", "select", "treeSelect"]
+          "enum": ["text", "textarea", "date", "file", "radio", "checkbox", "select", "treeSelect"]
         },
         "fieldAssist": { "type": "boolean" },
         "dateFormat": { "type": "string", "minLength": 1 },
@@ -248,8 +260,14 @@
         "required": { "type": "boolean" },
         "default": { "$ref": "#/$defs/defaultValue" }
       },
-      "allOf": [{ "$ref": "#/$defs/controlShape" }],
-      "required": ["id", "question", "default"]
+      "allOf": [
+        { "$ref": "#/$defs/controlShape" },
+        { "anyOf": [
+          { "properties": { "inputType": { "const": "file" } }, "required": ["inputType"] },
+          { "required": ["default"] }
+        ] }
+      ],
+      "required": ["id", "question"]
     },
     "singleQuestion": {
       "type": "object",
@@ -262,7 +280,7 @@
           "items": { "$ref": "#/$defs/option" }
         },
         "inputType": {
-          "enum": ["text", "textarea", "date", "radio", "checkbox", "select", "treeSelect"]
+          "enum": ["text", "textarea", "date", "file", "radio", "checkbox", "select", "treeSelect"]
         },
         "fieldAssist": { "type": "boolean" },
         "dateFormat": { "type": "string", "minLength": 1 },
@@ -271,8 +289,14 @@
         "required": { "type": "boolean" },
         "default": { "$ref": "#/$defs/defaultValue" }
       },
-      "allOf": [{ "$ref": "#/$defs/controlShape" }],
-      "required": ["question", "default"]
+      "allOf": [
+        { "$ref": "#/$defs/controlShape" },
+        { "anyOf": [
+          { "properties": { "inputType": { "const": "file" } }, "required": ["inputType"] },
+          { "required": ["default"] }
+        ] }
+      ],
+      "required": ["question"]
     },
     "groupedForm": {
       "type": "object",
@@ -1682,6 +1706,18 @@ thinking、tool、compaction 或 JSONL。
       "properties": {
         "status": { "const": "answered" },
         "formId": { "type": "string" },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" }, "name": { "type": "string" },
+              "size": { "type": "number" }, "mimeType": { "type": "string" },
+              "relativePath": { "type": "string" }
+            },
+            "required": ["id", "name", "size", "mimeType", "relativePath"]
+          }
+        },
         "answer": {
           "anyOf": [
             { "$ref": "#/$defs/answer" },
@@ -1735,12 +1771,69 @@ thinking、tool、compaction 或 JSONL。
 
 不要自动重试 `retryable:false`，也不要在用户取消后换一种方式继续提问。
 
+## E18 单文件问题
+
+`inputType:"file"` 每字段上传一个文件；不限格式，复用聊天上传限制（目前单个
+50 MiB），以原始文件大小检查，再沿用已有图片转换。不要提供 `default`；运行时
+也忽略模型虚构的默认路径与不适用的控件参数。别名 `upload`、`fileUpload` 可以
+恢复为 `file`，Skill 生成仍使用规范名称。
+
+<!-- example:E18 kind:request -->
+```json
+{"question":"请上传申请材料","inputType":"file","required":true}
+```
+
+<!-- example:E18 kind:card -->
+```json
+{"batch":false,"id":"answer","kind":"file","question":"请上传申请材料","required":true}
+```
+
+<!-- example:E18 kind:result -->
+```json
+{"status":"answered","answer":"uploads/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf"}
+```
+
+路径是当前 Runtime Workspace 的相对路径；用户看到原始文件名与大小，模型
+使用路径读取 Uploaded Project File，不接收文件对象、预览 URL 或 base64 作为
+字段答案。示例路径仅说明结果形状，不能用作默认值。不限格式不承诺全格式解析。
+答案必须对应真实上传记录，服务端验证 User、工作区和文件存在性，失败不能提交。
+结果可带独立的 `files` 展示元数据映射，包含 id/name/size/mimeType/relativePath；
+其用途是恢复文件展示，不改变 `answer` 的字符串形状。
+
+## E19 混合分组表单与可选空文件
+
+同一 Grouped Form 可以包含多个文件字段，各字段以唯一 ID 映射路径。
+上传中或尚未处理的失败选择阻止提交；移除失败选择后，可选字段可保持为空。
+Submitted Form 只读，Confirmation Card 展示已提交文件；Form Revision 恢复既有
+上传，支持替换或移除。取消修订保留上次提交，保存修订后确认使用新答案。
+文件字段不提供 Field Assist；文件引用与清理沿用既有上传生命周期。
+
+<!-- example:E19 kind:request -->
+```json
+{"title":"材料申请","questions":[{"id":"reason","question":"申请用途","default":"办理业务"},{"id":"material","question":"申请材料","inputType":"file","required":true},{"id":"extra","question":"补充材料","inputType":"file"}]}
+```
+
+<!-- example:E19 kind:card -->
+```json
+{"batch":true,"title":"材料申请","questions":[{"id":"reason","kind":"text","question":"申请用途","fieldAssist":false,"default":"办理业务"},{"id":"material","kind":"file","question":"申请材料","required":true},{"id":"extra","kind":"file","question":"补充材料"}]}
+```
+
+<!-- example:E19 kind:result -->
+```json
+{"status":"answered","formId":"material-form-call","answer":{"reason":"办理业务","material":"uploads/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf","extra":""}}
+```
+
 ## 能力覆盖矩阵
 
 “预期”列对应示例中经过自动验证的 canonical Card Request 或 Result。
 
 | 能力 ID | 能力 | 示例 | 预期 |
 | --- | --- | --- | --- |
+| `file.single` | 单文件问题 | [E18](#e18-单文件问题) | `kind:file` |
+| `file.grouped` | 混合 Grouped Form | [E19](#e19-混合分组表单与可选空文件) | file 与 text fields |
+| `file.no-default` | 无虚构默认值 | [E18](#e18-单文件问题), [E19](#e19-混合分组表单与可选空文件) | default omitted |
+| `file.optional-empty` | 可选空文件 | [E19](#e19-混合分组表单与可选空文件) | empty string answer |
+| `file.path-result` | 工作区相对路径答案 | [E18](#e18-单文件问题), [E19](#e19-混合分组表单与可选空文件) | path string |
 | `call.single` | 顶层单问题 | [E01](#e01-单行文本与显式-field-assist) | `batch:false` Card Request |
 | `call.grouped` | `title + questions[]` 分组表单 | [E03](#e03-一次填写完整分组表单) | `batch:true` Card Request |
 | `call.confirmation` | `confirm:true + formIds[]` | [E11](#e11-确认一份表单返回修改并重新确认) | Confirmation Card Request |

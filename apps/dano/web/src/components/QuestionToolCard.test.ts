@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolContentBlock } from "../utils/transcript";
 import QuestionToolCard from "./QuestionToolCard.svelte";
 import questionToolCardSource from "./QuestionToolCard.svelte?raw";
+vi.mock("../composables/bridgeStore.svelte", () => ({ getBridgeClientId: () => "file-test-client" }));
 
 vi.mock("./MarkdownRenderer.svelte", () => ({
   default: (payload: { out: string }, props: { content: string }) => {
@@ -20,12 +21,12 @@ vi.mock("@lucide/svelte/icons/message-square-text", () => ({ default: () => {} }
 vi.mock("@lucide/svelte/icons/refresh-cw", () => ({ default: () => {} }));
 vi.mock("@lucide/svelte/icons/sparkle", () => ({ default: () => {} }));
 
-vi.stubGlobal("matchMedia", vi.fn(() => ({
+beforeEach(() => { vi.stubGlobal("matchMedia", vi.fn(() => ({
   matches: true,
   media: "(max-width: 640px)",
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
-})));
+}))); });
 
 beforeEach(() => {
   const appShell = document.createElement("div");
@@ -34,7 +35,108 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
+});
+
+it("uploads an arbitrary file in a required field and submits its relative path", async () => {
+  vi.useFakeTimers();
+  const response = vi.fn(async () => ({ success: true } as never));
+  let finishUpload!: (response: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((_url: unknown, init?: RequestInit) => {
+    if (init?.method === "GET") return Promise.resolve(new Response("", { status: 404 }));
+    return new Promise<Response>(resolve => { finishUpload = resolve; });
+  }));
+  const target = document.createElement("div");
+  document.body.append(target);
+  const component = mount(QuestionToolCard, { target, props: {
+    block: { kind: "tool", toolName: "ask_user_question", toolCallId: "upload-form", toolArgs: {}, argumentsText: "", toolStatus: "pending",
+      questionRequest: { batch: true, title: "Application", questions: [
+        { id: "reason", kind: "text", question: "Reason?", fieldAssist: false, default: "Application" },
+        { id: "document", kind: "file", question: "Supporting document?", required: true },
+      ] } },
+    onPresent: response, onRespond: response, onRevise: response, onSubmitRevision: response,
+  } });
+  try {
+    await vi.advanceTimersByTimeAsync(400); await tick();
+    const submit = target.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(submit.disabled).toBe(true);
+    const input = target.querySelector<HTMLInputElement>('input[type="file"]')!;
+    expect(input).not.toBeNull();
+    expect(input.accept).toBe("");
+    const selection = new DataTransfer();
+    selection.items.add(new File(["evidence"], "evidence.custom"));
+    input.files = selection.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(finishUpload).toBeTypeOf("function"));
+    expect(submit.disabled).toBe(true);
+    finishUpload(new Response(JSON.stringify({ id: "upload-1", name: "evidence.custom", size: 8,
+      mimeType: "application/octet-stream", path: "/workspace/uploads/hash.custom", relativePath: "uploads/hash.custom" })));
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+    expect(target.textContent).toContain("evidence.custom");
+    submit.click(); await tick();
+    expect(response).toHaveBeenCalledWith("upload-form", expect.objectContaining({
+      cancelled: false, answer: { reason: "Application", document: "uploads/hash.custom" },
+    }));
+  } finally { await unmount(component); vi.useRealTimers(); }
+});
+
+it.each(["failed", "oversized"])("blocks an optional %s file until it is removed without losing other answers", async mode => {
+  vi.useFakeTimers();
+  const response = vi.fn(async () => ({ success: true } as never));
+  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => new Response("", { status: init?.method === "GET" ? 404 : 500 }));
+  vi.stubGlobal("fetch", fetchMock);
+  const block = pendingGroupedFormBlock();
+  block.questionRequest = { batch: true, title: "Material", questions: [
+    { id: "reason", kind: "text", question: "Reason?", fieldAssist: false, default: "Keep this answer" },
+    { id: "file", kind: "file", question: "Optional material?" },
+  ] };
+  const target = document.createElement("div"); document.body.append(target);
+  const component = mount(QuestionToolCard, { target, props: { block, onPresent: response, onRespond: response, onRevise: response, onSubmitRevision: response } });
+  try {
+    await vi.advanceTimersByTimeAsync(400); await tick();
+    const file = new File(["material"], "material.any");
+    if (mode === "oversized") Object.defineProperty(file, "size", { value: 50 * 1024 * 1024 + 1 });
+    const selection = new DataTransfer(); selection.items.add(file);
+    const input = target.querySelector<HTMLInputElement>('input[type="file"]')!;
+    input.files = selection.files; input.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(target.querySelector('[role="alert"]')).not.toBeNull());
+    expect(target.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    expect(target.querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Keep this answer");
+    if (mode === "oversized") expect(fetchMock).not.toHaveBeenCalled();
+    target.querySelector<HTMLButtonElement>('button[aria-label="移除 material.any"]')!.click(); await tick();
+    const submit = target.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(submit.disabled).toBe(false); submit.click(); await tick();
+    expect(response).toHaveBeenCalledWith(block.toolCallId, expect.objectContaining({ answer: { reason: "Keep this answer", file: "" } }));
+  } finally { await unmount(component); vi.useRealTimers(); }
+});
+
+it("restores uploaded file metadata in a Submitted Form and an editable Form Revision", async () => {
+  const file = { id: "saved-file", name: "signed.pdf", size: 123, mimeType: "application/pdf", relativePath: "uploads/signed.pdf" };
+  const response = vi.fn(async () => ({ success: true } as never));
+  const target = document.createElement("div"); document.body.append(target);
+  const block = submittedFormBlock();
+  block.questionRequest = { batch: true, title: "Saved material", questions: [{ id: "document", kind: "file", question: "Document?" }] };
+  block.resultDetails = { status: "answered", formId: "form-1", answer: { document: file.relativePath }, files: { document: file } };
+  const props = { onPresent: response, onRespond: response, onRevise: response, onSubmitRevision: response };
+  const readonly = mount(QuestionToolCard, { target, props: { ...props, block } });
+  await tick();
+  expect(target.textContent).toContain("signed.pdf");
+  expect(target.textContent).toContain("123 B");
+  expect(target.querySelector('input[type="file"]')).toBeNull();
+  await unmount(readonly);
+  const revision = revisingSingleFormBlock();
+  revision.formInteraction!.forms[0].questions = [{ id: "document", kind: "file", question: "Document?", file }];
+  revision.formInteraction!.forms[0].answer = { document: file.relativePath };
+  const editable = mount(QuestionToolCard, { target, props: { ...props, block: revision } });
+  try {
+    await tick();
+    expect(target.textContent).toContain("signed.pdf");
+    expect(target.querySelector('input[type="file"]')).not.toBeNull();
+    target.querySelector<HTMLButtonElement>('button[aria-label="移除 signed.pdf"]')!.click(); await tick();
+    target.querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); await tick();
+    expect(response).toHaveBeenCalledWith(revision.toolCallId, 2, { "form-a": { document: "" } });
+  } finally { await unmount(editable); }
 });
 
 function submittedFormBlock(

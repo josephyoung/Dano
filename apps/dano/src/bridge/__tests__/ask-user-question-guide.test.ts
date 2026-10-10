@@ -33,6 +33,7 @@ const guide = fs.readFileSync(
 );
 
 const requiredCapabilities = [
+  "file.single", "file.grouped", "file.no-default", "file.optional-empty", "file.path-result",
   "call.single",
   "call.grouped",
   "call.confirmation",

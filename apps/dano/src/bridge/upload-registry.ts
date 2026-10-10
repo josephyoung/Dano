@@ -161,6 +161,24 @@ export class UploadRegistry {
     return upload;
   }
 
+  resolveProjectPath(relativePath: string, access: UploadAccess, id?: string): StoredUpload | null {
+    if (!access.workspacePath || !relativePath || path.isAbsolute(relativePath)) return null;
+    const workspacePath = path.resolve(access.workspacePath);
+    const targetPath = path.resolve(workspacePath, relativePath);
+    if (!targetPath.startsWith(workspacePath + path.sep)) return null;
+    for (const upload of this.uploads.values()) {
+      if (id !== undefined && upload.id !== id) continue;
+      if (upload.relativePath !== relativePath || upload.path !== targetPath) continue;
+      if (!this.authorize(upload, access, true)) continue;
+      try {
+        const expectedPath = path.resolve(fsSync.realpathSync(workspacePath), relativePath);
+        if (!fsSync.statSync(targetPath).isFile() || fsSync.realpathSync(targetPath) !== expectedPath) return null;
+      } catch { return null; }
+      return upload;
+    }
+    return null;
+  }
+
   peek(id: string): StoredUpload | null {
     return this.uploads.get(id) ?? null;
   }
@@ -193,6 +211,8 @@ export class UploadRegistry {
   ): StoredUpload | null {
     const upload = this.uploads.get(id);
     if (!upload || !this.authorize(upload, access, false)) return null;
+    // A removable draft may share a record with a Submitted Form or a chat attachment.
+    if (upload.state === "referenced" || upload.state === "reading") return upload;
     return this.mark(id, "orphaned");
   }
 

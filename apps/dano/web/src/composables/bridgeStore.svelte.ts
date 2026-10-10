@@ -2386,6 +2386,7 @@ export function answerQuestion(
       | {
           cancelled: false;
           expectedRevision?: number;
+          fileIds?: Record<string, string>;
           answer: AskUserQuestionAnswer | Record<string, AskUserQuestionAnswer>;
         },
 ): Promise<RpcResponse> {
@@ -2414,12 +2415,14 @@ export function submitQuestionRevision(
   toolCallId: string,
   expectedRevision: number,
   answers: Record<string, Record<string, AskUserQuestionAnswer>>,
+  fileIds?: Record<string, string>,
 ): Promise<RpcResponse> {
   return sendCommand({
     type: "submit_question_revision",
     toolCallId,
     expectedRevision,
     answers,
+    ...(fileIds ? { fileIds } : {}),
   });
 }
 

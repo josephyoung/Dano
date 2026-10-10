@@ -60,11 +60,13 @@ export async function uploadComposerAttachment(
     throw new Error("Upload exceeds size limit");
   }
   signal.throwIfAborted();
+  const originalName = file.name;
   file = await compressUploadImage(file);
   signal.throwIfAborted();
   const mimeType = getComposerUploadMimeType(file);
   const sha256 = await sha256File(file);
   const query = new URLSearchParams({ clientId, name: file.name, mimeType });
+  if (file.name !== originalName) query.set("originalName", originalName);
   if (sha256) {
     query.set("sha256", sha256);
     const existing = await fetch(`/api/uploads/lookup?${query.toString()}`, {

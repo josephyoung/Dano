@@ -818,7 +818,7 @@ export class BridgeServer {
     }
     const ref: RpcUploadedFileRef = {
       id: storagePath.id,
-      name,
+      name: normalizeUploadName(url.searchParams.get("originalName")) ?? name,
       size,
       mimeType,
       path: storagePath.filePath,
@@ -858,7 +858,7 @@ export class BridgeServer {
     const stats = await fs.promises.stat(filePath);
     const ref: RpcUploadedFileRef = {
       id,
-      name,
+      name: normalizeUploadName(url.searchParams.get("originalName")) ?? name,
       size: stats.size,
       mimeType,
       path: filePath,
