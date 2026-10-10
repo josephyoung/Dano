@@ -1,6 +1,6 @@
 {
   "issue": 322,
-  "description": "Sanitized real-model deviations for question choices and grouped-form presentation",
+  "description": "Sanitized real-model deviations for question choices, grouped-form presentation and file upload controls",
   "deviations": [
     {
       "name": "JSON-stringified top-level options",
@@ -10,7 +10,10 @@
       },
       "canonicalArguments": {
         "question": "是否开始？",
-        "options": ["是", "否"]
+        "options": [
+          "是",
+          "否"
+        ]
       }
     },
     {
@@ -28,6 +31,43 @@
           }
         ]
       }
+    },
+    {
+      "name": "JSON-stringified mixed file questions without file defaults",
+      "issue": 491,
+      "captureContext": "MiMo v2.6 Flash native tool call in local in-app Browser acceptance with synthetic prompts",
+      "capturedArguments": {
+        "title": "材料上传验收",
+        "questions": "[{\"id\": \"reason\", \"question\": \"用途是什么？\", \"inputType\": \"text\", \"default\": \"功能验收\", \"required\": true}, {\"id\": \"document\", \"question\": \"请上传申请材料：\", \"inputType\": \"file\", \"required\": true}, {\"id\": \"extra\", \"question\": \"如有补充材料，请一并上传（可选）：\", \"inputType\": \"file\", \"required\": false}]"
+      },
+      "canonicalArguments": {
+        "title": "材料上传验收",
+        "questions": [
+          {
+            "id": "reason",
+            "question": "用途是什么？",
+            "inputType": "text",
+            "default": "功能验收",
+            "required": true
+          },
+          {
+            "id": "document",
+            "question": "请上传申请材料：",
+            "inputType": "file",
+            "required": true
+          },
+          {
+            "id": "extra",
+            "question": "如有补充材料，请一并上传（可选）：",
+            "inputType": "file",
+            "required": false
+          }
+        ]
+      }
     }
+  ],
+  "relatedIssues": [
+    322,
+    491
   ]
 }

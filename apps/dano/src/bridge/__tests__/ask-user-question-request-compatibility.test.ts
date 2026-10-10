@@ -151,7 +151,7 @@ describe("ask_user_question request compatibility matrix", () => {
     expect(normalizeAskUserQuestionCardRequest(request)).toBeNull();
   });
 
-  it("captures the sanitized #322 deviations and canonical equivalents", () => {
+  it("captures sanitized real-model deviations and canonical equivalents", () => {
     expect(fixture.issue).toBe(322);
     for (const deviation of fixture.deviations) {
       expect(
