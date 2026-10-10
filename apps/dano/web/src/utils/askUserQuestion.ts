@@ -9,8 +9,10 @@ import {
   type AskUserQuestionConfirmationForm,
   type AskUserQuestionOptionId,
   type AskUserQuestionResult,
+  type AskUserQuestionFileRef,
 } from "@dano/types/protocol";
 import type { ToolContentBlock } from "./transcript";
+import { formatAttachmentSize } from "./attachments";
 
 export type NormalizedAskUserQuestionOption =
   Extract<AskUserQuestionCardItem, { kind: "single" }>["options"][number];
@@ -204,6 +206,9 @@ function answerOptionLabel(
   item: AskUserQuestionItem | undefined,
   answer: AskUserQuestionOptionId,
 ): string {
+  if (item?.kind === "file") return item.file
+    ? `${item.file.name} · ${formatAttachmentSize(item.file.size)}`
+    : String(answer);
   if (!item || item.kind === "text" || item.kind === "date" || item.kind === "confirm") return String(answer);
   return item.options.find(option => option.id === answer)?.label ?? String(answer);
 }
@@ -258,9 +263,16 @@ export function askUserQuestionResult(
       status: "answered",
       answer: details.answer,
       ...(typeof details.formId === "string" ? { formId: details.formId } : {}),
+      ...(isQuestionFiles(details.files) ? { files: details.files } : {}),
     };
   }
   return null;
+}
+
+function isQuestionFiles(value: unknown): value is Record<string, AskUserQuestionFileRef> {
+  return isRecord(value) && Object.values(value).every(file => isRecord(file) &&
+    typeof file.id === "string" && typeof file.name === "string" && typeof file.size === "number" &&
+    typeof file.mimeType === "string" && typeof file.relativePath === "string");
 }
 
 function isConfirmedForms(

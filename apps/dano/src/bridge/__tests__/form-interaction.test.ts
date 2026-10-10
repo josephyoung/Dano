@@ -196,6 +196,33 @@ describe("Form Interaction", () => {
     });
   });
 
+  it("persists revised file metadata and clears removed optional files", () => {
+    const manager = sessionManager();
+    const original = { id: "original", name: "original.txt", size: 20, mimeType: "text/plain", relativePath: "uploads/original.txt" };
+    const replacement = { ...original, id: "replacement", name: "replacement.txt", relativePath: "uploads/replacement.txt" };
+    const fileForms: AskUserQuestionConfirmationForm[] = [{
+      formId: "files", title: "Files", questions: [
+        { id: "document", kind: "file", question: "Document", file: original },
+        { id: "extra", kind: "file", question: "Extra", file: original },
+      ], answer: { document: original.relativePath, extra: original.relativePath },
+    }];
+    createFormInteraction(manager, { interactionId: "confirm-files", assistantTurnId: "turn", forms: fileForms });
+    transitionFormInteraction(manager, "confirm-files", { type: "return_modify" });
+    const revisedForms: AskUserQuestionConfirmationForm[] = [{ ...fileForms[0], questions: [
+      { id: "document", kind: "file", question: "Document", file: replacement },
+      { id: "extra", kind: "file", question: "Extra" },
+    ], answer: { document: replacement.relativePath, extra: "" } }];
+    transitionFormInteraction(manager, "confirm-files", { type: "submit_revision", forms: revisedForms });
+    const restored = SessionManager.open(manager.getSessionFile()!);
+    const snapshots = readFormInteractions(restored.getBranch());
+    expect(snapshots.get("confirm-files")).toMatchObject({ forms: revisedForms });
+    expect(snapshots.get("confirm-files")?.forms[0].questions).toEqual(revisedForms[0].questions);
+    const projected = projectFormInteractionsInMessage({ role: "assistant", content: [
+      { type: "toolCall", id: "confirm-files", name: "ask_user_question", arguments: { confirm: true } },
+    ] } as any, snapshots);
+    expect(projected.content).toMatchObject([{ formInteraction: { forms: revisedForms }, questionRequest: { forms: revisedForms } }]);
+  });
+
   it("discards a draft revision and returns to confirmation", () => {
     const manager = sessionManager();
     createFormInteraction(manager, {

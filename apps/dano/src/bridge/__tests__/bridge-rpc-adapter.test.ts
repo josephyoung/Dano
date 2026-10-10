@@ -96,6 +96,8 @@ import {
   DANO_SESSION_PERSISTENCE_ERROR,
   DEFAULT_BRIDGE_CONFIG,
   type RpcCommand,
+  type RpcResponse,
+  type RpcUploadedFileRef,
   type RpcExtensionUIResponse,
   type RpcWorkspaceEntry,
   type BridgeClient,
@@ -112,6 +114,9 @@ import {
   transitionFormInteraction,
 } from "../form-interaction.js";
 import { CredentialBroker } from "../credential-broker.js";
+import { BridgeServer } from "../server.js";
+import { createHash, createHmac } from "node:crypto";
+import { createJwtUserContextResolver } from "../user-context.js";
 
 interface MockTransport {
   send: ReturnType<typeof vi.fn<(message: string) => void>>;
@@ -1851,6 +1856,157 @@ describe("BridgeRpcAdapter", () => {
         success: true,
         data: { status: "answered", answer: "Keep" },
       });
+    });
+
+    it("submits an HTTP uploaded project file through a grouped question with a relative-path answer", async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-file-form-"));
+      const sessionManager = SessionManager.create(root, path.join(root, "sessions"));
+      const baseContext = createMockContext();
+      const integrationContext = { ...baseContext, state: { ...baseContext.state, cwd: root, sessionManager } };
+      const responses: RpcResponse[] = [];
+      const config = {
+        ...DEFAULT_BRIDGE_CONFIG, host: "127.0.0.1", port: 0,
+        upload: { ...DEFAULT_BRIDGE_CONFIG.upload, uploadDir: path.join(root, ".uploads") },
+      };
+      const secret = "file-form-test-secret-with-sufficient-length";
+      const authorization = (userId: string) => {
+        const head = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+        const body = Buffer.from(JSON.stringify({ sub: userId, exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+        const signature = createHmac("sha256", secret).update(`${head}.${body}`).digest("base64url");
+        return { Authorization: `Bearer ${head}.${body}.${signature}` };
+      };
+      const headers = authorization("alice");
+      const server = new BridgeServer(config, ctx => new BridgeRpcAdapter(
+        ctx.client, message => { if (message.type === "response") responses.push(message.payload); ctx.send(message); }, integrationContext,
+        ctx.config, ctx.eventBus, ctx.emitEvent, ctx.uploadRegistry,
+        undefined, { userId: ctx.user!.user.id, sessionsRootPath: path.join(root, "sessions"),
+          ownsSessionPath: candidate => candidate.startsWith(root + path.sep), ownsWorkspacePath: candidate => candidate === root },
+      ), new BridgeEventBus(config), () => {}, createJwtUserContextResolver({ runtimeRootPath: path.join(root, "users"), secret }));
+      const stream = new AbortController();
+      try {
+        const { port } = await server.start();
+        const origin = `http://127.0.0.1:${port}`;
+        const created = await fetch(`${origin}/api/clients`, { method: "POST", headers }).then(r => r.json()) as { client: BridgeClient; eventsUrl: string; messagesUrl: string };
+        const eventsResponse = await fetch(`${origin}${created.eventsUrl}`, { signal: stream.signal, headers });
+        const eventsReader = eventsResponse.body!.getReader();
+        void (async () => {
+          try { while (!(await eventsReader.read()).done) { /* Keep the command client connected. */ } }
+          catch { /* The stream is aborted during cleanup. */ }
+        })();
+        const sendCommand = async (payload: RpcCommand) => {
+          const response = await fetch(`${origin}${created.messagesUrl}`, {
+            method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "command", payload }),
+          });
+          expect(await response.json()).toEqual({ status: "accepted" });
+          await vi.waitFor(() => expect(responses.find(r => r.id === payload.id)).toBeDefined());
+          return responses.find(r => r.id === payload.id)!;
+        };
+        const body = "FORM_DOCUMENT_OK";
+        const hash = createHash("sha256").update(body).digest("hex");
+        const uploaded = await fetch(`${origin}/api/uploads?${new URLSearchParams({
+          clientId: created.client.id, name: "evidence.custom", mimeType: "application/octet-stream", sha256: hash,
+        })}`, { method: "POST", body, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
+        expect(uploaded.relativePath).toBe(`uploads/${hash}.custom`);
+        const turn = new AbortController();
+        const pending = askUserQuestionCoordinator.wait("file-form", {
+          title: "Documents", questions: [
+            { id: "reason", question: "Reason?", default: "Application" },
+            { id: "document", question: "Document?", inputType: "file", required: true },
+            { id: "optional", question: "Optional document?", inputType: "file" },
+          ],
+        }, turn.signal);
+        void pending.catch(() => {});
+        askUserQuestionCoordinator.present("file-form");
+        for (const [id, answer] of [
+          ["missing-file", { reason: "Application", document: "" }],
+          ["fake-file", { document: "uploads/nonexistent.custom" }],
+          ["absolute-file", { document: uploaded.path }],
+          ["traversal-file", { document: "../uploads/private.custom" }],
+          ["wrong-field", { document: uploaded.relativePath, extra: uploaded.relativePath }],
+        ] as const) {
+          expect(await sendCommand({ id, type: "answer_question", toolCallId: "file-form", cancelled: false, answer })).toMatchObject({ success: false });
+          expect(askUserQuestionCoordinator.state("file-form")).toBe("presented");
+        }
+        const bobHeaders = authorization("bob");
+        const bob = await fetch(`${origin}/api/clients`, { method: "POST", headers: bobHeaders }).then(r => r.json()) as { client: BridgeClient };
+        const bobUpload = await fetch(`${origin}/api/uploads?${new URLSearchParams({ clientId: bob.client.id, name: "private.custom", sha256: hash })}`,
+          { method: "POST", body, headers: bobHeaders }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
+        expect(await sendCommand({ id: "foreign-file", type: "answer_question", toolCallId: "file-form", cancelled: false,
+          answer: { document: bobUpload.relativePath }, fileIds: { document: bobUpload.id } })).toMatchObject({ success: false });
+        expect(await sendCommand({ id: "wrong-file-id-map", type: "answer_question", toolCallId: "file-form", cancelled: false,
+          answer: { document: uploaded.relativePath }, fileIds: { reason: uploaded.id } })).toMatchObject({ success: false });
+        const response = await sendCommand({
+            id: "file-answer", type: "answer_question", toolCallId: "file-form", cancelled: false,
+            answer: { reason: "Application", document: uploaded.relativePath, optional: "" },
+            fileIds: { document: uploaded.id },
+        });
+        expect(response.success).toBe(true);
+        await expect(pending).resolves.toMatchObject({
+          status: "answered", formId: "file-form",
+          answer: { reason: "Application", document: `uploads/${hash}.custom`, optional: "" },
+          files: { document: { name: "evidence.custom", relativePath: `uploads/${hash}.custom`, size: body.length } },
+        });
+        expect(fs.readFileSync(path.join(root, `uploads/${hash}.custom`), "utf8")).toBe(body);
+        await fetch(`${origin}/api/uploads/${uploaded.id}/orphan?clientId=${created.client.id}`, { method: "POST", headers, body: "{}" });
+        expect(await fetch(`${origin}${uploaded.previewUrl}`, { headers }).then(r => r.text())).toBe(body);
+        const confirmation = askUserQuestionCoordinator.wait("file-confirm", { confirm: true, formIds: ["file-form"] }, turn.signal);
+        void confirmation.catch(() => {});
+        expect(askUserQuestionCoordinator.cardRequest("file-confirm")).toMatchObject({
+          forms: [{ questions: expect.arrayContaining([expect.objectContaining({ id: "document", file: { id: uploaded.id, name: "evidence.custom", size: body.length, mimeType: "application/octet-stream", relativePath: uploaded.relativePath } })]) }],
+        });
+        expect(await sendCommand({ id: "file-confirm-present", type: "present_question", toolCallId: "file-confirm" })).toMatchObject({ success: true });
+        expect(await sendCommand({ id: "file-revise", type: "revise_question", toolCallId: "file-confirm", expectedRevision: 1 })).toMatchObject({ success: true });
+        expect(await sendCommand({ id: "file-cancel-revision", type: "cancel_question_revision", toolCallId: "file-confirm", expectedRevision: 2 })).toMatchObject({ success: true });
+        expect(await sendCommand({ id: "file-revise-again", type: "revise_question", toolCallId: "file-confirm", expectedRevision: 3 })).toMatchObject({ success: true });
+        const replacementBody = "REVISED_DOCUMENT";
+        const replacementHash = createHash("sha256").update(replacementBody).digest("hex");
+        const replacement = await fetch(`${origin}/api/uploads?${new URLSearchParams({ clientId: created.client.id, name: "replacement.txt", sha256: replacementHash })}`,
+          { method: "POST", body: replacementBody, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
+        const revisionAnswers = { "file-form": { reason: "Updated", document: replacement.relativePath, optional: "" } };
+        expect(await sendCommand({ id: "file-stale-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 3, answers: revisionAnswers })).toMatchObject({ success: false });
+        const savedRevision = await sendCommand({ id: "file-save-revision", type: "submit_question_revision", toolCallId: "file-confirm", expectedRevision: 4,
+          answers: revisionAnswers, fileIds: { "file-form:document": replacement.id } });
+        const latestForms = [{ formId: "file-form", answer: revisionAnswers["file-form"], questions: expect.arrayContaining([
+          expect.objectContaining({ id: "document", file: expect.objectContaining({ id: replacement.id, name: "replacement.txt", relativePath: replacement.relativePath }) }),
+          expect.objectContaining({ id: "optional", kind: "file" }),
+        ]) }];
+        expect(savedRevision).toMatchObject({ success: true, data: { forms: latestForms } });
+        expect(readFormInteractions(sessionManager.getBranch()).get("file-confirm")).toMatchObject({ forms: latestForms });
+        expect(await sendCommand({ id: "file-confirm-answer", type: "answer_question", toolCallId: "file-confirm", expectedRevision: 5, cancelled: false, answer: true })).toMatchObject({ success: true });
+        await expect(confirmation).resolves.toMatchObject({ status: "confirmed", answer: revisionAnswers["file-form"] });
+        const lookupCopy = (name: string) => fetch(`${origin}/api/uploads/lookup?${new URLSearchParams({
+          clientId: created.client.id, name, sha256: hash,
+        })}`, { headers }).then(r => r.json() as Promise<RpcUploadedFileRef & { relativePath: string }>);
+        const firstCopy = await lookupCopy("first.custom");
+        const secondCopy = await lookupCopy("second.custom");
+        expect(firstCopy.id).not.toBe(secondCopy.id);
+        expect(firstCopy.relativePath).toBe(secondCopy.relativePath);
+        const twoFiles = askUserQuestionCoordinator.wait("two-files", { questions: [
+          { id: "first", question: "First material", inputType: "file", required: true },
+          { id: "second", question: "Second material", inputType: "file", required: true },
+        ] }, turn.signal);
+        expect(await sendCommand({ id: "two-files-answer", type: "answer_question", toolCallId: "two-files", cancelled: false,
+          answer: { first: firstCopy.relativePath, second: secondCopy.relativePath }, fileIds: { first: firstCopy.id, second: secondCopy.id } }))
+          .toMatchObject({ success: true });
+        await expect(twoFiles).resolves.toMatchObject({ status: "answered", files: {
+          first: { id: firstCopy.id, name: "first.custom" }, second: { id: secondCopy.id, name: "second.custom" },
+        } });
+        const unusedCopy = await lookupCopy("unused.custom");
+        await fetch(`${origin}/api/uploads/${unusedCopy.id}/orphan?clientId=${created.client.id}`, { method: "POST", headers, body: "{}" });
+        const converted = await fetch(`${origin}/api/uploads?${new URLSearchParams({ clientId: created.client.id,
+          name: "converted.webp", originalName: "original.png", sha256: replacementHash, mimeType: "image/webp" })}`,
+          { method: "POST", body: replacementBody, headers }).then(r => r.json()) as RpcUploadedFileRef & { relativePath: string };
+        expect(converted.name).toBe("original.png");
+        expect(converted.relativePath).toBe(`uploads/${replacementHash}.webp`);
+        expect(await fetch(`${origin}${firstCopy.previewUrl}`, { headers }).then(r => r.text())).toBe(body);
+        expect(await fetch(`${origin}${secondCopy.previewUrl}`, { headers }).then(r => r.text())).toBe(body);
+      } finally {
+        stream.abort();
+        askUserQuestionCoordinator.cancelAll();
+        await server.stop();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it("atomically confirms multiple Submitted Forms through RPC and preserves the result in JSONL", async () => {
@@ -5451,6 +5607,7 @@ describe("BridgeRpcAdapter", () => {
                   question: "请描述具体用途",
                   default: "用于公司业务文件盖章",
                 },
+                { id: "document", question: "材料", inputType: "file", required: true },
               ]),
             },
           },
@@ -5464,7 +5621,9 @@ describe("BridgeRpcAdapter", () => {
         content: [{ type: "text", text: "answered" }],
         details: {
           status: "answered",
+          files: { document: { id: "uploaded-document", name: "申请.pdf", size: 12, mimeType: "application/pdf", relativePath: "uploads/document.pdf" } },
           answer: {
+            document: "uploads/document.pdf",
             seal_id: "公司章",
             reason: "用于公司业务文件盖章",
           },
@@ -5511,6 +5670,7 @@ describe("BridgeRpcAdapter", () => {
           kind: "confirm",
           title: "公章使用申请表确认",
           confirmationOfToolCallId: "form-call",
+          questions: expect.arrayContaining([expect.objectContaining({ id: "document", kind: "file", file: resultMessage.details.files.document })]),
           answer: {
             seal_id: "公司章",
             reason: "用于公司业务文件盖章",

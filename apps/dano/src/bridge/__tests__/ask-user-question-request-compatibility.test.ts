@@ -31,6 +31,37 @@ const canonicalChoiceProjection = {
 };
 
 describe("ask_user_question request compatibility matrix", () => {
+  it.each(["file", "upload", "fileUpload", "file_upload"])("normalizes the %s file control alias without a model default", inputType => {
+    expect(normalizeAskUserQuestionCardRequest({
+      question: "材料？", inputType, required: true, default: "invented.pdf",
+    }, { requireDefault: true })).toEqual({
+      batch: false, id: "answer", kind: "file", question: "材料？", required: true,
+    });
+  });
+
+  it("preserves mixed field identity when file questions are JSON strings", () => {
+    const questions = [
+      { id: "reason", question: "用途？", default: "合同" },
+      { id: "document", question: "材料？", inputType: "file", required: true },
+      { id: "extra", question: "补充？", inputType: "file" },
+    ];
+    expect(normalizeAskUserQuestionCardRequest({ questions: JSON.stringify(questions) }, { requireDefault: true }))
+      .toEqual(normalizeAskUserQuestionCardRequest({ questions }, { requireDefault: true }));
+  });
+
+  it("projects a file field without a fabricated default or unrelated controls", () => {
+    expect(normalizeAskUserQuestionCardRequest({
+      questions: [{
+        id: "document", question: "Supporting document?", inputType: "file", required: true,
+        options: "malformed", multiple: true, fieldAssist: true, dateFormat: "invalid",
+        dataSource: { type: "api", endpoint: "/irrelevant" }, default: "/fabricated/path",
+      }],
+    })).toEqual({
+      batch: true, title: "表单",
+      questions: [{ id: "document", kind: "file", question: "Supporting document?", required: true }],
+    });
+  });
+
   it.each([
     ["native options", { options: ["是", "否"] }],
     ["JSON-stringified options", { options: '["是","否"]' }],
@@ -120,7 +151,7 @@ describe("ask_user_question request compatibility matrix", () => {
     expect(normalizeAskUserQuestionCardRequest(request)).toBeNull();
   });
 
-  it("captures the sanitized #322 deviations and canonical equivalents", () => {
+  it("captures sanitized real-model deviations and canonical equivalents", () => {
     expect(fixture.issue).toBe(322);
     for (const deviation of fixture.deviations) {
       expect(

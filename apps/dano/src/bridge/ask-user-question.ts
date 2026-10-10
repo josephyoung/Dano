@@ -25,6 +25,7 @@ import {
   type AskUserQuestionDataSource,
   type AskUserQuestionErrorIssue,
   type AskUserQuestionInputType,
+  type AskUserQuestionFileRef,
   type AskUserQuestionInvalidResult,
   type AskUserQuestionLifecycleState,
   type AskUserQuestionOption,
@@ -70,7 +71,7 @@ const askUserQuestionFields = {
     }),
   ),
   choices: Type.Optional(Type.Any()),
-  inputType: Type.Optional(Type.Any()),
+  inputType: Type.Optional(Type.Any({ description: "Question control: text, textarea, date, file, radio, checkbox, select, treeSelect. Use file for one actual user upload of any format; no default is required." })),
   type: Type.Optional(Type.Any()),
   input_type: Type.Optional(Type.Any()),
   component: Type.Optional(Type.Any()),
@@ -125,7 +126,7 @@ export const askUserQuestionParameters = Type.Object({
   questions: Type.Optional(
     Type.Any({
       description:
-        "Preferred for collecting more than one answer. Make exactly one ask_user_question call with questions: [{ id, question, default, options?, multiple?, inputType?, fieldAssist?, dateFormat?, required?, dataSource? }, ...]. Every canonical non-confirmation questions[] item should include a context-based, non-empty default. A single question object or one-level JSON-stringified object/array is also accepted and normalized to an array. If title is omitted or malformed, Dano uses the configured product default. When questions is present, put each field's options, inputType, fieldAssist, dateFormat, required, dataSource, multiple, and default inside its questions[] item. Do not include top-level confirm or top-level field configuration with questions.",
+        "Preferred for collecting more than one answer. Make exactly one ask_user_question call with questions: [{ id, question, default, options?, multiple?, inputType?, fieldAssist?, dateFormat?, required?, dataSource? }, ...]. Every canonical non-confirmation questions[] item except file fields should include a context-based, non-empty default. File fields use inputType:\"file\" without a default. A single question object or one-level JSON-stringified object/array is also accepted and normalized to an array. If title is omitted or malformed, Dano uses the configured product default. When questions is present, put each field's options, inputType, fieldAssist, dateFormat, required, dataSource, multiple, and default inside its questions[] item. Do not include top-level confirm or top-level field configuration with questions.",
     }),
   ),
 });
@@ -134,6 +135,9 @@ export const askUserQuestionResultSchema = Type.Union([
   Type.Object({
     status: Type.Literal("answered"),
     formId: Type.Optional(Type.String()),
+    files: Type.Optional(Type.Record(Type.String(), Type.Object({
+      id: Type.String(), name: Type.String(), size: Type.Number(), mimeType: Type.String(), relativePath: Type.String(),
+    }))),
     answer: Type.Union([
       askUserQuestionAnswerSchema,
       Type.Record(Type.String(), askUserQuestionAnswerSchema),
@@ -182,7 +186,7 @@ export const askUserQuestionResultSchema = Type.Union([
   }),
 ]);
 
-type PendingQuestionKind = "text" | "date" | "single" | "multiple" | "confirm";
+type PendingQuestionKind = "text" | "file" | "date" | "single" | "multiple" | "confirm";
 type AskUserQuestionCompletedResult = Exclude<
   AskUserQuestionResult,
   { status: "invalid" }
@@ -242,6 +246,38 @@ interface PendingQuestionItem {
   dateFormat?: string;
   required: boolean;
   default?: AskUserQuestionAnswer;
+  file?: AskUserQuestionFileRef;
+}
+
+type ResolveQuestionFile = (relativePath: string, fieldId: string, previousFileId?: string) => AskUserQuestionFileRef;
+
+function resolveQuestionFiles(
+  questions: readonly PendingQuestionItem[],
+  answer: Record<string, AskUserQuestionAnswer>,
+  resolveFile?: ResolveQuestionFile,
+  formId?: string,
+): Record<string, AskUserQuestionFileRef> {
+  const files: Record<string, AskUserQuestionFileRef> = {};
+  if (!questions.some(question => question.kind === "file")) return files;
+  for (const question of questions) {
+    if (question.kind !== "file" || !answer[question.id]) continue;
+    if (!resolveFile || typeof answer[question.id] !== "string") throw new Error("Uploaded file is invalid");
+    const file = resolveFile(answer[question.id] as string,
+      formId ? `${formId}:${question.id}` : question.id,
+      question.file?.relativePath === answer[question.id] ? question.file.id : undefined);
+    if (file.relativePath !== answer[question.id]) throw new Error("Uploaded file path does not match");
+    files[question.id] = file;
+  }
+  return files;
+}
+
+function attachQuestionFiles(
+  questions: readonly PendingQuestionItem[],
+  files: Record<string, AskUserQuestionFileRef>,
+): void {
+  for (const question of questions) {
+    if (question.kind === "file") question.file = files[question.id];
+  }
 }
 
 interface PendingQuestion {
@@ -442,10 +478,14 @@ export class AskUserQuestionCoordinator {
   submitConfirmationRevision(
     toolCallId: string,
     answers: Record<string, Record<string, AskUserQuestionAnswerInput>>,
+    resolveFile?: ResolveQuestionFile,
   ): AskUserQuestionConfirmationCardRequest {
     const pending = this.pending.get(toolCallId);
     if (!pending?.confirmation) {
       throw new Error(`Pending confirmation not found: ${toolCallId}`);
+    }
+    if (Object.keys(answers).some(formId => !pending.confirmation!.some(form => form.toolCallId === formId))) {
+      throw new Error("Unknown form in confirmation revision");
     }
     const normalizedAnswers = pending.confirmation.map(form => {
       const answer = answers[form.toolCallId];
@@ -453,8 +493,13 @@ export class AskUserQuestionCoordinator {
         ? normalizeGroupedAnswer(form.questions, answer)
         : form.answer;
     });
+    const files = pending.confirmation.map((form, index) =>
+      resolveQuestionFiles(form.questions, normalizedAnswers[index], resolveFile, form.toolCallId)
+    );
     for (const [index, form] of pending.confirmation.entries()) {
       form.answer = normalizedAnswers[index];
+      attachQuestionFiles(form.questions, files[index]);
+      form.cardRequest = { ...form.cardRequest, questions: form.questions.map(toQuestionCardItem) };
     }
     pending.cardRequest = confirmationCardRequest(pending.confirmation);
     return pending.cardRequest as AskUserQuestionConfirmationCardRequest;
@@ -485,6 +530,7 @@ export class AskUserQuestionCoordinator {
             | AskUserQuestionAnswerInput
             | Record<string, AskUserQuestionAnswerInput>;
         },
+    resolveFile?: ResolveQuestionFile,
   ): AskUserQuestionCompletedResult {
     const pending = this.pending.get(toolCallId);
     if (!pending) throw new Error(`Pending question not found: ${toolCallId}`);
@@ -499,6 +545,7 @@ export class AskUserQuestionCoordinator {
       if (response.answer !== true) {
         throw new Error("Confirmation answer must be true");
       }
+      for (const form of pending.confirmation) resolveQuestionFiles(form.questions, form.answer, resolveFile, form.toolCallId);
       const confirmedForms = pending.confirmation.map(form => ({
         formId: form.toolCallId,
         answer: { ...form.answer },
@@ -517,14 +564,19 @@ export class AskUserQuestionCoordinator {
           throw new Error("Grouped question answer must be an object");
         }
         const normalized = normalizeGroupedAnswer(pending.questions, answer);
-        result = { status: "answered", answer: normalized, formId: toolCallId };
+        const files = resolveQuestionFiles(pending.questions, normalized, resolveFile);
+        attachQuestionFiles(pending.questions, files);
+        result = {
+          status: "answered", answer: normalized, formId: toolCallId,
+          ...(Object.keys(files).length ? { files } : {}),
+        };
         if (pending.signal && pending.cardRequest.batch) {
           const submittedForms =
             this.submittedFormsBySignal.get(pending.signal) ?? new Map();
           submittedForms.set(toolCallId, {
             toolCallId,
             questions: pending.questions,
-            cardRequest: pending.cardRequest,
+            cardRequest: { ...pending.cardRequest, questions: pending.questions.map(toQuestionCardItem) },
             answer: normalized,
           });
           this.submittedFormsBySignal.set(pending.signal, submittedForms);
@@ -533,12 +585,12 @@ export class AskUserQuestionCoordinator {
         if (isAnswerRecord(answer) && !isOptionObject(answer)) {
           throw new Error("请选择一个有效选项");
         }
+        const normalized = normalizeAnswer(pending.questions[0], answer as AskUserQuestionAnswerInput);
+        const files = resolveQuestionFiles(pending.questions, { [pending.questions[0].id]: normalized }, resolveFile);
         result = {
           status: "answered",
-          answer: normalizeAnswer(
-            pending.questions[0],
-            answer as AskUserQuestionAnswerInput,
-          ),
+          answer: normalized,
+          ...(Object.keys(files).length ? { files } : {}),
         };
       }
     }
@@ -849,6 +901,13 @@ function normalizeCompatibleQuestion(
       "inputType must identify a supported question control.",
       pathFor(path, "inputType"),
     ));
+  }
+
+  // A file is selected by the user, never by model-provided defaults or choice configuration.
+  if (normalizedInputType === "file") {
+    const required = normalizeBoolean(request.required);
+    if (required !== undefined) normalized.required = required;
+    return { question: normalized, issues };
   }
 
   const options = normalizeCompatibleAliases(
@@ -1497,6 +1556,7 @@ function firstNormalizedValue<T>(
 function normalizeInputType(value: unknown): AskUserQuestionInputType | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().replace(/[-_\s]/g, "").toLocaleLowerCase();
+  if (normalized === "file" || normalized === "upload" || normalized === "fileupload") return "file";
   if (normalized === "textarea" || normalized === "multiline" || normalized === "longtext") {
     return "textarea";
   }
@@ -1774,11 +1834,16 @@ function normalizeGroupedAnswer(
   answer: Record<string, AskUserQuestionAnswerInput>,
 ): Record<string, AskUserQuestionAnswer> {
   const normalized: Record<string, AskUserQuestionAnswer> = {};
+  if (questions.some(question => question.kind === "file") &&
+      Object.keys(answer).some(key => !questions.some(question => question.id === key))) {
+    throw new Error("Unknown file form field");
+  }
   for (const question of questions) {
     if (!(question.id in answer)) {
       if (question.required) {
         throw new Error(`Missing answer for grouped question: ${question.id}`);
       }
+      if (question.kind === "file") normalized[question.id] = "";
       continue;
     }
     normalized[question.id] = normalizeAnswer(question, answer[question.id]);
@@ -1803,6 +1868,9 @@ function toQuestionCardItem(
         : {}),
     };
   }
+  if (question.kind === "file") return {
+    ...common, kind: "file", ...(question.file ? { file: question.file } : {}),
+  };
   if (question.kind === "date") {
     return {
       ...common,
@@ -1979,6 +2047,7 @@ function normalizeQuestion(
 
   let kind: PendingQuestionKind = "text";
   if (inputType === "confirm") kind = "confirm";
+  else if (inputType === "file") kind = "file";
   else if (inputType === "date") kind = "date";
   else if (multiple) kind = "multiple";
   else if (options || compatibleDataSource || inputType === "radio" || inputType === "select" || inputType === "treeSelect") {
@@ -1998,7 +2067,7 @@ function normalizeQuestion(
     ...(compatibleDataSource ? { dataSource: compatibleDataSource } : {}),
     ...(dateFormat ? { dateFormat } : {}),
   };
-  if (requireDefault && kind !== "confirm" && request.default === undefined) {
+  if (requireDefault && kind !== "confirm" && kind !== "file" && request.default === undefined) {
     issues.push(askUserQuestionIssue(
       "invalid_default",
       "Every non-confirmation question must provide a non-empty default.",
@@ -2205,11 +2274,11 @@ export function createAskUserQuestionTool(
   label: "Ask User Question",
   description: `Ask the user for structured input during execution.
 
-When the user asks to fill in a form, complete a form, or provide form fields, use ask_user_question to collect the fields instead of asking in assistant text. Every non-confirmation question must include a context-based recommended default so the user can usually submit directly. String defaults must be non-empty; never use default:"". required:true controls whether the user may submit an empty answer.
+When the user asks to fill in a form, complete a form, or provide form fields, use ask_user_question to collect the fields instead of asking in assistant text. Every non-confirmation question except file fields must include a context-based recommended default so the user can usually submit directly. String defaults must be non-empty; never use default:"". required:true controls whether the user may submit an empty answer.
 
 Use exactly one ask_user_question call per assistant response. If you need more than one answer, provide a form title and use only the questions array: {"title":"请假申请","questions":[{"id":"leave_type","question":"请假类型？","options":["事假",{"id":"sick","label":"病假"}],"default":"事假","required":true},{"id":"start_at","question":"开始时间？","inputType":"date","dateFormat":"yyyy-MM-dd HH:mm","default":"2026-07-08 09:00","required":true},{"id":"reason","question":"原因？","default":"个人事务","fieldAssist":true,"required":true}]}. When questions is present, put every field's options, inputType, fieldAssist, dateFormat, required, dataSource, multiple, and default inside the matching questions[] item; do not include top-level confirm or top-level field configuration.
 
-For a single question, use top-level question/options/inputType/fieldAssist/dateFormat/required/dataSource/multiple/default. For multiple questions, use title plus questions[]. fieldAssist controls generation and polishing actions for text fields; it defaults to false for single-line text and true for textarea. Dates require inputType:"date" plus dateFormat, for example "yyyy-MM-dd" or "yyyy-MM-dd HH:mm"; Dano returns the user's submitted date value as-is. required defaults to false; set required:true when an empty answer must not be submitted. Canonical calls should provide a non-empty default; compatibility input without one renders without a prefill. Use inputType:"select" or inputType:"treeSelect" with dataSource for remote API-backed choices. Dano normalizes unambiguous aliases, safe scalar deviations, and one-level JSON-stringified collections; it uses the configured product title when a grouped title is missing, ignores unknown or inapplicable optional fields, and rejects only inputs that cannot preserve rendering, submission, or answer mapping. When the workflow needs final confirmation for submitted grouped forms, call {"confirm":true,"formIds":["<formId>"]} with the formId values returned by those submissions. This is only for grouped-form confirmation; use a normal single-choice question to confirm an ordinary sentence or operation. If final confirmation is not needed, continue without this call.
+For a single question, use top-level question/options/inputType/fieldAssist/dateFormat/required/dataSource/multiple/default. For multiple questions, use title plus questions[]. fieldAssist controls generation and polishing actions for text fields; it defaults to false for single-line text and true for textarea. Dates require inputType:"date" plus dateFormat, for example "yyyy-MM-dd" or "yyyy-MM-dd HH:mm"; Dano returns the user's submitted date value as-is. required defaults to false; set required:true when an empty answer must not be submitted. Use inputType:"file" to request one uploaded file of any format per field. File fields require no default; never fabricate a file path. Dano returns a workspace-relative uploaded project file path, or an empty string for an optional empty file field. Unrelated options, dateFormat, dataSource, multiple and fieldAssist are ignored for file fields. Canonical non-file calls should provide a non-empty default; compatibility input without one renders without a prefill. Use inputType:"select" or inputType:"treeSelect" with dataSource for remote API-backed choices. Dano normalizes unambiguous aliases, safe scalar deviations, and one-level JSON-stringified collections; it uses the configured product title when a grouped title is missing, ignores unknown or inapplicable optional fields, and rejects only inputs that cannot preserve rendering, submission, or answer mapping. When the workflow needs final confirmation for submitted grouped forms, call {"confirm":true,"formIds":["<formId>"]} with the formId values returned by those submissions. This is only for grouped-form confirmation; use a normal single-choice question to confirm an ordinary sentence or operation. If final confirmation is not needed, continue without this call.
 
 Failures use one JSON result shape: {"status":"invalid","error":{"code":"...","category":"...","message":"...","retryable":true,"issues":[{"code":"...","path":"questions[0].id","message":"..."}]}}. Correct every reported issue path in one replacement call only when retryable is true. Never retry terminal or cancelled failures.`,
   promptSnippet:
@@ -2223,7 +2292,8 @@ Failures use one JSON result shape: {"status":"invalid","error":{"code":"...","c
     "If ask_user_question returns status:invalid, inspect error.code, category, retryable, and every issues[] entry. Retry silently with one corrected native tool call only when retryable is true; correct all reported paths together and do not explain the correction to the user.",
     "Do not retry question_presentation_failed, question_validation_failed, or question_cancelled results. Stop the current response and let the user decide whether to try again.",
     "Use the documented canonical parameters. Dano treats model-generated arguments as best-effort input, normalizes safe aliases and one-level JSON collection strings, uses the configured product title when a grouped title is missing, and admits an omitted default without a prefill. It still rejects ambiguity that could change rendering, submission, or answer mapping.",
-    "Give every non-confirmation question a context-based recommended non-empty default. Do not use empty string or placeholder defaults.",
+    "Give every non-confirmation question except file fields a context-based recommended non-empty default. Do not use empty string or placeholder defaults.",
+    "Use inputType:\"file\" for a single file upload per field; any format is accepted under the existing chat upload size limit. Omit default and unrelated field options. The answer is an authorized workspace-relative path, or an empty string when optional and empty.",
     "Set required:true only when an answer is mandatory. required defaults to false.",
     "For date fields, use inputType:\"date\" and provide dateFormat such as \"yyyy-MM-dd\" or \"yyyy-MM-dd HH:mm\". The dateFormat configures the frontend date control display and submitted output.",
     "Dano returns the user's date answer as submitted; convert it yourself if a downstream interface needs another business format.",

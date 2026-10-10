@@ -51,6 +51,7 @@ import {
 import type {
   AskUserQuestionAnswer,
   AskUserQuestionCardRequest,
+  AskUserQuestionFileRef,
   AskUserQuestionLifecycleState,
   BridgeConfig,
   BridgeEvent,
@@ -4440,7 +4441,7 @@ class TranscriptProjector {
     if (!request) return;
     submittedForms.set(message.toolCallId, {
       toolCallId: message.toolCallId,
-      request,
+      request: submittedRequestWithFiles(request, message.details),
       answer: message.details.answer,
     });
   }
@@ -4532,11 +4533,13 @@ function confirmationRequestFromTranscript(
 
   const availableForms = new Map(previousSubmittedForms);
   let answer: Record<string, AskUserQuestionAnswer> | undefined;
+  let files: Record<string, AskUserQuestionFileRef> | undefined;
   for (let index = confirmIndex - 1; index >= 0; index -= 1) {
     const block = content[index];
     if (typeof block === "string") continue;
     if (block.type === "toolResult" && isAnsweredRecord(block.details)) {
       answer = block.details.answer;
+      files = block.details.files;
       continue;
     }
     if (
@@ -4555,10 +4558,11 @@ function confirmationRequestFromTranscript(
       if (source?.batch) {
         availableForms.set(block.id, {
           toolCallId: block.id,
-          request: source,
+          request: submittedRequestWithFiles(source, { answer, files }),
           answer,
         });
         answer = undefined;
+        files = undefined;
       }
     }
   }
@@ -4596,10 +4600,24 @@ function submittedFormFromMessage(
       continue;
     }
     if (source && block.type === "toolResult" && isAnsweredRecord(block.details)) {
-      return { ...source, answer: block.details.answer };
+      return { ...source, request: submittedRequestWithFiles(source.request, block.details), answer: block.details.answer };
     }
   }
   return null;
+}
+
+function submittedRequestWithFiles(
+  request: Extract<AskUserQuestionCardRequest, { batch: true }>,
+  result: { answer: Record<string, AskUserQuestionAnswer>; files?: Record<string, AskUserQuestionFileRef> },
+): Extract<AskUserQuestionCardRequest, { batch: true }> {
+  return {
+    ...request,
+    questions: request.questions.map(question => {
+      if (question.kind !== "file") return question;
+      const file = result.files?.[question.id];
+      return file?.relativePath === result.answer[question.id] ? { ...question, file } : question;
+    }),
+  };
 }
 
 function isAnsweredRecord(
@@ -4607,6 +4625,7 @@ function isAnsweredRecord(
 ): details is {
   status: "answered";
   answer: Record<string, AskUserQuestionAnswer>;
+  files?: Record<string, AskUserQuestionFileRef>;
 } {
   return Boolean(
     details &&
@@ -5397,6 +5416,36 @@ export class BridgeRpcAdapter {
       workspacePath: this.sessionRuntime.currentGitCwd(),
       sessionId,
       sourceSessionId,
+    };
+  }
+
+  private questionFileResolver(toolCallId: string, fileIds?: Record<string, string>) {
+    const request = this.context.askUserQuestion.coordinator.cardRequest(toolCallId);
+    const fieldIds = request?.batch
+      ? request.questions.filter(item => item.kind === "file").map(item => item.id)
+      : request?.kind === "confirm"
+        ? (request.forms ?? []).flatMap(form => form.questions.filter(item => item.kind === "file").map(item => `${form.formId}:${item.id}`))
+        : request?.kind === "file" ? [request.id] : [];
+    if (fileIds && Object.entries(fileIds).some(([key, id]) => !fieldIds.includes(key) || typeof id !== "string" || !id)) {
+      throw new Error("Uploaded file field mapping is invalid");
+    }
+    const workspacePath = this.sessionRuntime.currentGitCwd();
+    const sessionId = this.sessionRuntime.currentSessionManager().getSessionId();
+    const access = this.currentUploadAccess(sessionId) ?? { workspacePath, ownerClientId: this.client.id };
+    const files = new Set<string>();
+    return {
+      resolve: (relativePath: string, fieldId: string, previousFileId?: string) => {
+        const upload = this.uploadRegistry.resolveProjectPath(relativePath, access, fileIds?.[fieldId] ?? previousFileId);
+        if (!upload) throw new Error("Uploaded file is unavailable in this Runtime Workspace");
+        files.add(upload.id);
+        return {
+          id: upload.id, name: upload.name, size: upload.size, mimeType: upload.mimeType,
+          relativePath: upload.relativePath!,
+        };
+      },
+      commit: () => {
+        for (const id of files) this.uploadRegistry.markReferenced(id, { ...access, sessionId });
+      },
     };
   }
 
@@ -6796,6 +6845,7 @@ export class BridgeRpcAdapter {
           );
         }
 
+        const fileResolver = this.questionFileResolver(toolCallId, command.cancelled ? undefined : command.fileIds);
         const result = command.cancelled
           ? this.context.askUserQuestion.coordinator.answer(toolCallId, {
               cancelled: true,
@@ -6803,7 +6853,8 @@ export class BridgeRpcAdapter {
           : this.context.askUserQuestion.coordinator.answer(toolCallId, {
               cancelled: false,
               answer: command.answer,
-            });
+            }, fileResolver.resolve);
+        fileResolver.commit();
         if (interaction) {
           transitionFormInteraction(sessionManager, toolCallId, {
             type: terminalTransition,
@@ -6882,10 +6933,12 @@ export class BridgeRpcAdapter {
             interaction,
           );
         }
+        const fileResolver = this.questionFileResolver(toolCallId, command.fileIds);
         const request =
           this.context.askUserQuestion.coordinator.submitConfirmationRevision(
             toolCallId,
             command.answers,
+            fileResolver.resolve,
           );
         const forms = request.forms?.length
           ? request.forms
@@ -6910,6 +6963,7 @@ export class BridgeRpcAdapter {
             `Failed to submit Form Interaction revision: ${toolCallId}`,
           );
         }
+        fileResolver.commit();
         this.sendTranscriptSnapshot(
           this.sessionRuntime.buildCurrentTranscriptPage(),
         );

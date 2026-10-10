@@ -250,6 +250,7 @@ export type AskUserQuestionAnswer =
 
 export type AskUserQuestionInputType =
   | "text"
+  | "file"
   | "textarea"
   | "date"
   | "radio"
@@ -275,11 +276,17 @@ export type AskUserQuestionDataSource = {
   extraFields?: string[];
 };
 
+/** Presentation metadata for an authorized Uploaded Project File; answers remain relative paths. */
+export type AskUserQuestionFileRef = Pick<RpcUploadedFileRef, "id" | "name" | "size" | "mimeType"> & {
+  relativePath: string;
+};
+
 export type AskUserQuestionResult =
   | {
       status: "answered";
       answer: AskUserQuestionAnswer | Record<string, AskUserQuestionAnswer>;
       formId?: string;
+      files?: Record<string, AskUserQuestionFileRef>;
     }
   | {
       status: "confirmed";
@@ -296,6 +303,14 @@ export type AskUserQuestionConfirmedForm = {
 };
 
 export type AskUserQuestionCardItem =
+  | {
+      id: string;
+      kind: "file";
+      question: string;
+      required?: boolean;
+      default?: never;
+      file?: AskUserQuestionFileRef;
+    }
   | {
       id: string;
       kind: "text";
@@ -604,6 +619,7 @@ export interface RpcCommandMap {
         toolCallId: string;
         cancelled: false;
         expectedRevision?: number;
+        fileIds?: Record<string, string>;
         answer:
           | AskUserQuestionAnswerInput
           | Record<string, AskUserQuestionAnswerInput>;
@@ -614,6 +630,7 @@ export interface RpcCommandMap {
     toolCallId: string;
     expectedRevision: number;
     answers: Record<string, Record<string, AskUserQuestionAnswerInput>>;
+    fileIds?: Record<string, string>;
   };
   new_session: PiRpcCommandPayload<"new_session"> & {
     limit?: number;
