@@ -420,6 +420,7 @@ export class DetachedSessionRegistry {
         credentialBroker: this.newSessionRuntimeOptions.credentialBroker,
         credentialBrokerScope:
           this.newSessionRuntimeOptions.credentialBrokerScope,
+        authenticationStatus: this.newSessionRuntimeOptions.authenticationStatus,
         protectedTools: this.newSessionRuntimeOptions.protectedTools,
       },
     );
@@ -508,11 +509,12 @@ export class DetachedSessionRegistry {
     if (path.resolve(effectiveCwd) === path.resolve(this.fallbackCwd)) {
       return this.newSessionRuntimeOptions;
     }
-    return this.newSessionRuntimeOptions.credentialBroker || this.newSessionRuntimeOptions.protectedTools
+    return this.newSessionRuntimeOptions.credentialBroker || this.newSessionRuntimeOptions.protectedTools || this.newSessionRuntimeOptions.authenticationStatus
       ? {
           credentialBroker: this.newSessionRuntimeOptions.credentialBroker,
           credentialBrokerScope:
             this.newSessionRuntimeOptions.credentialBrokerScope,
+          authenticationStatus: this.newSessionRuntimeOptions.authenticationStatus,
           protectedTools: this.newSessionRuntimeOptions.protectedTools,
         }
       : {};

@@ -130,6 +130,7 @@ describe("detached-session", () => {
     const providerRequestTool = { name: "provider_request" };
     const releaseCredentialBinding = vi.fn();
     const credentialBroker = {
+      createAuthenticationExtension: vi.fn(() => () => {}),
       createTool: vi.fn().mockReturnValue(providerRequestTool),
       observe: vi.fn().mockReturnValue(releaseCredentialBinding),
     };
@@ -175,6 +176,7 @@ describe("detached-session", () => {
       cwd: tmpDir,
       agentDir: expect.any(String),
       resourceLoaderOptions: {
+        extensionFactories: [{ name: "dano-authentication", factory: expect.any(Function) }],
         additionalExtensionPaths: [
           expect.stringContaining("pi-heimdall/extensions/heimdall.ts"),
         ],

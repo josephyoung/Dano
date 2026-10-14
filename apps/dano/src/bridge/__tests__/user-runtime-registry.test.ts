@@ -83,7 +83,7 @@ describe("UserRuntimeRegistry owner transfer", () => {
   it("binds each server user context to its own protected backend profile", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-protected-users-"));
     runtimeRoots.push(root);
-    const alice = userContext(root, "alice");
+    const alice: UserContext = { ...userContext(root, "alice"), user: { id: "alice", username: "Alice" } };
     const bob = userContext(root, "bob");
     const profiles = new Map<string, ProtectedSessionTools>();
     const protectedToolsForUser = vi.fn(async (context: UserContext) => {
@@ -108,6 +108,7 @@ describe("UserRuntimeRegistry owner transfer", () => {
         expect(backend).toHaveBeenCalledWith(expect.objectContaining({
           cwd: path.join(context.folderPath, "workspaces", "default"),
           credentialBrokerScope: context.user.id,
+          authenticationStatus: context === alice ? "authenticated" : "anonymous",
           protectedTools: profiles.get(context.user.id),
         }));
       }

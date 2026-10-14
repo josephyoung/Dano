@@ -25,7 +25,10 @@
 - 想让用户判断接口是否存在、字段是否必填或字段如何映射——这些应在生成
   Skill 时由已确认的 OA 能力定义；
 - 只需向用户说明结果，不需要新的输入；
-- 可信登录状态或业务工具明确要求登录或重新登录时，只需暂停依赖登录的 OA 操作，
+- 登录判断与菜单共用后台当前请求中的 `Dano trusted authentication status`。
+  仅 `anonymous` 或 `reauth_required` 要求登录；`authenticated` 时业务凭据错误按业务连接
+  异常处理，`unknown` 时说明无法确认。业务工具报错或对话中没有 token 不能替代可信状态。
+  要求登录时，只需暂停依赖登录的 OA 操作，
   提示用户登录并直接输出 `<a href="/api/auth/login?returnTo=%2F" target="_self" style="display:inline-flex;align-items:center;justify-content:center;height:calc(var(--spacing)*9);padding:0 calc(var(--spacing)*2.5);border:1px solid transparent;border-radius:var(--radius-md);background:var(--accent);color:var(--on-accent);font:inherit;font-size:var(--text-sm);font-weight:500;line-height:var(--text-sm--line-height);text-decoration:none;white-space:nowrap;">点击登录</a>`，不要放入代码块；不向用户索取 token；
 - 想用普通文本、Markdown、XML 或 JSON 代码块模拟提问。
 

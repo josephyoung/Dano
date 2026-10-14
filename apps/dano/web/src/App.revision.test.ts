@@ -1,6 +1,7 @@
 /** @vitest-environment happy-dom */
 
 import { mount, tick, unmount } from "svelte";
+import App from "./App.svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({
@@ -34,6 +35,8 @@ const bridge = vi.hoisted(() => ({
   isReconnecting: false,
   isStreaming: false,
   lastDisconnectReason: null,
+  login: vi.fn(),
+  logout: vi.fn(),
   loadGitRepoState: vi.fn(),
   loadOlderTranscriptPage: vi.fn(),
   loadWorkspaceSessions: vi.fn(),
@@ -115,9 +118,6 @@ vi.mock("./components/ThemeSettingsDialog.svelte", async () => ({
 vi.mock("./components/MemoryManagementDialog.svelte", async () => ({
   default: (await import("./test/EmptyComponentHarness.svelte")).default,
 }));
-vi.mock("./layout/AppHeader.svelte", async () => ({
-  default: (await import("./test/EmptyComponentHarness.svelte")).default,
-}));
 vi.mock("./layout/AppNotifications.svelte", async () => ({
   default: (await import("./test/EmptyComponentHarness.svelte")).default,
 }));
@@ -134,7 +134,6 @@ describe("App historical-message editing", () => {
 
   it("preserves the selected history node and session without navigating on enter or cancel", async () => {
     vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
-    const { default: App } = await import("./App.svelte");
     const target = document.createElement("div");
     document.body.appendChild(target);
     const selectedEntry = () => bridge.treeEntries.find(entry => entry.isActive)?.id;
@@ -178,7 +177,6 @@ describe("App historical-message editing", () => {
       calls.push(`send:${message}`);
       return true;
     });
-    const { default: App } = await import("./App.svelte");
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(App, { target });
@@ -209,7 +207,6 @@ describe("App historical-message editing", () => {
   ])("retains the edit and does not send when history navigation %s", async (_case, navigate) => {
     vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
     bridge.sendCommand.mockImplementationOnce(navigate);
-    const { default: App } = await import("./App.svelte");
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(App, { target });
@@ -234,7 +231,6 @@ describe("App historical-message editing", () => {
     vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
     bridge.sendCommand.mockResolvedValueOnce({ success: true });
     bridge.sendPrompt.mockResolvedValueOnce(false);
-    const { default: App } = await import("./App.svelte");
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(App, { target });
@@ -251,6 +247,61 @@ describe("App historical-message editing", () => {
     } finally {
       await unmount(component);
       target.remove();
+    }
+  });
+});
+
+
+describe("App empty-conversation login guidance", () => {
+  afterEach(() => {
+    bridge.authentication = { status: "anonymous" };
+    bridge.transcript = [{ id: "history-node-a", role: "user", content: "historical message" }];
+    bridge.transcriptInitialLoading = false;
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+  });
+
+  it("shows login with the same menu action when the current conversation is empty", async () => {
+    bridge.transcript = [];
+    vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = mount(App, { target });
+    try {
+      await tick();
+      const banner = target.querySelector('[aria-label="登录提示"]');
+      expect(banner?.textContent).toContain("你尚未登录");
+      banner!.querySelector<HTMLAnchorElement>("a")!.click();
+      expect(bridge.login).toHaveBeenCalledOnce();
+      target.querySelector<HTMLButtonElement>(".menu-button")!.click();
+      await tick();
+      document.querySelector<HTMLButtonElement>(".login-menu-item")!.click();
+      expect(bridge.login).toHaveBeenCalledTimes(2);
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it.each([
+    ["authenticated", false, []],
+    ["checking", false, []],
+    ["reauth_required", false, []],
+    ["anonymous", true, []],
+    ["anonymous", false, [{ id: "history", role: "user", content: "已有消息" }]],
+  ])("hides login guidance for %s, loading=%s and the supplied history", async (status, loading, transcript) => {
+    bridge.authentication = { status };
+    bridge.transcriptInitialLoading = loading;
+    bridge.transcript = transcript;
+    vi.stubGlobal("__PI_WEB_DEV_DEBUG__", false);
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = mount(App, { target });
+    try {
+      await tick();
+      expect(target.querySelector('[aria-label="登录提示"]')).toBeNull();
+    } finally {
+      await unmount(component);
     }
   });
 });

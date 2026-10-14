@@ -1,3 +1,4 @@
+import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import {
   createAgentSessionRuntime,
   createAgentSessionFromServices,
@@ -22,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { askUserQuestionTool } from "./ask-user-question.js";
 import { danoVersionTool } from "./dano-version-tool.js";
 import { configureDanoLlmResilience } from "./llm-resilience.js";
-import type { CredentialBroker } from "./credential-broker.js";
+import { createAssistantAuthenticationExtension, type CredentialBroker } from "./credential-broker.js";
 import { wrapProviderBash } from "./provider-python.js";
 import { protectedMemoryResources } from "@josephyoung/pi-openviking/host";
 import { protectedSessionFactory, type ProtectedSessionTools } from "./protected-session-tools.js";
@@ -49,6 +50,7 @@ export interface CreateDetachedAgentSessionOptions {
   askUserQuestionTool?: ToolDefinition;
   credentialBroker?: CredentialBroker;
   credentialBrokerScope?: string;
+  authenticationStatus?: BridgeAuthenticationState["status"];
   protectedTools?: ProtectedSessionTools;
 }
 
@@ -84,6 +86,12 @@ export async function createDetachedAgentSessionRuntime(
             credentialBrokerScope: options.credentialBrokerScope,
           }), protectedProfile.trustedSkillPaths)
       : undefined;
+    const extensionFactories = [
+      ...(protectedResources?.extensionFactories ?? []),
+      { name: "dano-authentication", factory: options.credentialBroker && options.credentialBrokerScope
+        ? options.credentialBroker.createAuthenticationExtension(options.credentialBrokerScope)
+        : createAssistantAuthenticationExtension(() => options.authenticationStatus ?? "unknown") },
+    ];
     const services = await createAgentSessionServices({
       cwd: runtimeOptions.cwd,
       agentDir: runtimeOptions.agentDir,
@@ -99,6 +107,7 @@ export async function createDetachedAgentSessionRuntime(
       settingsManager: protectedSettings ?? options.settingsManager,
       resourceLoaderOptions: protectedResources ? {
         ...protectedResources,
+        extensionFactories,
         // Keep the deployment prompt in the trusted host configuration. A
         // user's isolated resource directory must not replace the host prompt.
         systemPromptOverride: () => {
@@ -109,6 +118,7 @@ export async function createDetachedAgentSessionRuntime(
           }
         },
       } : {
+        extensionFactories,
         additionalExtensionPaths: [HEIMDALL_EXTENSION_PATH],
         extensionsOverride: loaded => {
           if (options.credentialBroker && options.credentialBrokerScope) {

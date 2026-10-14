@@ -5,7 +5,7 @@ import {
   type CreateDanoBackendOptions,
   type DanoBackend,
 } from "../backend.js";
-import type { UserContext } from "./user-context.js";
+import { browserAuthentication, type UserContext } from "./user-context.js";
 import { workspaceSessionDirectoryPath } from "./runtime-layout.js";
 import { ensureSafeDirectory } from "./safe-directory.js";
 import type { ProtectedSessionTools } from "./protected-session-tools.js";
@@ -235,6 +235,7 @@ export class UserRuntimeRegistry {
       backend = await this.createBackend({
         cwd: defaultWorkspacePath,
         credentialBrokerScope: userContext.user.id,
+        authenticationStatus: browserAuthentication(userContext).status,
         protectedTools,
         sessionDir: workspaceSessionDirectoryPath(
           sessionsRootPath,

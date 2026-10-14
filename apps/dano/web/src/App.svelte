@@ -9,6 +9,9 @@
   import ExtensionDialog from "./components/ExtensionDialog.svelte";
   import ReconnectBanner from "./components/ReconnectBanner.svelte";
   import ReauthenticationDialog from "./components/ReauthenticationDialog.svelte";
+  import * as Alert from "$lib/components/ui/alert";
+  import { Button } from "$lib/components/ui/button";
+  import Info from "@lucide/svelte/icons/info";
   import MemoryManagementDialog from "./components/MemoryManagementDialog.svelte";
   import ThemeSettingsDialog from "./components/ThemeSettingsDialog.svelte";
   import { hasActiveCenterFocusStage } from "./layout/centerFocusStage";
@@ -1239,6 +1242,22 @@
       onConfirm={bridge.login}
     />
 
+    {#if bridge.authentication.status === "anonymous" && isEmptyConversation}
+      <div class="login-banner">
+        <Alert.Root aria-label={t("loginBanner.label")} class="pr-28">
+          <Info />
+          <Alert.Title>{t("loginBanner.title")}</Alert.Title>
+          <Alert.Description>{t("loginBanner.description")}</Alert.Description>
+          <Alert.Action>
+            <Button href="/api/auth/login?returnTo=%2F" target="_self"
+              onclick={(event) => { event.preventDefault(); bridge.login(); }}>
+              {t("loginBanner.login")}
+            </Button>
+          </Alert.Action>
+        </Alert.Root>
+      </div>
+    {/if}
+
     <div class="app-body">
       <AppMainContent
         bind:this={mainContentRef}
@@ -1423,6 +1442,18 @@
     min-height: 0;
     overflow: hidden;
     position: relative;
+  }
+
+  .login-banner {
+    margin: calc(env(safe-area-inset-top, 0px) + 68px) 24px 0;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 640px) {
+    .login-banner {
+      margin-right: 14px;
+      margin-left: 14px;
+    }
   }
 
   @media (max-width: 900px) {

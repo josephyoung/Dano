@@ -541,6 +541,8 @@ describe("BridgeRpcAdapter", () => {
         runtimeScope,
         credentialBroker,
         "login-session-a",
+        undefined,
+        "authenticated",
       );
 
       await adapter.handleClientMessage({
@@ -552,6 +554,7 @@ describe("BridgeRpcAdapter", () => {
         "user-a",
         session.sessionId,
         "login-session-a",
+        "authenticated",
       );
       await vi.waitFor(() =>
         expect(credentialBroker.cancelQueuedAssistantTurn).toHaveBeenCalledWith(

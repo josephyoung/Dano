@@ -150,6 +150,7 @@ export async function startDanoServer(
       options.credentialBroker,
       connCtx.loginSessionId,
       connCtx.beginUserOperation,
+      connCtx.authentication?.status,
     );
   };
 

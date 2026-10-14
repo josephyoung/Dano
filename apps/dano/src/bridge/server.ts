@@ -22,7 +22,7 @@ import {
   type UploadAccess,
 } from "./upload-registry.js";
 import {
-  toBrowserUserSummary,
+  browserAuthentication,
   UserContextError,
   type AuthenticatedUserContext,
   type ClientUserResolution,
@@ -72,6 +72,7 @@ export interface RpcConnectionContext {
   client: BridgeClient;
   user?: UserContext;
   loginSessionId?: string;
+  authentication?: BridgeAuthenticationState;
   config: BridgeConfig;
   eventBus: BridgeEventBus;
   uploadRegistry: UploadRegistry;
@@ -1056,6 +1057,7 @@ export class BridgeServer {
           client,
           user: user ?? undefined,
           loginSessionId: resolution?.loginSessionId,
+          authentication,
           config: this.config,
           eventBus: this.eventBus,
           uploadRegistry: this.uploadRegistry,
@@ -1823,15 +1825,6 @@ function isClientMessage(value: unknown): value is ClientMessage {
     return Boolean(data.payload && typeof data.payload === "object");
   }
   return false;
-}
-
-function browserAuthentication(
-  userContext: UserContext,
-): BridgeAuthenticationState {
-  const user = userContext.user;
-  return "username" in user
-    ? { status: "authenticated", user: toBrowserUserSummary(user) }
-    : { status: "anonymous" };
 }
 
 function formatSseMessage(message: ServerMessage): string {

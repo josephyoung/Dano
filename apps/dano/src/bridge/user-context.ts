@@ -29,6 +29,15 @@ export interface AnonymousUserContext {
 
 export type UserContext = AuthenticatedUserContext | AnonymousUserContext;
 
+/** Shared projection for browser and user runtimes outside OAuth. OAuth's
+ * resolver supplies the per-connection state, including reauthentication. */
+export function browserAuthentication(userContext: UserContext): BridgeAuthenticationState {
+  const user = userContext.user;
+  return "username" in user
+    ? { status: "authenticated", user: toBrowserUserSummary(user) }
+    : { status: "anonymous" };
+}
+
 export interface ClientUserResolution {
   readonly userContext: UserContext;
   readonly authentication: BridgeAuthenticationState;

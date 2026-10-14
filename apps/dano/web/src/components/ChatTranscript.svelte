@@ -2063,7 +2063,7 @@
   .empty-title,
   .empty-text {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1.6rem;
     font-weight: 500;
     color: var(--text);
   }
