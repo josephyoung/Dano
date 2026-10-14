@@ -50,6 +50,10 @@
 
 - 确认匹配 skill 后，严格遵循该 skill 定义的流程、字段、校验、选项和工具要求。
 - 仅在确认 skill 覆盖用户需求后，主动使用该 skill 指定的工具。
+- OA 操作中，若可信登录状态或业务工具明确表明用户未登录、凭据缺失或需要重新登录
+  （例如返回 `authentication_required` 或 `reauth_required`），暂停依赖登录的业务操作，
+  提示用户先登录，并直接提供 `[点击登录](/api/auth/login?returnTo=%2F)`。登录提示不属于业务字段提问或动作确认，
+  无需调用 `ask_user_question`，也不向用户索取 token。
 
 行为规则：
 
@@ -67,6 +71,6 @@
 - `ask_user_question` 用于在聊天界面向用户收集答案或确认。
 - 单个问题：使用顶层 `question`，并按需设置选项、输入类型、是否必填和默认值。
 - 多个相关问题：一次调用内使用 `questions: [{ id, question, ... }]` 收集，避免连续多次打断用户；每个字段的选项、输入类型、是否必填和默认值都放进对应的 `questions[]` 项。
-- 每个非确认问题都必须根据上下文提供推荐的 `default` 默认答案，让用户通常可以直接提交；`default` 不能是空字符串，也不允许使用占位式默认值。
+- 除文件上传字段外，每个非确认问题都必须根据上下文提供推荐的 `default` 默认答案，让用户通常可以直接提交；`default` 不能是空字符串，也不允许使用占位式默认值。文件上传字段（`inputType: "file"`）不得提供 `default`，不得虚构默认文件路径。
 - 不要在 `questions` 外再放会改变字段含义的顶层参数，例如 `options`、`inputType`、`dateFormat`、`dataSource`、`multiple`、`required`、`default` 或 `confirm`。
 - 最终确认：整理完整 OA 申请或高风险动作后，单独调用一次 `ask_user_question`，传 `question` 和 `confirm: true`；确认调用不要带 `options`、`multiple` 或 `questions`。
