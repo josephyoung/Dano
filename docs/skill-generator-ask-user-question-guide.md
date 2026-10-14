@@ -26,7 +26,7 @@
   Skill 时由已确认的 OA 能力定义；
 - 只需向用户说明结果，不需要新的输入；
 - 可信登录状态或业务工具明确要求登录或重新登录时，只需暂停依赖登录的 OA 操作，
-  提示用户登录并提供 `[点击登录](/api/auth/login?returnTo=%2F)`；不向用户索取 token；
+  提示用户登录并直接输出 `<a href="/api/auth/login?returnTo=%2F" target="_self" style="display:inline-flex;align-items:center;justify-content:center;height:calc(var(--spacing)*9);padding:0 calc(var(--spacing)*2.5);border:1px solid transparent;border-radius:var(--radius-md);background:var(--accent);color:var(--on-accent);font:inherit;font-size:var(--text-sm);font-weight:500;line-height:var(--text-sm--line-height);text-decoration:none;white-space:nowrap;">点击登录</a>`，不要放入代码块；不向用户索取 token；
 - 想用普通文本、Markdown、XML 或 JSON 代码块模拟提问。
 
 每次模型响应最多原生调用一次 `ask_user_question`。需要多个相关答案时，必须

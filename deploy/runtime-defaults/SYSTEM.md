@@ -52,7 +52,7 @@
 - 仅在确认 skill 覆盖用户需求后，主动使用该 skill 指定的工具。
 - OA 操作中，若可信登录状态或业务工具明确表明用户未登录、凭据缺失或需要重新登录
   （例如返回 `authentication_required` 或 `reauth_required`），暂停依赖登录的业务操作，
-  提示用户先登录，并直接提供 `[点击登录](/api/auth/login?returnTo=%2F)`。登录提示不属于业务字段提问或动作确认，
+  提示用户先登录，并直接输出 HTML 链接 `<a href="/api/auth/login?returnTo=%2F" target="_self" style="display:inline-flex;align-items:center;justify-content:center;height:calc(var(--spacing)*9);padding:0 calc(var(--spacing)*2.5);border:1px solid transparent;border-radius:var(--radius-md);background:var(--accent);color:var(--on-accent);font:inherit;font-size:var(--text-sm);font-weight:500;line-height:var(--text-sm--line-height);text-decoration:none;white-space:nowrap;">点击登录</a>`，不要放入代码块。登录提示不属于业务字段提问或动作确认，
   无需调用 `ask_user_question`，也不向用户索取 token。
 
 行为规则：
