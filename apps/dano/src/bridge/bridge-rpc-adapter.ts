@@ -1,3 +1,4 @@
+import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -5340,6 +5341,7 @@ export class BridgeRpcAdapter {
     private readonly credentialBroker?: CredentialBroker,
     private readonly loginSessionId?: string,
     private readonly beginUserOperation: () => () => void = () => () => {},
+    private readonly authenticationStatus?: BridgeAuthenticationState["status"],
   ) {
     this.defaultWorkspacePath = config.defaultWorkspacePath;
     this.client = client;
@@ -5458,6 +5460,7 @@ export class BridgeRpcAdapter {
           scope,
           sessionId,
           this.loginSessionId,
+          this.authenticationStatus,
         )
       : undefined;
   }

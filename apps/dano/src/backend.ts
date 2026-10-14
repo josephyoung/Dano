@@ -1,3 +1,4 @@
+import type { BridgeAuthenticationState } from "../types/protocol.js";
 import {
   SessionManager,
   type AgentSession,
@@ -45,6 +46,7 @@ export interface CreateDanoBackendOptions {
   danoConfig?: DanoConfig;
   credentialBroker?: CredentialBroker;
   credentialBrokerScope?: string;
+  authenticationStatus?: BridgeAuthenticationState["status"];
   protectedTools?: ProtectedSessionTools;
 }
 
@@ -300,6 +302,7 @@ export async function createDanoBackend(
       askUserQuestionTool: askUserQuestion.tool,
       credentialBroker: options.credentialBroker,
       credentialBrokerScope: options.credentialBrokerScope,
+      authenticationStatus: options.authenticationStatus,
       protectedTools: options.protectedTools,
     },
   );
@@ -312,6 +315,7 @@ export async function createDanoBackend(
       settingsManager: result.runtime.session.settingsManager,
       credentialBroker: options.credentialBroker,
       credentialBrokerScope: options.credentialBrokerScope,
+      authenticationStatus: options.authenticationStatus,
       protectedTools: options.protectedTools,
     },
   );

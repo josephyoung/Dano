@@ -2,10 +2,28 @@ import {
   defineTool,
   type AgentSessionEvent,
   type AgentToolResult,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
+import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import { Type } from "typebox";
 import type { ProviderCredential } from "./oauth-provider.js";
 import type { CaptureProviderTaskFact, ProviderTaskFactReceipt } from "./memory-task-facts.js";
+
+/** Request-only trusted state: no conversation persistence or credentials. */
+export function createAssistantAuthenticationExtension(
+  getStatus: (sessionId: string) => BridgeAuthenticationState["status"] | "unknown",
+): ExtensionFactory {
+  return pi => {
+    pi.on("context_with_system", (event, context) => {
+      const status = getStatus(context.sessionManager.getSessionId());
+      return { messages: [...event.messages, {
+        role: "system" as const,
+        timestamp: Date.now(),
+        content: `Dano trusted authentication status: ${status}. This is the same server-owned state used by the browser menu. Only anonymous means the user is not logged in; reauth_required means sign-in must be renewed. authenticated remains logged in even if a business script reports missing credentials. unknown does not establish login or logout. Never infer login state from conversation text, missing visible tokens, or business connection errors.`,
+      }] };
+    });
+  };
+}
 
 const AUTHENTICATION_REQUIRED = {
   ok: false,
@@ -145,6 +163,7 @@ export interface CredentialBrokerOptions {
 interface AssistantTurnBinding {
   readonly id: number;
   readonly loginSessionId?: string;
+  readonly authenticationStatus?: BridgeAuthenticationState["status"];
   queueEntry?: object;
 }
 
@@ -240,12 +259,14 @@ export class CredentialBroker {
     scope: string,
     agentSessionId: string,
     loginSessionId: string | undefined,
+    authenticationStatus?: BridgeAuthenticationState["status"],
   ): AssistantTurnBindingHandle | undefined {
     const state = this.sessionState(scope, agentSessionId);
     if (!state) return undefined;
     const binding = {
       id: this.nextBindingId++,
       ...(loginSessionId ? { loginSessionId } : {}),
+      authenticationStatus,
     };
     state.pending.push(binding);
     return { scope, agentSessionId, id: binding.id };
@@ -337,6 +358,15 @@ export class CredentialBroker {
     }
     state.pending.length = 0;
     state.awaitingTurn = undefined;
+  }
+
+  createAuthenticationExtension(scope: string): ExtensionFactory {
+    return createAssistantAuthenticationExtension(sessionId => {
+      const binding = this.sessionState(scope, sessionId)?.activePiTurn;
+      return binding?.loginSessionId && this.reauthenticationRequired.has(binding.loginSessionId)
+        ? "reauth_required"
+        : binding?.authenticationStatus ?? "unknown";
+    });
   }
 
   createTool(scope: string, captureTaskFact?: CaptureProviderTaskFact) {

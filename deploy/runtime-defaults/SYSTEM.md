@@ -50,8 +50,13 @@
 
 - 确认匹配 skill 后，严格遵循该 skill 定义的流程、字段、校验、选项和工具要求。
 - 仅在确认 skill 覆盖用户需求后，主动使用该 skill 指定的工具。
-- OA 操作中，若可信登录状态或业务工具明确表明用户未登录、凭据缺失或需要重新登录
-  （例如返回 `authentication_required` 或 `reauth_required`），暂停依赖登录的业务操作，
+- OA 操作中的登录判断必须与左上角菜单一致，以后台在当前模型请求中提供的
+  `Dano trusted authentication status` 为准。仅 `anonymous` 表示未登录，
+  `reauth_required` 表示需要重新登录；`authenticated` 表示已登录，
+  `unknown` 表示尚不能确认。不得根据对话中没有 token 或业务脚本报凭据缺失、
+  `authentication_required` 等错误推断未登录。已登录时业务工具缺少凭据，应说明
+  业务连接异常，不能要求用户登录；未知状态时说明无法确认，不猜测登录状态。
+- 可信状态为 `anonymous` 或 `reauth_required` 时，暂停依赖登录的业务操作，
   提示用户先登录，并直接输出 HTML 链接 `<a href="/api/auth/login?returnTo=%2F" target="_self" style="display:inline-flex;align-items:center;justify-content:center;height:calc(var(--spacing)*9);padding:0 calc(var(--spacing)*2.5);border:1px solid transparent;border-radius:var(--radius-md);background:var(--accent);color:var(--on-accent);font:inherit;font-size:var(--text-sm);font-weight:500;line-height:var(--text-sm--line-height);text-decoration:none;white-space:nowrap;">点击登录</a>`，不要放入代码块。登录提示不属于业务字段提问或动作确认，
   无需调用 `ask_user_question`，也不向用户索取 token。
 

@@ -285,9 +285,11 @@ describe("BridgeServer HTTP/SSE transport", () => {
 
   it("binds a verified JWT User to the client and creates that User Folder", async () => {
     let connectionUser: Parameters<RpcConnectionHandlerFactory>[0]["user"];
+    let connectionAuthentication: Parameters<RpcConnectionHandlerFactory>[0]["authentication"];
     const { server, runtimeRoot } = createServer(
       ctx => {
         connectionUser = ctx.user;
+        connectionAuthentication = ctx.authentication;
         return {
           handleClientMessage: vi.fn(),
           dispose: vi.fn(),
@@ -326,6 +328,8 @@ describe("BridgeServer HTTP/SSE transport", () => {
         avatarUrl: "https://example.test/avatar.png",
       },
     });
+    expect(connectionAuthentication).toEqual(server.getClientUserResolution(created.client.id)?.authentication);
+    expect(connectionAuthentication?.status).toBe("authenticated");
     expect(connectionUser).toMatchObject({
       user: { id: "user-42", username: "Joseph" },
       folderPath: fs.realpathSync(path.join(runtimeRoot, "users", "user-42")),
