@@ -1,15 +1,128 @@
-/** @vitest-environment happy-dom */
+/** @vitest-environment jsdom */
 
 import { mount, tick, unmount } from "svelte";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import MarkdownRenderer from "./MarkdownRenderer.svelte";
 import MarkdownRendererStreamingHarness from "./MarkdownRenderer.test-harness.svelte";
+
+const loginHtml = readFileSync(new NodeURL("../../../../../deploy/runtime-defaults/SYSTEM.md", import.meta.url), "utf8")
+  .match(/<a\b[^>]*>点击登录<\/a>/)?.[0] ?? "";
 
 async function settleMarkdown() {
   await tick();
   await new Promise(resolve => setTimeout(resolve, 0));
   await tick();
 }
+
+describe("MarkdownRenderer HTML links", () => {
+  it("renders an HTML login link and preserves native current-tab activation", async () => {
+    const target = document.createElement("div");
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const component = mount(MarkdownRenderer, {
+      target,
+      props: { content: loginHtml },
+    });
+    try {
+      await settleMarkdown();
+      await vi.waitFor(() => expect(target.querySelector("a")).not.toBeNull());
+      const link = target.querySelector<HTMLAnchorElement>("a");
+      expect(link?.textContent).toBe("点击登录");
+      expect(link?.getAttribute("href")).toBe("/api/auth/login?returnTo=%2F");
+      expect(link?.target).toBe("_self");
+      expect(link?.style.background).toBe("var(--accent)");
+      expect(link?.style.color).toBe("var(--on-accent)");
+      expect(link?.style.borderRadius).toBe("var(--radius-md)");
+      expect(target.querySelector(".markdown-body")?.textContent?.trim()).toBe("点击登录");
+      let componentPreventedClick: boolean | undefined;
+      target.addEventListener("click", event => {
+        componentPreventedClick = event.defaultPrevented;
+        // jsdom cannot navigate documents; observe native activation first.
+        event.preventDefault();
+      }, { once: true });
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link!.dispatchEvent(click);
+      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      link!.dispatchEvent(enter);
+      expect(componentPreventedClick).toBe(false);
+      expect(enter.defaultPrevented).toBe(false);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      await unmount(component);
+    }
+  });
+
+  it("sanitizes active HTML and bound attributes before rendering", async () => {
+    const target = document.createElement("div");
+    const component = mount(MarkdownRenderer, {
+      target,
+      props: { content: [
+        '<strong>安全内容</strong>',
+        '<script>window.untrustedHtml = true</script>',
+        '<iframe srcdoc="untrusted"></iframe>',
+        '<style>body { display: none }</style>',
+        '<form action="/submit"><input name="token"><button>提交</button></form>',
+        '<img src="/synthetic.png" onerror="window.untrustedHtml = true">',
+        '<a href="javascript:alert(1)" onclick="alert(1)">危险链接</a>',
+        '<a :href="\'javascript:alert(1)\'" :onclick="\'alert(1)\'">绑定链接</a>',
+        '<span data-markdown-copy="true">文本</span>',
+      ].join("\n\n") },
+    });
+    try {
+      await vi.waitFor(() => expect(target.querySelector("strong")?.textContent).toBe("安全内容"));
+      expect(target.querySelector("script, iframe, style, form, input, button")).toBeNull();
+      expect(target.querySelector("[onerror]")).toBeNull();
+      expect(target.querySelector("[onclick]")).toBeNull();
+      for (const link of target.querySelectorAll("a")) {
+        expect(link.hasAttribute("href")).toBe(false);
+        expect(link.hasAttribute("onclick")).toBe(false);
+        expect(link.hasAttribute(":href")).toBe(false);
+      }
+      expect(target.querySelector("[data-markdown-copy]")).toBeNull();
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it.each([
+    '<iframe $="override" srcdoc="<script>alert(1)</script>"></iframe>',
+    '<script $="override" src="https://untrusted.test/script.js"></script>',
+    '<div $="override" onclick="alert(1)">被覆盖的元数据</div>',
+    '<img $="" src="/synthetic.png" onerror="alert(1)">',
+  ])("sanitizes HTML with overwritten parser metadata: %s", async content => {
+    const target = document.createElement("div");
+    const component = mount(MarkdownRenderer, { target, props: { content } });
+    try {
+      await settleMarkdown();
+      expect(target.querySelector("script, iframe, [onclick], [onerror]")).toBeNull();
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it("keeps HTML code examples as text and ordinary links in new tabs", async () => {
+    const target = document.createElement("div");
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const component = mount(MarkdownRenderer, {
+      target,
+      props: { content: '```html\n<a href="/example" target="_self">示例</a>\n```\n\n[外部链接](https://example.test/help)' },
+    });
+    try {
+      await settleMarkdown();
+      expect(target.querySelector("pre code")?.textContent).toContain('<a href="/example"');
+      expect(target.querySelectorAll("a")).toHaveLength(1);
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      target.querySelector("a")!.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+      expect(open).toHaveBeenCalledWith("https://example.test/help", "_blank", "noreferrer");
+    } finally {
+      open.mockRestore();
+      await unmount(component);
+    }
+  });
+});
 
 describe("MarkdownRenderer tables", () => {
   it("renders Markdown tables through the shared semantic table contract", async () => {

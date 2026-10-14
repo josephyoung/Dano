@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Comark } from "@comark/svelte";
+  import type { parse } from "@comark/svelte/parse";
+  import { render } from "@comark/svelte/render";
   import type { RenderOptions } from "beautiful-mermaid";
   import DOMPurify from "dompurify";
   import { onMount, tick } from "svelte";
@@ -38,9 +40,9 @@
   } = $props();
 
   type MermaidRenderer = typeof import("beautiful-mermaid").renderMermaidSVG;
-  type MarkdownTreeNode = string | [string | null, Record<string, unknown>, ...MarkdownTreeNode[]];
+  type MarkdownTreeNode = Awaited<ReturnType<typeof parse>>["nodes"][number];
 
-  const COMARK_OPTIONS = { html: false };
+  const COMARK_OPTIONS = { html: true };
   const COMARK_COMPONENTS = {
     table: Table,
     thead: TableHeader,
@@ -54,6 +56,12 @@
       name: "restore-markdown-dash-runs",
       post(state: { tree: { nodes: MarkdownTreeNode[] } }) {
         state.tree.nodes = restoreMarkdownDashRuns(state.tree.nodes);
+      },
+    },
+    {
+      name: "sanitize-markdown-html",
+      async post(state: { tree: { nodes: MarkdownTreeNode[] } }) {
+        state.tree.nodes = await sanitizeMarkdownHtml(state.tree.nodes);
       },
     },
   ];
@@ -74,6 +82,46 @@
   let forceMermaidRender = false;
   let showFallback = $state(false);
 
+  async function sanitizeMarkdownHtml(nodes: MarkdownTreeNode[]): Promise<MarkdownTreeNode[]> {
+    const sanitized = await Promise.all(nodes.map(async node => {
+      if (typeof node === "string" || node[0] === null) return [node];
+      const [tag, props, ...children] = node;
+      const metadata = props.$ as { html?: number } | undefined;
+      // Raw HTML attributes can overwrite Comark's reserved `$` metadata.
+      // An invalid metadata value must enter the same sanitization boundary.
+      const overwrittenMetadata = Object.hasOwn(props, "$") && (
+        metadata === null || typeof metadata !== "object"
+      );
+      if (metadata?.html === 1 || overwrittenMetadata) {
+        // Sanitize parsed HTML before it becomes live DOM. Markdown code text
+        // and native Markdown nodes retain their original rendering contract.
+        const html = await render({ nodes: [node], frontmatter: {}, meta: {} }, { format: "text/html" });
+        const safeHtml = DOMPurify.sanitize(html, {
+          USE_PROFILES: { html: true },
+          RETURN_DOM_FRAGMENT: true,
+          ADD_ATTR: ["target"],
+          ALLOW_DATA_ATTR: false,
+          FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "option"],
+        });
+        return htmlNodes(safeHtml.childNodes);
+      }
+      return [[tag, props, ...await sanitizeMarkdownHtml(children)] as MarkdownTreeNode];
+    }));
+    return sanitized.flat();
+  }
+
+  function htmlNodes(nodes: NodeListOf<ChildNode>): MarkdownTreeNode[] {
+    return Array.from(nodes).flatMap<MarkdownTreeNode>(node => {
+      if (node.nodeType === Node.TEXT_NODE) return [node.textContent ?? ""];
+      if (!(node instanceof Element)) return [];
+      return [[
+        node.localName,
+        Object.fromEntries(Array.from(node.attributes, attribute => [attribute.name, attribute.value])),
+        ...htmlNodes(node.childNodes),
+      ]];
+    });
+  }
+
   function restoreMarkdownDashRuns(nodes: MarkdownTreeNode[]): MarkdownTreeNode[] {
     return nodes.map(node => {
       if (typeof node === "string") return node;
@@ -85,7 +133,7 @@
           ? tag
           : ["span", {}, tag, ...restoredChildren];
       }
-      return [tag, props, ...restoredChildren];
+      return [tag, props, ...restoredChildren] as MarkdownTreeNode;
     });
   }
 
@@ -622,6 +670,7 @@
     if (!(target instanceof Element)) return false;
 
     const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    if (anchor?.target.toLowerCase() === "_self") return false;
     if (anchor && openExternalHref(anchor.href)) return true;
 
     const code = target.closest<HTMLElement>("code:not(pre code)");
@@ -681,7 +730,7 @@
 {#snippet renderedMarkdown()}
   <Comark
     markdown={content}
-    options={COMARK_OPTIONS}
+    options={{ ...COMARK_OPTIONS, autoClose: streaming }}
     plugins={COMARK_PLUGINS}
     components={COMARK_COMPONENTS}
     streaming={streaming}
