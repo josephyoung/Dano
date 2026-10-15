@@ -109,7 +109,7 @@ export function resolveAppThemeVars(
     "--accent": themeColor.accent,
     "--accent-hover": themeColor.accent,
     "--success": base16.base0B,
-    "--warning": base16.base0A,
+    "--warning": "#fb923c",
     "--danger": base16.base08,
     "--surface-hover": toRgba(base30.grey_fg2, mode === "dark" ? 0.1 : 0.12),
     "--surface-active": withThemeColorOpacity(
