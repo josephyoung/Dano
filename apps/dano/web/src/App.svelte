@@ -1244,16 +1244,13 @@
 
     {#if bridge.authentication.status === "anonymous" && isEmptyConversation}
       <div class="login-banner">
-        <Alert.Root aria-label={t("loginBanner.label")} class="pr-28">
-          <Info />
+        <Alert.Root aria-label={t("loginBanner.label")} class="flex items-center gap-2.5 *:[svg]:translate-y-0">
+          <Info style="color: var(--warning)" />
           <Alert.Title>{t("loginBanner.title")}</Alert.Title>
-          <Alert.Description>{t("loginBanner.description")}</Alert.Description>
-          <Alert.Action>
-            <Button href="/api/auth/login?returnTo=%2F" target="_self"
-              onclick={(event) => { event.preventDefault(); bridge.login(); }}>
-              {t("loginBanner.login")}
-            </Button>
-          </Alert.Action>
+          <Button class="ml-auto shrink-0" href="/api/auth/login?returnTo=%2F" target="_self"
+            onclick={(event) => { event.preventDefault(); bridge.login(); }}>
+            {t("loginBanner.login")}
+          </Button>
         </Alert.Root>
       </div>
     {/if}
@@ -1427,6 +1424,7 @@
   }
 
   .app-main-column {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -1445,14 +1443,17 @@
   }
 
   .login-banner {
-    margin: calc(env(safe-area-inset-top, 0px) + 68px) 24px 0;
-    flex-shrink: 0;
+    position: absolute;
+    top: calc(env(safe-area-inset-top, 0px) + 68px);
+    right: 24px;
+    left: 24px;
+    z-index: 1;
   }
 
   @media (max-width: 640px) {
     .login-banner {
-      margin-right: 14px;
-      margin-left: 14px;
+      right: 14px;
+      left: 14px;
     }
   }
 

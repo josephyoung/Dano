@@ -3,8 +3,7 @@ import type { Locale } from "./locales";
 export const messages: Record<Locale, Record<string, string>> = {
   "zh-CN": {
     "loginBanner.label": "登录提示",
-    "loginBanner.title": "你尚未登录",
-    "loginBanner.description": "登录后即可查询和办理 OA 业务。",
+    "loginBanner.title": "你尚未登录，登录后才可查询和办理业务。",
     "loginBanner.login": "点击登录",
     "appHeader.connection.connected": "已连接",
     "appHeader.connection.connecting": "连接中",
@@ -393,8 +392,7 @@ export const messages: Record<Locale, Record<string, string>> = {
   },
   "en-US": {
     "loginBanner.label": "Sign-in guidance",
-    "loginBanner.title": "You are not signed in",
-    "loginBanner.description": "Sign in to query and manage OA requests.",
+    "loginBanner.title": "You are not signed in. Sign in to query and manage requests.",
     "loginBanner.login": "Sign in",
     "appHeader.connection.connected": "Connected",
     "appHeader.connection.connecting": "Connecting",
