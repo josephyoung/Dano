@@ -51,7 +51,7 @@ async function harness() {
   const profile: ProtectedSessionTools = { agentDir, trustedSkillPaths, resolveWorker,
     createMemoryExtension: () => pi => { bindMemory(); pi.on("context", () => {}); } };
   return { root, workspace, worker, resolveWorker, bindMemory, profile, modelRuntime, settingsManager, trustedSkillPaths,
-    async start(options: Pick<CreateDetachedAgentSessionOptions, "model" | "thinkingLevel"> = {}) {
+    async start(options: Pick<CreateDetachedAgentSessionOptions, "model" | "thinkingLevel" | "askUserQuestionTool"> = {}) {
       const result = await createDetachedAgentSessionRuntime(workspace, SessionManager.inMemory(workspace),
         { modelRuntime, settingsManager, protectedTools: profile, ...options });
       created.push(result);
@@ -272,11 +272,15 @@ it("pins each existing session turn to current operator skills through Pi input 
     await writeFile(join(source, "example/SKILL.md"), "---\nname: example\ndescription: B\n---\nB\n");
     await publication.refresh();
     expect(getter?.()).toBe(previous);
+    expect(await runner.emitToolCall({ type: "tool_call", toolName: "ask_user_question", toolCallId: "stale-native", input: {} }))
+      .toMatchObject({ block: true, reason: expect.stringContaining("OPERATOR_SKILLS_CHANGED") });
     await runner.emitInput("next", undefined, "interactive");
     expect(runtime.session.resourceLoader.getSkills().skills[0]?.description).toBe("B");
     const next = await runner.emitBeforeAgentStart("next", undefined, options());
     expect(next.systemPromptOptions.skills[0]?.description).toBe("B");
     expect(getter?.()).toBeGreaterThan(previous!);
+    expect(await runner.emitToolCall({ type: "tool_call", toolName: "ask_user_question", toolCallId: "current-native", input: {} }))
+      .toBeUndefined();
     await rm(join(source, "example"), { recursive: true });
     await publication.refresh();
     await runner.emitInput("next", undefined, "interactive");
@@ -295,3 +299,45 @@ it("releases operator resource subscriptions when session initialization fails",
   await expect(h.start()).rejects.toThrow("SYNTHETIC_WORKER_UNAVAILABLE");
   expect(listeners.size).toBe(0);
 });
+
+
+it("aborts an already running host tool when the administrator revision is revoked", async () => {
+  const h = await harness();
+  const listeners = new Set<(state: { revision: number; paths: string[] }) => void>();
+  let revision = 1;
+  Object.assign(h.profile, { operatorSkills: {
+    current: async () => ({ revision, paths: [] }),
+    subscribe: (listener: (state: { revision: number; paths: string[] }) => void) => {
+      listeners.add(listener); return () => { listeners.delete(listener); };
+    },
+  } });
+  const { askUserQuestionTool } = await import("../ask-user-question.js");
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  let signal: AbortSignal | undefined;
+  const provider = fauxProvider({ provider: "operator-native-revocation" });
+  provider.setResponses([
+    fauxAssistantMessage([fauxToolCall("ask_user_question", { question: "Hold synthetic native call", inputType: "text" })],
+      { stopReason: "toolUse" }),
+    fauxAssistantMessage("settled"),
+  ]);
+  h.modelRuntime.registerNativeProvider(provider.provider);
+  await h.modelRuntime.setRuntimeApiKey(provider.provider.id, "synthetic-test-key");
+  const runtime = await h.start({ model: provider.getModel(), thinkingLevel: "off", askUserQuestionTool: {
+    ...askUserQuestionTool,
+    execute: async (_id, _input, operationSignal) => {
+      signal = operationSignal; entered();
+      await new Promise<void>(resolve => operationSignal?.addEventListener("abort", () => resolve(), { once: true }));
+      return { content: [{ type: "text", text: "cancelled synthetic call" }], details: {} };
+    },
+  } });
+  const turn = runtime.session.prompt("Run the synthetic native tool");
+  await started;
+  revision++;
+  for (const listener of listeners) listener({ revision, paths: [] });
+  await turn;
+  expect(signal?.aborted).toBe(true);
+  expect(runtime.session.messages.some(message => message.role === "custom"
+    && message.customType === "dano.operator-skills-changed")).toBe(true);
+  expect(h.worker.execute).not.toHaveBeenCalled();
+}, 10_000);

@@ -8,7 +8,7 @@ export interface OperatorSkillClient {
 
 /** Use Pi's public resource reload/getter interface for discovery. This cache
  * grants no execution authority: the supervisor independently checks revisions. */
-export async function operatorSkillResources(client: OperatorSkillClient, cwd: string, agentDir: string) {
+export async function operatorSkillResources(client: OperatorSkillClient, cwd: string, agentDir: string, onInvalidate?: () => void) {
   const paths: string[] = [];
   const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: SettingsManager.inMemory(),
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
@@ -20,9 +20,11 @@ export async function operatorSkillResources(client: OperatorSkillClient, cwd: s
   let pending = Promise.resolve();
   const apply = (state: OperatorSkillRevision) => {
     if (disposed || state.revision <= requested) return pending;
+    const replacing = requested >= 0;
     requested = state.revision;
     // Clear discovery immediately, even while a preceding reload is finishing.
     loaded = { skills: [], diagnostics: [] };
+    if (replacing) onInvalidate?.();
     pending = pending.catch(() => {}).then(async () => {
       if (disposed || state.revision !== requested) return;
       paths.splice(0, paths.length, ...state.paths);

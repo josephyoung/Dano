@@ -81,8 +81,18 @@ export async function createDetachedAgentSessionRuntime(
     const protectedSettings = protectedProfile
       ? options.settingsManager ?? SettingsManager.create(runtimeOptions.cwd, getAgentDir(), { projectTrusted: false })
       : undefined;
+    let revocationNotified = false;
+    let activeSession: import("@earendil-works/pi-coding-agent").AgentSession | undefined;
     const skillResources = protectedProfile?.operatorSkills
-      ? await operatorSkillResources(protectedProfile.operatorSkills, runtimeOptions.cwd, protectedProfile.agentDir) : undefined;
+      ? await operatorSkillResources(protectedProfile.operatorSkills, runtimeOptions.cwd, protectedProfile.agentDir, () => {
+          if (activeSession && !activeSession.isIdle && !revocationNotified) {
+            revocationNotified = true;
+            void activeSession.sendCustomMessage({ customType: "dano.operator-skills-changed", display: true,
+              content: "管理员技能已更新，本轮调用已取消。请在当前聊天重新发送消息，以使用最新版本。" },
+            { triggerTurn: false }).catch(() => {});
+            void activeSession.abort().catch(() => {});
+          }
+        }) : undefined;
     disposeOperatorSkills = skillResources?.dispose;
     let skillRevision: number | undefined;
     const protectedResources = protectedProfile && protectedSettings
@@ -98,8 +108,13 @@ export async function createDetachedAgentSessionRuntime(
       ...(protectedResources?.extensionFactories ?? []),
       ...(skillResources ? [{ name: "dano-operator-skills", factory: ((pi) => {
         pi.on("input", async () => { await skillResources.refresh(); return { action: "continue" as const }; });
+        pi.on("tool_call", async () => {
+          if (skillRevision !== await skillResources.refresh()) return { block: true,
+            reason: "OPERATOR_SKILLS_CHANGED: this turn was invalidated by an administrator skill update. Start a new turn." };
+        });
         pi.on("before_agent_start", async event => {
           skillRevision = await skillResources.refresh();
+          revocationNotified = false;
           event.systemPromptOptions.skills = skillResources.getSkills().skills;
         });
       }) satisfies import("@earendil-works/pi-coding-agent").ExtensionFactory }] : []),
@@ -172,6 +187,7 @@ export async function createDetachedAgentSessionRuntime(
           : []),
       ] as unknown as ToolDefinition[],
     });
+    activeSession = result.session;
     disposeCredentialBinding =
       options.credentialBroker && options.credentialBrokerScope
         ? options.credentialBroker.observe(
