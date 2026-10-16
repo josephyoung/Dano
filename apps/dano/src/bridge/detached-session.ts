@@ -190,7 +190,15 @@ export async function createDetachedAgentSessionRuntime(
     };
   };
 
-  const runtime = await createAgentSessionRuntime(createRuntime, {
+  const runtime = await createAgentSessionRuntime(async runtimeOptions => {
+    try { return await createRuntime(runtimeOptions); }
+    catch (error) {
+      providerExecutionLifetime?.abort();
+      disposeOperatorSkills?.();
+      disposeOperatorSkills = undefined;
+      throw error;
+    }
+  }, {
     cwd,
     agentDir: options.protectedTools?.agentDir ?? getAgentDir(),
     sessionManager,

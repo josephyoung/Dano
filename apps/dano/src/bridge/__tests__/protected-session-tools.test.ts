@@ -283,3 +283,15 @@ it("pins each existing session turn to current operator skills through Pi input 
     expect(runtime.session.resourceLoader.getSkills().skills).toEqual([]);
   } finally { await publication.cleanup(); }
 });
+
+it("releases operator resource subscriptions when session initialization fails", async () => {
+  const h = await harness();
+  const listeners = new Set<unknown>();
+  Object.assign(h.profile, { operatorSkills: {
+    current: async () => ({ revision: 1, paths: [] }),
+    subscribe: (listener: unknown) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  } });
+  h.resolveWorker.mockRejectedValueOnce(new Error("SYNTHETIC_WORKER_UNAVAILABLE"));
+  await expect(h.start()).rejects.toThrow("SYNTHETIC_WORKER_UNAVAILABLE");
+  expect(listeners.size).toBe(0);
+});
