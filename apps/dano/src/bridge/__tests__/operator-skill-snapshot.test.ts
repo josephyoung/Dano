@@ -132,7 +132,9 @@ it("rejects a malformed replacement rather than leaving its old script executabl
   try {
     const old = join(publication.paths[0]!, "custom/run.sh");
     await writeFile(join(source, "custom/SKILL.md"), "---\nname: [invalid\n---\n");
-    expect(await publication.refresh()).toMatchObject({ paths: [], error: "UNSAFE_OPERATOR_SKILL" });
+    const invalid = await publication.refresh();
+    expect(invalid).toMatchObject({ paths: [], error: "UNSAFE_OPERATOR_SKILL" });
+    expect((await publication.refresh()).revision).toBe(invalid.revision);
     await expect(lstat(old)).rejects.toMatchObject({ code: "ENOENT" });
   } finally { await publication.cleanup(); }
 });

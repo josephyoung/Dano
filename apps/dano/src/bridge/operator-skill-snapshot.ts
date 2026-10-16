@@ -29,6 +29,7 @@ export async function snapshotOperatorSkills(installation: string, sources: read
   const listeners = new Set<(state: OperatorSkillRevision) => void>();
   let current: string | undefined;
   let fingerprint: string | undefined;
+  let rejectedFingerprint: string | undefined;
   let revision = 0;
   let error: string | undefined;
   let closed = false;
@@ -110,14 +111,14 @@ export async function snapshotOperatorSkills(installation: string, sources: read
     try {
       captured = await Promise.race([(async () => {
         const first = await capture();
-        if (first.hash === fingerprint && !error) return first;
+        if (first.hash === fingerprint || first.hash === rejectedFingerprint) return first;
         const second = await capture();
         if (second.hash !== first.hash) throw unsafe();
         return first;
       })(), new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(unsafe()), OPERATOR_SKILL_SCAN_MS);
       })]);
-      if (captured.hash === fingerprint && !error) return state();
+      if (captured.hash === fingerprint || captured.hash === rejectedFingerprint) return state();
     } catch { captured = undefined; nextError = "UNSAFE_OPERATOR_SKILL"; }
     finally { if (timer) clearTimeout(timer); }
     if (closed) return state();
@@ -132,7 +133,12 @@ export async function snapshotOperatorSkills(installation: string, sources: read
       }), new Promise<never>((_, reject) => {
         publishTimer = setTimeout(() => { abandoned = true; reject(unsafe()); }, OPERATOR_SKILL_PUBLISH_MS);
       })]);
-    } catch { captured = undefined; nextError = "UNSAFE_OPERATOR_SKILL"; }
+    } catch (failure) {
+      if (!abandoned && failure instanceof Error && failure.message === "UNSAFE_OPERATOR_SKILL") {
+        rejectedFingerprint = captured?.hash;
+      }
+      captured = undefined; nextError = "UNSAFE_OPERATOR_SKILL";
+    }
     finally { if (publishTimer) clearTimeout(publishTimer); }
     // Invalidate discovery before waiting for process shutdown or disk cleanup.
     // A second revision below announces the complete replacement publication.
@@ -147,7 +153,9 @@ export async function snapshotOperatorSkills(installation: string, sources: read
       current = next?.directory;
       paths.splice(0, paths.length, ...(next?.paths ?? []));
       fingerprint = captured?.hash;
+      if (captured) rejectedFingerprint = undefined;
       error = nextError;
+      if (error) console.warn("[dano] Administrator skills unavailable: UNSAFE_OPERATOR_SKILL");
       revision++;
       for (const listener of listeners) listener(state());
       return state();
