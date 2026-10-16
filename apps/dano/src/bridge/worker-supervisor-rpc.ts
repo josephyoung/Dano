@@ -1,3 +1,4 @@
+import type { OperatorSkills } from "./operator-skill-snapshot.js";
 import { randomUUID } from "node:crypto";
 import { workerOperations, type WorkerBrokerChannel } from "./worker-broker.js";
 import type { SupervisedWorker, WorkerSupervisor } from "./worker-supervisor.js";
@@ -16,7 +17,7 @@ const validOwner = (value: unknown): value is string => typeof value === "string
  * The root endpoint prepares owned workspaces or selects worker executors; it never evaluates
  * commands, imports modules, or accepts environment/UID/config overrides. */
 export function serveWorkerSupervisor(supervisor: Supervisor, channel: WorkerBrokerChannel,
-  limits: SupervisorRpcLimits): { close(): Promise<void> } {
+  limits: SupervisorRpcLimits, skills?: OperatorSkills): { close(): Promise<void> } {
   if (![limits.maxConcurrentOperations, limits.maxMessageBytes].every(value => Number.isSafeInteger(value) && value > 0)) {
     throw new Error("INVALID_SUPERVISOR_RPC_LIMITS");
   }
@@ -24,11 +25,13 @@ export function serveWorkerSupervisor(supervisor: Supervisor, channel: WorkerBro
   const tokens = new WeakMap<SupervisedWorker, string>();
   const running = new Map<string, AbortController>();
   const releasing = new Set<string>();
+  let unsubscribe: (() => void) | undefined;
   let closed = false;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     if (closing) return closing;
     closed = true;
+    unsubscribe?.();
     channel.off("message", receive);
     channel.off("disconnect", disconnected);
     channel.off("error", disconnected);
@@ -50,6 +53,10 @@ export function serveWorkerSupervisor(supervisor: Supervisor, channel: WorkerBro
   };
   const dispatch = async (request: Record<string, unknown>, signal: AbortSignal) => {
     const owner = request.owner;
+    const resources = await skills?.refresh();
+    if (request.type === "skills") return resources ?? { revision: 0, paths: [] };
+    if (request.type === "execute" && request.skillRevision !== undefined && resources
+      && request.skillRevision !== resources.revision) throw new Error("OPERATOR_SKILLS_CHANGED");
     if (request.type === "prepare") {
       if (!validOwner(owner) || typeof request.workspace !== "string" || releasing.has(owner)) throw new Error();
       await supervisor.prepare(owner, request.workspace);
@@ -81,6 +88,10 @@ export function serveWorkerSupervisor(supervisor: Supervisor, channel: WorkerBro
       || !request.parameters || typeof request.parameters !== "object" || Array.isArray(request.parameters))) throw new Error();
     return supervisor.use(lease.owner, lease.value.workspace, async current => {
       signal.throwIfAborted();
+      const latest = await skills?.refresh();
+      if (request.skillRevision !== undefined && latest && request.skillRevision !== latest.revision) {
+        throw new Error("OPERATOR_SKILLS_CHANGED");
+      }
       if (leases.get(request.token as string) !== lease || current.agentDir !== lease.value.agentDir
         || current.stateDir !== lease.value.stateDir) throw new Error();
       await current.worker.assertIsolated();
@@ -114,7 +125,12 @@ export function serveWorkerSupervisor(supervisor: Supervisor, channel: WorkerBro
         const value = await dispatch(request, controller.signal);
         controller.signal.throwIfAborted();
         send({ type: "result", id, value });
-      } catch { send({ type: "error", id, code: "SUPERVISOR_OPERATION_FAILED" }); }
+      } catch (error) {
+        const latest = await skills?.refresh().catch(() => undefined);
+        const changed = error instanceof Error && error.message === "OPERATOR_SKILLS_CHANGED"
+          || request.skillRevision !== undefined && latest && request.skillRevision !== latest.revision;
+        send({ type: "error", id, code: changed ? "OPERATOR_SKILLS_CHANGED" : "SUPERVISOR_OPERATION_FAILED" });
+      }
       finally { running.delete(id); }
     })();
   };
@@ -122,6 +138,9 @@ export function serveWorkerSupervisor(supervisor: Supervisor, channel: WorkerBro
   channel.on("disconnect", disconnected);
   channel.on("error", disconnected);
   if (!channel.connected) disconnected();
-  else send({ type: "ready" });
+  else {
+    send({ type: "ready", operatorSkills: Boolean(skills) });
+    unsubscribe = skills?.subscribe(value => send({ type: "operator_skills", value }));
+  }
   return { close };
 }

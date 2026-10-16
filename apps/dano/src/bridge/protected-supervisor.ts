@@ -11,7 +11,10 @@ import { WorkerSupervisor, type WorkerSupervisorOptions } from "./worker-supervi
 import { serveWorkerSupervisor } from "./worker-supervisor-rpc.js";
 import { parseProtectedHostProfile, type ProtectedHostProfile } from "./protected-host-profile.js";
 
+import type { OperatorSkills } from "./operator-skill-snapshot.js";
+
 export interface ProtectedSupervisorOptions {
+  operatorSkills?: OperatorSkills;
   /** Internal unified-container upgrade; never accepted from an external profile. */
   adoptLegacyHostData?: boolean;
   runtimeRoot: string;
@@ -124,6 +127,7 @@ export async function runProtectedSupervisor(options: ProtectedSupervisorOptions
     if (!metadata.isFile() || metadata.uid !== 0 || metadata.nlink !== 1 || (metadata.mode & 0o077)) throw unsafe();
     await new Promise<void>((accept, reject) => flock(lock.fd, "exnb", error => error ? reject(new Error("SUPERVISOR_ALREADY_RUNNING")) : accept()));
     locked = true;
+    await options.operatorSkills?.cleanupStale();
     await provisionRoot(options.runtimeRoot, host.hostUid, host.hostGid, 0o711);
     await provisionRoot(usersRoot, host.hostUid, host.hostGid, 0o711);
     await provisionRoot(options.sessionsRoot, host.hostUid, host.hostGid, 0o700);
@@ -134,6 +138,7 @@ export async function runProtectedSupervisor(options: ProtectedSupervisorOptions
     signal?.throwIfAborted();
     const pool = new WorkerSupervisor({ usersRoot, hostStateRoot: options.hostStateRoot, identities,
       maxWorkers: options.maxWorkers, broker: options.broker, trustedReadPaths: [...host.trustedSkillPaths, await realpath(host.providerPythonModuleDirectory)] });
+    options.operatorSkills?.setRevoker(paths => pool.updateResources([...paths, host.providerPythonModuleDirectory]));
     const child = spawn(guard, ["--reuid", String(host.hostUid), "--regid", String(host.hostGid),
       "--clear-groups", "--no-new-privs", "--", node, entry, JSON.stringify(host), ...args], {
       cwd: installation,
@@ -147,7 +152,7 @@ export async function runProtectedSupervisor(options: ProtectedSupervisorOptions
       child.once("error", reject);
       child.once("close", code => accept(code ?? 1));
     });
-    const rpc = serveWorkerSupervisor(pool, child, host);
+    const rpc = serveWorkerSupervisor(pool, child, host, options.operatorSkills);
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const stop = () => {
       if (deadline || child.exitCode !== null || child.signalCode !== null) return;

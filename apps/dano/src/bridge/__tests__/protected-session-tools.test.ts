@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { InMemoryCredentialStore, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 async function harness() {
-  const root = await mkdtemp(join(tmpdir(), "dano-protected-session-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "dano-protected-session-")));
   roots.push(root);
   const workspace = join(root, "workspace");
   const agentDir = join(root, "private-agent");
@@ -45,7 +45,7 @@ async function harness() {
       return { content: [{ type: "text", text: "WORKER_RESULT" }] };
     }),
   };
-  const resolveWorker = vi.fn(async () => worker);
+  const resolveWorker = vi.fn(async (_workspace: string, _revision?: () => number | undefined) => worker);
   const bindMemory = vi.fn();
   const trustedSkillPaths: string[] = [];
   const profile: ProtectedSessionTools = { agentDir, trustedSkillPaths, resolveWorker,
@@ -250,3 +250,36 @@ it("rejects a mismatched or unavailable worker before enabling the protected run
   expect(h.bindMemory).not.toHaveBeenCalled();
   expect(h.worker.execute).not.toHaveBeenCalled();
 }, 30_000);
+
+it("pins each existing session turn to current operator skills through Pi input and prompt hooks", async () => {
+  const h = await harness();
+  const { snapshotOperatorSkills } = await import("../operator-skill-snapshot.js");
+  const installation = join(h.root, "installation"), source = join(h.root, "skills");
+  await mkdir(installation); await mkdir(join(source, "example"), { recursive: true });
+  await writeFile(join(source, "example/SKILL.md"), "---\nname: example\ndescription: A\n---\nA\n");
+  const publication = await snapshotOperatorSkills(installation, [source], process.getuid!());
+  Object.assign(h.profile, { operatorSkills: { current: publication.refresh, subscribe: publication.subscribe } });
+  try {
+    const runtime = await h.start();
+    expect(runtime.session.resourceLoader.getSkills().skills[0]?.description).toBe("A");
+    const runner = runtime.session.extensionRunner;
+    const options = () => ({ cwd: h.workspace, selectedTools: [], skills: [], toolSnippets: {}, toolGuidelines: {},
+      promptGuidelines: [], appendSystemPrompt: "", sections: {}, contextFiles: [] });
+    const first = await runner.emitBeforeAgentStart("test", undefined, options());
+    expect(first.systemPromptOptions.skills[0]?.description).toBe("A");
+    const getter = h.resolveWorker.mock.calls[0]?.[1] as (() => number) | undefined;
+    const previous = getter?.();
+    await writeFile(join(source, "example/SKILL.md"), "---\nname: example\ndescription: B\n---\nB\n");
+    await publication.refresh();
+    expect(getter?.()).toBe(previous);
+    await runner.emitInput("next", undefined, "interactive");
+    expect(runtime.session.resourceLoader.getSkills().skills[0]?.description).toBe("B");
+    const next = await runner.emitBeforeAgentStart("next", undefined, options());
+    expect(next.systemPromptOptions.skills[0]?.description).toBe("B");
+    expect(getter?.()).toBeGreaterThan(previous!);
+    await rm(join(source, "example"), { recursive: true });
+    await publication.refresh();
+    await runner.emitInput("next", undefined, "interactive");
+    expect(runtime.session.resourceLoader.getSkills().skills).toEqual([]);
+  } finally { await publication.cleanup(); }
+});

@@ -38,6 +38,7 @@ export class WorkerSupervisor {
   readonly #releasingSlots = new Set<Slot>();
   readonly #preparations = new Map<string, { ownerId: string; promise: Promise<void> }>();
   #clock = 0;
+  #resourceUpdate?: Promise<void>;
 
   constructor(private readonly options: WorkerSupervisorOptions, factory?: Factory) {
     if (!Number.isSafeInteger(options.maxWorkers) || options.maxWorkers <= 0) throw new Error("INVALID_WORKER_SUPERVISOR_LIMIT");
@@ -65,6 +66,7 @@ export class WorkerSupervisor {
   /** Prepare managed permissions through the same root authority as startup,
    * without consuming a worker slot or launching a model/backend. */
   prepare(ownerId: string, workspace: string): Promise<void> {
+    if (this.#resourceUpdate) return this.#resourceUpdate.then(() => this.prepare(ownerId, workspace));
     this.#assertOwner(ownerId, workspace);
     const canonical = resolve(workspace), key = JSON.stringify([ownerId, canonical]);
     const previous = this.#preparations.get(key);
@@ -84,6 +86,7 @@ export class WorkerSupervisor {
   }
 
   async acquire(ownerId: string, workspace: string): Promise<SupervisedWorker> {
+    if (this.#resourceUpdate) await this.#resourceUpdate;
     this.#assertOwner(ownerId, workspace);
     const canonical = resolve(workspace);
     const key = JSON.stringify([ownerId, canonical]);
@@ -140,6 +143,23 @@ export class WorkerSupervisor {
     }
   }
 
+  /** Revoke all process leases, including active operations and pending starts.
+   * Logical host leases remain usable after new permissions are provisioned. */
+  updateResources(paths: readonly string[]): Promise<void> {
+    if (this.#resourceUpdate) throw new Error("WORKER_RESOURCES_UPDATE_IN_PROGRESS");
+    const slots = [...new Set([...this.#slots.values(), ...this.#releasingSlots])];
+    this.#slots.clear();
+    const preparations = [...this.#preparations.values()].map(item => item.promise.catch(() => {}));
+    const update = Promise.all([this.#closeSlots(slots), ...preparations,
+      ...this.#releases.values(), ...this.#retirements.values()]).then(() => {
+      this.options.trustedReadPaths = [...paths];
+      this.#resourceUpdate = undefined;
+    });
+    // Keep a failed revocation as a permanent barrier. Never serve old mounts.
+    this.#resourceUpdate = update;
+    return update;
+  }
+
   retire(ownerId: string): Promise<void> {
     const previous = this.#retirements.get(ownerId);
     if (previous) return previous;
@@ -171,7 +191,8 @@ export class WorkerSupervisor {
     this.#closed = true;
     const slots = [...this.#slots.values()];
     this.#slots.clear();
-    this.#closing = this.#waitForCleanup([this.#closeSlots(slots), ...this.#retirements.values(), ...this.#releases.values(),
+    this.#closing = this.#waitForCleanup([this.#closeSlots(slots), ...(this.#resourceUpdate ? [this.#resourceUpdate] : []),
+      ...this.#retirements.values(), ...this.#releases.values(),
       ...[...this.#preparations.values()].map(item => item.promise.catch(() => {}))]);
     return this.#closing;
   }
@@ -191,11 +212,8 @@ export class WorkerSupervisor {
   }
 
   async #closeSlots(slots: Slot[]): Promise<void> {
-    const results = await Promise.allSettled(slots.map(slot => slot.creating));
-    await this.#waitForCleanup(results.flatMap((result, index) => {
-      const slot = slots[index]!;
-      if (result.status === "fulfilled") return [this.#closeLease(slot, result.value)];
-      return slot.cleanup ? [slot.cleanup] : [];
-    }));
+    await this.#waitForCleanup(slots.map(slot => slot.value
+      ? this.#closeLease(slot, slot.value)
+      : slot.creating.then(lease => this.#closeLease(slot, lease), () => slot.cleanup)));
   }
 }

@@ -1,3 +1,4 @@
+import { operatorSkillResources } from "./operator-skill-resources.js";
 import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import {
   createAgentSessionRuntime,
@@ -66,9 +67,11 @@ export async function createDetachedAgentSessionRuntime(
 ): Promise<CreateDetachedAgentSessionRuntimeResult> {
   let disposeActiveDanoLlmResilience: (() => void) | undefined;
   let disposeCredentialBinding: (() => void) | undefined;
+  let disposeOperatorSkills: (() => void) | undefined;
   let providerExecutionLifetime: AbortController | undefined;
   const createRuntime: CreateAgentSessionRuntimeFactory = async runtimeOptions => {
     providerExecutionLifetime?.abort();
+    disposeOperatorSkills?.();
     const lifetime = new AbortController();
     providerExecutionLifetime = lifetime;
     disposeCredentialBinding?.();
@@ -78,16 +81,28 @@ export async function createDetachedAgentSessionRuntime(
     const protectedSettings = protectedProfile
       ? options.settingsManager ?? SettingsManager.create(runtimeOptions.cwd, getAgentDir(), { projectTrusted: false })
       : undefined;
+    const skillResources = protectedProfile?.operatorSkills
+      ? await operatorSkillResources(protectedProfile.operatorSkills, runtimeOptions.cwd, protectedProfile.agentDir) : undefined;
+    disposeOperatorSkills = skillResources?.dispose;
+    let skillRevision: number | undefined;
     const protectedResources = protectedProfile && protectedSettings
       ? protectedMemoryResources(protectedSettings,
           await protectedSessionFactory(protectedProfile, runtimeOptions.cwd, {
             signal: lifetime.signal,
+            skillRevision: () => skillRevision,
             credentialBroker: options.credentialBroker,
             credentialBrokerScope: options.credentialBrokerScope,
-          }), protectedProfile.trustedSkillPaths)
+          }), skillResources ? [] : protectedProfile.trustedSkillPaths)
       : undefined;
     const extensionFactories = [
       ...(protectedResources?.extensionFactories ?? []),
+      ...(skillResources ? [{ name: "dano-operator-skills", factory: ((pi) => {
+        pi.on("input", async () => { await skillResources.refresh(); return { action: "continue" as const }; });
+        pi.on("before_agent_start", async event => {
+          skillRevision = await skillResources.refresh();
+          event.systemPromptOptions.skills = skillResources.getSkills().skills;
+        });
+      }) satisfies import("@earendil-works/pi-coding-agent").ExtensionFactory }] : []),
       { name: "dano-authentication", factory: options.credentialBroker && options.credentialBrokerScope
         ? options.credentialBroker.createAuthenticationExtension(options.credentialBrokerScope)
         : createAssistantAuthenticationExtension(() => options.authenticationStatus ?? "unknown") },
@@ -136,6 +151,7 @@ export async function createDetachedAgentSessionRuntime(
         },
       },
     });
+    if (skillResources) services.resourceLoader.getSkills = skillResources.getSkills;
     const result = await createAgentSessionFromServices({
       services,
       sessionManager: runtimeOptions.sessionManager,
@@ -181,6 +197,7 @@ export async function createDetachedAgentSessionRuntime(
   });
   runtime.setBeforeSessionInvalidate(() => {
     providerExecutionLifetime?.abort();
+    disposeOperatorSkills?.();
     disposeActiveDanoLlmResilience?.();
     disposeActiveDanoLlmResilience = undefined;
     disposeCredentialBinding?.();
@@ -191,6 +208,7 @@ export async function createDetachedAgentSessionRuntime(
     runtime,
     disposeDanoLlmResilience() {
       providerExecutionLifetime?.abort();
+      disposeOperatorSkills?.();
       disposeActiveDanoLlmResilience?.();
       disposeActiveDanoLlmResilience = undefined;
       disposeCredentialBinding?.();
