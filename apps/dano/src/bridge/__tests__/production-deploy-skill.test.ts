@@ -79,6 +79,17 @@ describe("production deployment log evidence", () => {
     expect(summary.windows.afterReadiness.unclassified.timeouts).toBe(1);
     expect(result.stdout + result.stderr).not.toContain("never-print-this");
   });
+  it("classifies navigation configuration and partial cleanup without suppressing real failures", () => {
+    const input = line("Navigation timeout: 30000ms", "08:00:01", "app-1")
+      + line("Dano Anonymous User cleanup failed: Error: 2 Anonymous User cleanup operation(s) failed", "08:00:02", "app-1")
+      + line("Navigation timeout: 30000ms; request failed and timed out", "08:00:03", "app-1");
+    const summary = JSON.parse(logs(input).stdout);
+    expect(summary.reasons.timeout_configuration).toBe(1);
+    expect(summary.reasons.anonymous_cleanup_partial_failure).toBe(1);
+    expect(summary.categories.errors).toBe(2);
+    expect(summary.unclassified.errors).toBe(1);
+    expect(summary.unclassified.timeouts).toBe(1);
+  });
   it("uses structured severity and HTTP fields without interpreting user text", () => {
     const input = line(JSON.stringify({ level: "info", message: "user said error warning 503 never-print-this", statusCode: 200, bytes: 502 }), "08:00:01", "app-1")
       + line(JSON.stringify({ level: "error", message: "request timed out", statusCode: 504 }), "08:00:05", "app-1");

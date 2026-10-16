@@ -109,7 +109,7 @@ Compare inventory by resource responsibility:
 
 ## Build budget and cleanup
 
-Before the no-cache build, measure bounded connectivity/transfer to public
+Before a dependency build, measure bounded connectivity/transfer to public
 indexes/artifacts from the Dockerfile's supported mirrors. Record durations and
 failure classes only; apply supported build arguments without source edits or
 TLS bypass. Budget space for the verified context, extraction, image/layers,
@@ -126,3 +126,26 @@ allowlisted receipts before cleanup. Remove the runner's exact private directory
 including script/raw logs, after disposition and evidence export; retain it on
 uncertain execution until reconciliation. Keep referenced uploads for their
 documented lifecycle. Record final disk usage and container preservation.
+
+## Diagnose once, then decide
+
+Use one scoped app/nginx log summary for the switch/readiness windows. The
+filter classifies timeout configuration, nginx buffering and anonymous sweep
+partial failures without returning messages. Known maintenance failures remain
+visible counts: compare the recorded baseline and changed code, state their
+impact and disposition, and retain unrelated user data. A recognized reason is
+not an automatic pass.
+
+For an unknown incident, perform one on-host structured extraction of error
+class/code, stage and timing; add a reusable classifier when its exact public
+format is established. Repeated keyword-guess SSH round trips are not a useful
+diagnostic strategy. Never export raw exceptions, configuration or session data.
+
+Record stage start/end and selected path in the existing release receipt. Use a
+60-second transport probe, a 120-second no-progress dependency-download window
+and one attempt per unchanged route as default work budgets. Measurable download
+progress can continue within the reviewed build deadline. An exhausted budget
+selects the documented alternative or reports the specific blocker; it never
+waives a safety or acceptance gate. Poll phase changes rather than unchanged
+logs. Reconnection reuses completed evidence for the same candidate; a changed
+candidate repeats its required acceptance.
