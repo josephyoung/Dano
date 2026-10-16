@@ -1,3 +1,7 @@
+import {
+  OPERATOR_SKILL_REVOCATION_NOTICE_TYPE,
+  OPERATOR_SKILL_REVOCATION_NOTICE_TEXT,
+} from "./operator-skill-notice.js";
 import { operatorSkillResources } from "./operator-skill-resources.js";
 import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import {
@@ -87,8 +91,8 @@ export async function createDetachedAgentSessionRuntime(
       ? await operatorSkillResources(protectedProfile.operatorSkills, runtimeOptions.cwd, protectedProfile.agentDir, () => {
           if (activeSession && !activeSession.isIdle && !revocationNotified) {
             revocationNotified = true;
-            void activeSession.sendCustomMessage({ customType: "dano.operator-skills-changed", display: true,
-              content: "管理员技能已更新，本轮调用已取消。请在当前聊天重新发送消息，以使用最新版本。" },
+            void activeSession.sendCustomMessage({ customType: OPERATOR_SKILL_REVOCATION_NOTICE_TYPE, display: true,
+              content: OPERATOR_SKILL_REVOCATION_NOTICE_TEXT },
             { triggerTurn: false }).catch(() => {});
             void activeSession.abort().catch(() => {});
           }

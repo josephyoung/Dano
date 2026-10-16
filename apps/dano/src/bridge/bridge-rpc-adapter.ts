@@ -1,3 +1,9 @@
+import {
+  isOperatorSkillRevocationNotice,
+  operatorSkillRevokedErrorIndices,
+  hasCurrentOperatorSkillRevocation,
+  OPERATOR_SKILL_REVOCATION_NOTICE_TEXT,
+} from "./operator-skill-notice.js";
 import type { BridgeAuthenticationState } from "../../types/protocol.js";
 import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
@@ -1637,6 +1643,7 @@ function buildTreePreviewText(
         unknown
       >),
 ): string {
+  if (isOperatorSkillRevocationNotice(entry)) return OPERATOR_SKILL_REVOCATION_NOTICE_TEXT;
   if ((entry as { type?: string }).type === "message" && "message" in entry) {
     const message = (
       entry as SessionEntry & {
@@ -2042,6 +2049,17 @@ function transcriptMessageFromBranchEntry(
 ): RpcTranscriptMessage | null {
   if (!entry || typeof entry !== "object") return null;
 
+  if (isOperatorSkillRevocationNotice(entry)) {
+    const notice = entry as { id?: unknown; timestamp?: unknown };
+    const id = typeof notice.id === "string" ? notice.id : undefined;
+    return {
+      transcriptKey: id ?? fallbackKey,
+      id,
+      role: "system",
+      content: OPERATOR_SKILL_REVOCATION_NOTICE_TEXT,
+      timestamp: typeof notice.timestamp === "string" ? notice.timestamp : undefined,
+    };
+  }
   const typedEntry = entry as {
     type?: string;
     id?: unknown;
@@ -2172,8 +2190,10 @@ function flattenMessagesForTranscript(
   branch: readonly unknown[],
 ): RpcTranscriptMessage[] {
   const messages: RpcTranscriptMessage[] = [];
+  const revokedErrors = operatorSkillRevokedErrorIndices(branch);
 
   for (let index = 0; index < branch.length; index += 1) {
+    if (revokedErrors.has(index)) continue;
     const message = transcriptMessageFromBranchEntry(
       branch[index],
       `snapshot:${index}`,
@@ -5759,6 +5779,15 @@ export class BridgeRpcAdapter {
     event: object,
     sessionPath: string | null,
   ): void {
+    if (isOperatorSkillRevocationNotice(extractEventMessage(event))) {
+      if (eventType === "message_end") {
+        this.discardPendingLlmError(sessionPath);
+        this.sendTranscriptSnapshot(
+          this.sessionRuntime.buildCurrentTranscriptPage(),
+        );
+      }
+      return;
+    }
     if (eventType === "message_update") {
       const deltaPayload = this.transcriptProjector.projectDeltaEvent(
         event,
@@ -5875,6 +5904,9 @@ export class BridgeRpcAdapter {
     const pending = this.pendingLlmErrors.get(key);
     if (!pending) return;
     this.pendingLlmErrors.delete(key);
+    const manager = sessionPath && this.context.state.sessionManager.getSessionFile() !== sessionPath
+      ? this.sessionRuntime.getCachedSessionManager(sessionPath) : this.context.state.sessionManager;
+    if (manager && hasCurrentOperatorSkillRevocation(manager.getBranch())) return;
     this.sendEvent(pending);
   }
 
