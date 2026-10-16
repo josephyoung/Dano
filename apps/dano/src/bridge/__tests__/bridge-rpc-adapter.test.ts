@@ -6130,6 +6130,34 @@ describe("BridgeRpcAdapter", () => {
       });
     });
 
+    it("projects persisted Skill revocation after a failed turn and on history reload", async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dano-skill-notice-rpc-"));
+      try {
+        const manager = SessionManager.create(root, root);
+        (context.state as unknown as { sessionManager: SessionManager }).sessionManager = manager;
+        manager.appendMessage({ role: "user", content: "run old Skill", timestamp: 1 } as any);
+        const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: "Request failed", timestamp: 2, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+        manager.appendMessage(failed as any);
+        const handler = (context.events.subscribe as ReturnType<typeof vi.fn>).mock.calls[0][0];
+        (ws.send as ReturnType<typeof vi.fn>).mockClear();
+        handler({ type: "message_end", message: failed });
+        handler({ type: "agent_end", messages: [failed] });
+        manager.appendCustomMessageEntry("dano.operator-skills-changed", "internal content", true);
+        handler({ type: "message_end", message: { role: "custom", customType: "dano.operator-skills-changed", display: true } });
+        let payloads = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(call => JSON.parse(call[0] as string).payload);
+        const snapshot = payloads.filter(p => p.type === "transcript_snapshot").at(-1);
+        expect(snapshot.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "system", content: "管理员技能已更新，本轮调用已取消。请在当前聊天重新发送消息，以使用最新版本。" })]));
+        expect(snapshot.messages.some((m: any) => m.stopReason === "error")).toBe(false);
+        expect(manager.getBranch().some((entry: any) => entry.message?.stopReason === "error")).toBe(true);
+        (ws.send as ReturnType<typeof vi.fn>).mockClear();
+        (ws as unknown as { trigger: (event: string, data: Buffer) => void }).trigger("message", Buffer.from(JSON.stringify({ type: "command", payload: { id: "skill-notice-reload", type: "get_messages" } })));
+        await new Promise(r => setTimeout(r, 10));
+        payloads = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map(call => JSON.parse(call[0] as string).payload);
+        const page = payloads.find(p => p.id === "skill-notice-reload").data;
+        expect(page.messages).toEqual(snapshot.messages);
+      } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+
     it("sanitizes model failures in transcript and terminal events", async () => {
       (ws.send as ReturnType<typeof vi.fn>).mockClear();
 
