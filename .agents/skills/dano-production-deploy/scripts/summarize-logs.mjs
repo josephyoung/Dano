@@ -58,6 +58,7 @@ function record(target, categories, reason) {
   const explained = {
     upstream_connection_refused_before_ready: "errors",
     nginx_temporary_buffer: "warnings",
+    anonymous_cleanup_partial_failure: "errors",
   }[reason];
   for (const category of ["errors", "warnings", "timeouts"]) {
     if (categories.includes(category) && category !== explained) target.unclassified[category] += 1;
@@ -145,9 +146,11 @@ for await (const line of lines) {
   let reason = beforeReady && categories.includes("errors") &&
     /connect\(\) failed \(111: Connection refused\) while connecting to upstream/.test(body)
     ? "upstream_connection_refused_before_ready" : undefined;
-  if (/^(?:commandTimeout|timeout)\s*:\s*\d+\s*,?$/.test(body)) {
+  if (/^(?:(?:commandTimeout|timeout)\s*:\s*\d+\s*,?|Navigation timeout:\s*\d+\s*ms)\s*$/i.test(body)) {
     categories = categories.filter(name => name !== "timeouts");
     reason = "timeout_configuration";
+  } else if (/^Dano Anonymous User cleanup failed: Error: \d+ Anonymous User cleanup operation\(s\) failed$/.test(body)) {
+    reason = "anonymous_cleanup_partial_failure";
   } else if (categories.includes("warnings") &&
     /an upstream response is buffered to a temporary file/.test(body)) {
     reason = "nginx_temporary_buffer";

@@ -26,14 +26,17 @@ Follow the deployment and acceptance mode in the root `AGENTS.md`. A request to 
 
 ## Phase 1: Re-read the current contract
 
-Before touching local or remote state, read the current versions of:
+Read `AGENTS.md`, `deploy/AGENTS.md` and [remote execution](references/execution.md).
+Reuse current-session receipts for unchanged inputs. Read the target diff and the
+specific build, Compose, SYSTEM and acceptance helpers it touches; expand to the
+full deployment contract only for a first deployment, uncertain provenance or a
+changed contract. Record the file/commit boundary so reuse is explicit.
 
-- `AGENTS.md` and `deploy/AGENTS.md`
-- `deploy/README.md`, root `package.json`, `Dockerfile`, `.env.example`, and `docker-compose.yml`
-- `deploy/docker-entrypoint.sh`, `deploy/runtime-defaults/*`, `deploy/compose/*`, and `deploy/nginx/*`
-- `scripts/deploy-release.mjs`, `scripts/deploy-compose.mjs`, `scripts/deploy-exposure.mjs`, `scripts/smoke-dano-deploy.mjs`, and relevant acceptance helpers
-- this skill's `scripts/summarize-logs.mjs` and `scripts/summarize-compose-config.mjs` before production log or resolved-Compose diagnostics
-- [remote execution and release decisions](references/execution.md) before preparing SSH scripts; use its runner, failure dispositions and checkpoints throughout this run
+Before constructing a release payload, follow [build and recovery routing](references/recovery.md).
+Select the source-transfer/build path once from fresh capabilities, the proven
+runtime base and changed inputs. Use existing helpers below; keep a task-specific
+payload to composition of helpers and the PR-specific fixture. A failed stage
+resumes from its receipt rather than restarting completed stages.
 
 The user's current instructions select the environment and acceptance mode; the root `AGENTS.md` records workflow defaults; the current repository defines shipped build/runtime behavior; live read-only inventory defines topology and configuration. Resolve routine workflow differences using that precedence. Pause only the dependent action when a concrete data, credential or service conflict remains unresolved. Prefer repository scripts when they preserve the inventoried environment. Compare `deploy:release` staging behavior with the live layout before using it so environment-owned routing or adjacent-service configuration remains intact.
 
@@ -65,7 +68,7 @@ Use read-only SSH checks first. Confirm:
 - `.env`, secrets, TLS files, and nginx config exist with appropriate permissions, checking presence only;
 - effective exposure mode and published ports using allowlisted non-secret keys only;
 - `dano-site` and its `/web/` route are healthy before the update;
-- disk space and Docker disk usage are sufficient for a no-cache build while retaining the rollback image.
+- disk space and Docker disk usage are sufficient for the selected build path while retaining the rollback image.
 
 Run this skill's `scripts/probe-host.sh` as a diagnostic through `scripts/run-remote-script.mjs` first. Its boolean capabilities select supported Git/Compose/Buildx commands and a Node-in-image fallback. Discover container IDs through the inventoried Compose project/service labels. Keep the capability and ownership receipts with the release record.
 
@@ -86,9 +89,9 @@ Checkpoint: stop dependent mutations on unexplained inventory/topology/mount cha
 
 ## Phase 4: Fast-forward server source
 
-In `/root/Dano-source`, confirm a clean checkout, switch to `main`, run normal Git diagnostics, and then run `git pull --ff-only` on its tracked upstream. Confirm the resulting HEAD equals the target SHA.
+In `/root/Dano-source`, confirm a clean checkout on `main` and apply the selected fast-forward route: bounded upstream pull or verified local bundle. Use the known-host recovery reference to avoid retrying an already documented broken transport. Confirm the resulting HEAD equals the target SHA.
 
-If pull fails or appears hung, inspect the exact command, current directory, branch/upstream, dirty state, remote configuration, ahead/behind counts, Git process state, and concrete connectivity error. Use non-TTY BatchMode SSH for diagnostics. Do not call it a server-network problem without evidence and do not retry blindly. Use an alternate transfer such as a verified Git bundle only after the root cause is established and the resulting commit can still be proven byte-for-byte equal to target.
+Bound server fetch/pull to 60 seconds with interactive Git prompts disabled. A clean checkout plus a recorded timeout/transport failure is sufficient to select a SHA-verified local Git bundle; a complete network root-cause investigation is not a deployment gate. Retry the network path only after a concrete transport/configuration change. Verify bundle prerequisites and fast-forward to the exact target. Do not launch a different Git container merely to repeat the same failing transport.
 
 Stop if the server checkout is dirty, diverged, or not at the target SHA after the update. Never reset away server changes without explicit approval.
 
@@ -102,7 +105,7 @@ node scripts/deploy-product-identity.mjs /opt/dano/deploy "$target_sha"
 
 Require exit zero and record its JSON `productName`, `source`, and `targetSha` in the release manifest. The command reads only public source config and the managed overlay and reuses the target runtime resolver. On missing/empty/placeholder names, invalid overlays or source mismatch, stop before build and follow the repair steps in `deploy/README.md`. Ask for a name only when missing or ambiguous. Valid configuration proceeds without a question.
 
-Build from the proven target checkout and current Dockerfile. Prefer a no-cache build for production updates. Before starting, apply the execution reference's bounded public-mirror probes and build-space budget; recheck capacity between failed attempts. Pass registry selection only through current supported build arguments and mirror order. Do not patch mirrors on the server or inject secrets into build arguments or logs.
+Build from the proven target checkout and current Dockerfile using normal Docker caching. Source/tree checks, immutable image IDs, OCI revision and artifact hashes prove freshness; cache eviction does not. Use `--no-cache` only for a demonstrated cache defect or an explicit clean-build requirement. Select supported mirrors through bounded probes before any dependency-heavy build. If server downloads fail, use the verified recovery route in the reference rather than repeating a full build. Pass registry selection through supported build arguments; keep TLS verification and secrets out of build inputs/logs.
 
 Prepare every disposable Git build checkout with `node scripts/deploy-build-context.mjs prepare <checkout> <target_sha>` before building. The helper verifies tracked content against the exact Git tree and sets directories/files/executables to 0755/0644/0755, rejecting dirty/untracked/ignored inputs, links and special files. `deploy:release` calls this gate automatically. When a verified Git archive is required, use `node scripts/deploy-build-context.mjs archive <clean-checkout> <temporary-parent> <target_sha>`; use its returned directory and SHA for the build manifest and remove only that directory afterward. Do not use a permission-preserving root tar extraction or run this helper on runtime/deploy-control directories. Include the exact revision OCI label when building manually.
 
@@ -114,7 +117,7 @@ Capture the build exit status and structured stage results without returning raw
 - entrypoint/runtime defaults are from the target checkout;
 - image architecture and configured non-secret runtime user/entrypoint are expected.
 
-When the current Dockerfile supplies an OCI revision label, require it to equal the full `target_sha`. Otherwise bind provenance by recording the clean build-context HEAD immediately before the no-cache build, exact immutable tag creation, resulting image ID, package version, and asset inventory as one checkpoint. If this evidence cannot prove the image came from `target_sha`, stop and report that a repository-level OCI revision label is required.
+When the current Dockerfile supplies an OCI revision label, require it to equal the full `target_sha`. Otherwise bind provenance by recording the clean build-context HEAD immediately before the build, exact immutable tag creation, resulting image ID, package version, and asset inventory as one checkpoint. If this evidence cannot prove the image came from `target_sha`, stop and report that a repository-level OCI revision label is required.
 
 Record the immutable tag and image ID. Do not switch traffic if image version, assets, source SHA evidence or structured build results disagree. Cache markers and identical assets alone are not failures; unchanged frontend content can retain its assets. Reuse this run's completed candidate only when its verified context, revision, image ID, version and asset inventory still agree.
 
@@ -137,13 +140,15 @@ Resolve Compose as JSON entirely on-host and pipe it through `scripts/summarize-
 
 Immediately before each traffic switch, revalidate `upstream/main` against `target_sha` through a successful fetch or authenticated GitHub commit query and record time/channel/SHA. Treat `target_sha` as the release locked by this run. If upstream advanced, restart manifest/build preparation for the new SHA by default; deploy the locked older SHA only with explicit user direction. Complete this network check before mutation; acceptance completion uses the saved target proof.
 
-Under the existing deployment lock, run the new image's `./deploy/system-prompt.mjs sync` followed by `check` through the exact Compose app service and `--entrypoint node`. Include the managed product-name overlay when present. Pass `--expected-product-name "$product_name"` to both commands, taking `product_name` exactly from the preflight JSON (never shell-evaluate JSON). This asserts equality with the actual container resolver before writing or checking SYSTEM. Repeat the same preflight immediately before switching and require all three evidence fields to equal the manifest. Both commands must exit zero before switching; preserve only a restricted on-host SYSTEM rollback copy, and restore it with the previous image if rollback is needed. For a configuration-only name update or drift repair, use `scripts/deploy-system-prompt.mjs` as documented in `deploy/README.md`, passing `DANO_DEPLOY_LOCK_FD=9` when reusing the existing lock. Its machine success still requires browser identity acceptance.
+Under the existing deployment lock, run the new image's `./deploy/system-prompt.mjs sync` followed by `check` through the exact Compose app service and `--entrypoint node`. Include the managed product-name overlay when present. Pass `--expected-product-name "$product_name"` to both commands, taking `product_name` exactly from the preflight JSON (never shell-evaluate JSON). This asserts equality with the actual container resolver before writing or checking SYSTEM. Repeat the same preflight immediately before switching and require all three evidence fields to equal the manifest. Both commands must exit zero before switching. Create a transaction UUID and use the image's `deploy/system-prompt.mjs backup <uuid>` through the effective non-root app user before sync. Rollback uses `restore <uuid>` with the previous image and validates target ownership/mode; acceptance uses `discard <uuid>`. These public helpers preserve bytes and metadata in a restricted runtime transaction directory. Do not replace them with a host copy whose owner becomes root. For a configuration-only name update or drift repair, use `scripts/deploy-system-prompt.mjs` as documented in `deploy/README.md`, passing `DANO_DEPLOY_LOCK_FD=9` when reusing the existing lock. Its machine success still requires browser identity acceptance.
 
 Capture an RFC3339 UTC `switch_timestamp` immediately before Compose mutation. Run Compose `up -d --no-build` for only the Dano app/nginx services required by the current topology. Do not recreate or restart adjacent services. Wait for real app health and nginx readiness, then complete machine smoke before recording `readiness_timestamp` or opening the Browser acceptance flow. On failure, collect structured status and scoped counts, classify the failure, then correct the proven cause or execute the recorded rollback.
 
 Checkpoint: the running container image ID must equal the built image ID before acceptance begins.
 
 ## Phase 7: Machine acceptance
+
+Bundle the target's PR-specific preflights before switching. For cancellation/error feedback changes, include the live event and persisted transcript projection in local regression coverage so a missing browser notice is caught before deployment. Keep real Browser acceptance below.
 
 Run the repository's current deployment smoke script against the production HTTPS base URL unless the script's documented exposure behavior requires an additional HTTP run. Confirm its actual checks, currently including:
 
@@ -154,7 +159,7 @@ Run the repository's current deployment smoke script against the production HTTP
 - posting to the returned `messagesUrl`, HTTP accepted status, and matching SSE success/failure response;
 - client disconnect.
 
-Separately verify both production HTTP and HTTPS behavior for `/` and `/api/health` according to the configured exposure mode, including redirects. Verify `/web/` returns 200 and `dano-site` remains healthy. Confirm Compose/container health and restart counts. Summarize app/nginx logs separately by service from `switch_timestamp`; the gate passes only when the producer/filter checks pass and every nonzero error, warning, timeout, health, permission, sandbox, or HTTP 5xx category has a structured explanation and an explicit non-regression or rollback disposition.
+Derive route probes from the inventoried published ports. Verify each configured HTTP/HTTPS route and redirects; a port already unpublished before the release is recorded as unchanged, not probed as a newly required endpoint. Verify `/web/` returns 200 and `dano-site` remains healthy. Confirm Compose/container health and restart counts. Summarize app/nginx logs separately by service from `switch_timestamp`; the gate passes only when the producer/filter checks pass and every nonzero error, warning, timeout, health, permission, sandbox, or HTTP 5xx category has a structured explanation and an explicit non-regression or rollback disposition.
 
 Do not treat smoke success as full acceptance.
 
