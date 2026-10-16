@@ -53,7 +53,7 @@ export async function runContainerMain(args: readonly string[], environment: Nod
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.on("SIGTERM", stop); process.on("SIGINT", stop);
-  try { return await runProtectedSupervisor({ ...options, adoptLegacyHostData: true }, env, args, controller.signal); }
+  try { return await runProtectedSupervisor({ ...options, operatorSkills: skills, adoptLegacyHostData: true }, env, args, controller.signal); }
   finally { process.off("SIGTERM", stop); process.off("SIGINT", stop); await skills.cleanup(); }
 }
 

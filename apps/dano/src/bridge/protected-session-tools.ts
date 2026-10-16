@@ -1,3 +1,4 @@
+import type { OperatorSkillClient } from "./operator-skill-resources.js";
 import type { UserMemoryControls } from "./user-memory-controls.js";
 import type { MemoryInputCapture } from "./memory-user-provenance.js";
 import type { CaptureProviderTaskFact } from "./memory-task-facts.js";
@@ -22,9 +23,10 @@ export interface ProtectedSessionTools {
   readonly memoryRetirementBlocked?: true;
   readonly captureMemoryInput?: MemoryInputCapture;
   readonly captureTaskFact?: CaptureProviderTaskFact;
+  readonly operatorSkills?: OperatorSkillClient;
   readonly trustedSkillPaths: readonly string[];
   readonly providerPythonModuleDirectory?: string;
-  resolveWorker(workspace: string): Promise<IsolatedToolExecutor>;
+  resolveWorker(workspace: string, skillRevision?: () => number | undefined): Promise<IsolatedToolExecutor>;
   /** Release this user runtime's workers after all its sessions have stopped. */
   dispose?(): Promise<void>;
   createMemoryExtension?(workspace: string, worker: IsolatedToolExecutor): ExtensionFactory;
@@ -33,13 +35,13 @@ export interface ProtectedSessionTools {
 export async function protectedSessionFactory(
   profile: ProtectedSessionTools,
   workspace: string,
-  options: { signal: AbortSignal; credentialBroker?: CredentialBroker; credentialBrokerScope?: string },
+  options: { skillRevision?: () => number | undefined; signal: AbortSignal; credentialBroker?: CredentialBroker; credentialBrokerScope?: string },
 ): Promise<ExtensionFactory> {
   options.signal.throwIfAborted();
   if (options.credentialBroker && options.credentialBrokerScope && !profile.providerPythonModuleDirectory) {
     throw new Error("PROTECTED_PROVIDER_MODULES_REQUIRED");
   }
-  const resolvedWorker = await profile.resolveWorker(workspace);
+  const resolvedWorker = await profile.resolveWorker(workspace, options.skillRevision);
   if (resolve(resolvedWorker.workspace) !== resolve(workspace)) throw new Error("MEMORY_WORKER_WORKSPACE_MISMATCH");
   const worker: IsolatedToolExecutor = {
     workspace: resolvedWorker.workspace,

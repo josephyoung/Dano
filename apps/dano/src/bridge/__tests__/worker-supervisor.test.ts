@@ -218,3 +218,55 @@ it("does not replace an idle process until cleanup has succeeded", async () => {
   expect(factory).toHaveBeenCalledTimes(1);
   await expect(pool.close()).rejects.toThrow("CLEANUP_FAILED");
 });
+
+it("revokes active and starting workers before allowing replacement resources", async () => {
+  const created: SupervisedWorker[] = [], started = deferred<void>();
+  const pool = supervisor(async (_owner, workspace) => {
+    const item = lease(workspace); created.push(item); return item;
+  });
+  const alice = await pool.acquire("alice", "/alice"), bob = await pool.acquire("bob", "/bob");
+  const stopped = deferred<void>();
+  vi.mocked(alice.worker.close).mockImplementation(async () => { stopped.resolve(); });
+  const operation = pool.use("alice", "/alice", async () => { started.resolve(); await stopped.promise; });
+  await started.promise;
+  await pool.updateResources(["/new/skills"]);
+  await operation;
+  expect(alice.worker.close).toHaveBeenCalledOnce();
+  expect(bob.worker.close).toHaveBeenCalledOnce();
+  expect(await pool.acquire("alice", "/alice")).not.toBe(alice);
+  await pool.close();
+});
+
+it("blocks queued acquisitions while a late startup is being revoked", async () => {
+  const startup = deferred<SupervisedWorker>(), entered = deferred<void>();
+  let count = 0;
+  const pool = supervisor(async (_owner, workspace) => {
+    if (++count === 1) { entered.resolve(); return startup.promise; }
+    return lease(workspace);
+  });
+  const original = expect(pool.acquire("alice", "/alice")).rejects.toThrow("CLOSED");
+  await entered.promise;
+  const updating = pool.updateResources(["/new/skills"]);
+  const queued = pool.acquire("bob", "/bob");
+  expect(count).toBe(1);
+  const old = lease("/alice"); startup.resolve(old);
+  await Promise.all([original, updating, queued]);
+  expect(old.worker.close).toHaveBeenCalledOnce();
+  expect(count).toBe(2);
+  await pool.close();
+});
+
+it("waits for workers already being released before completing resource revocation", async () => {
+  const closing = deferred<void>(), entered = deferred<void>();
+  const item = lease("/alice");
+  vi.mocked(item.worker.close).mockImplementation(async () => { entered.resolve(); await closing.promise; });
+  const pool = supervisor(async () => item);
+  await pool.acquire("alice", "/alice");
+  const release = pool.release("alice"); await entered.promise;
+  let revoked = false;
+  const update = pool.updateResources(["/new"]).then(() => { revoked = true; });
+  await Promise.resolve(); expect(revoked).toBe(false);
+  closing.resolve(); await Promise.all([release, update]);
+  expect(revoked).toBe(true); expect(item.worker.close).toHaveBeenCalledOnce();
+  await pool.close();
+});

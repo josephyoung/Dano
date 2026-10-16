@@ -2,6 +2,10 @@
 
 This directory contains deployment-specific defaults and proxy config.
 
+Administrator Skills update in the running unified container. See
+[hot update and revocation boundaries](../docs/operator-skills-hot-update.md)
+for propagation, cancellation, safety checks and generated-resource cleanup.
+
 ## Protected memory release candidate
 
 The opt-in release combination is recorded in

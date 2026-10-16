@@ -1,3 +1,4 @@
+import type { OperatorSkillRevision } from "./operator-skill-snapshot.js";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
 import type { IsolatedToolExecutor } from "@josephyoung/pi-openviking/worker-tools";
@@ -20,8 +21,10 @@ const unavailable = () => new Error("SUPERVISOR_UNAVAILABLE");
 export class WorkerSupervisorClient {
   readonly #pending = new Map<string, Pending>();
   readonly #ready: Promise<void>;
+  readonly #skillListeners = new Set<(state: OperatorSkillRevision) => void>();
   #closed = false;
   #initialized = false;
+  #liveSkills = false;
   #resolveReady!: () => void;
   #rejectReady!: (error: Error) => void;
   readonly #startupTimer: ReturnType<typeof setTimeout>;
@@ -46,8 +49,14 @@ export class WorkerSupervisorClient {
     if (result.type === "ready") {
       if (this.#initialized) { this.close(); return; }
       this.#initialized = true;
+      this.#liveSkills = result.operatorSkills === true;
       clearTimeout(this.#startupTimer);
       this.#resolveReady();
+      return;
+    }
+    if (result.type === "operator_skills" && this.#initialized) {
+      const value = this.#parseSkills(result.value);
+      for (const listener of this.#skillListeners) listener(value);
       return;
     }
     if (!this.#initialized || typeof result.id !== "string") { this.close(); return; }
@@ -61,8 +70,19 @@ export class WorkerSupervisorClient {
     this.#pending.delete(result.id);
     pending.cleanup();
     if (result.type === "result") pending.resolve(result.value);
-    else pending.reject(new Error("SUPERVISOR_OPERATION_FAILED"));
+    else pending.reject(new Error(result.code === "OPERATOR_SKILLS_CHANGED"
+      ? "OPERATOR_SKILLS_CHANGED: administrator skills changed; this call was cancelled. Start a new turn to use current skills."
+      : "SUPERVISOR_OPERATION_FAILED"));
   };
+
+  #parseSkills(result: unknown): OperatorSkillRevision {
+    if (!result || typeof result !== "object") throw unavailable();
+    const value = result as OperatorSkillRevision;
+    if (!Number.isSafeInteger(value.revision) || value.revision < 0 || !Array.isArray(value.paths)
+      || value.paths.some(path => typeof path !== "string" || !isAbsolute(path))
+      || (value.error !== undefined && value.error !== "UNSAFE_OPERATOR_SKILL")) throw unavailable();
+    return { revision: value.revision, paths: [...value.paths], ...(value.error ? { error: value.error } : {}) };
+  }
 
   #send(message: object): void {
     try { this.channel.send(message, error => { if (error) this.close(); }); }
@@ -134,7 +154,11 @@ export class WorkerSupervisorClient {
     return {
       agentDir: initial.agentDir, memoryStateDirectory: initial.stateDir, trustedSkillPaths: [...paths.trustedSkillPaths],
       providerPythonModuleDirectory: paths.providerPythonModuleDirectory,
-      resolveWorker: async workspace => {
+      ...(this.#liveSkills ? { operatorSkills: {
+        current: async () => this.#parseSkills(await this.#request({ type: "skills" })),
+        subscribe: (listener: (state: OperatorSkillRevision) => void) => { this.#skillListeners.add(listener); return () => { this.#skillListeners.delete(listener); }; },
+      } } : {}),
+      resolveWorker: async (workspace, skillRevision) => {
         check();
         const canonical = resolve(workspace);
         // Only immediate workspaces belong to this profile. Root provisioning
@@ -152,7 +176,7 @@ export class WorkerSupervisorClient {
           assertIsolated: async () => { check(); await this.#request({ type: "assert", token: lease.token }); check(); },
           execute: async (name, parameters, signal, update) => {
             check();
-            const value = await this.#request({ type: "execute", token: lease.token, name, parameters }, signal, update);
+            const value = await this.#request({ type: "execute", token: lease.token, name, parameters, skillRevision: skillRevision?.() }, signal, update);
             check();
             return value;
           },
@@ -170,6 +194,7 @@ export class WorkerSupervisorClient {
   close = (): void => {
     if (this.#closed) return;
     this.#closed = true;
+    this.#skillListeners.clear();
     clearTimeout(this.#startupTimer);
     this.#rejectReady(unavailable());
     this.channel.off("message", this.#receive);

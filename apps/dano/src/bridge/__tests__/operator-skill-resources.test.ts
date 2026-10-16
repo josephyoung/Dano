@@ -1,0 +1,34 @@
+import { afterEach, expect, it } from "vitest";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { operatorSkillResources } from "../operator-skill-resources.js";
+import { snapshotOperatorSkills } from "../operator-skill-snapshot.js";
+const cleanups: Array<() => Promise<void> | void> = [];
+afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
+
+it("refreshes two live Pi resource caches and clears retired discovery immediately", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "skill-resources-")));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const installation = join(root, "installation"), source = join(root, "skills");
+  await mkdir(installation); await mkdir(source);
+  const publication = await snapshotOperatorSkills(installation, [source], process.getuid!());
+  cleanups.push(publication.cleanup);
+  const client = { current: publication.refresh, subscribe: publication.subscribe };
+  const first = await operatorSkillResources(client, root, root), second = await operatorSkillResources(client, root, root);
+  cleanups.push(first.dispose, second.dispose);
+  expect(first.getSkills().skills).toEqual([]);
+  await mkdir(join(source, "example"));
+  await writeFile(join(source, "example/SKILL.md"), "---\nname: example\ndescription: version A\n---\nRun the script.\n");
+  await first.refresh(); await second.refresh();
+  expect(first.getSkills().skills[0]?.description).toBe("version A");
+  const old = first.getSkills().skills[0]!.filePath;
+  await writeFile(join(source, "example/SKILL.md"), "---\nname: example\ndescription: version B\n---\nRun the new script.\n");
+  await publication.refresh();
+  await first.refresh(); await second.refresh();
+  expect(second.getSkills().skills[0]?.description).toBe("version B");
+  expect(first.getSkills().skills[0]!.filePath).not.toBe(old);
+  await rm(join(source, "example"), { recursive: true });
+  await first.refresh(); await second.refresh();
+  expect(first.getSkills().skills).toEqual([]); expect(second.getSkills().skills).toEqual([]);
+});
