@@ -51,6 +51,8 @@ describe("application-only deployment artifacts", () => {
     f.put("apps/dano/src/main.ts", "dirty");
     expect(() => helper.buildRuntimeArtifacts(f.repo, f.base, f.base, join(f.root, "out"))).toThrow("CLEAN_TARGET_CHECKOUT_REQUIRED");
     const target = f.commit();
+    const alias = join(f.root, "repo-alias"); symlinkSync(f.repo, alias);
+    expect(() => helper.buildRuntimeArtifacts(f.repo, f.base, target, join(alias, "out"))).toThrow("NEW_EXTERNAL_OUTPUT_REQUIRED");
     expect(() => helper.buildRuntimeArtifacts(f.repo, f.base, target, join(f.repo, "out"))).toThrow("NEW_EXTERNAL_OUTPUT_REQUIRED");
     const cli = spawnSync(process.execPath, [new URL("../../../../../.agents/skills/dano-production-deploy/scripts/runtime-artifacts.mjs", import.meta.url).pathname, "build", f.base, target, join(f.root, "out")], { cwd: f.repo, encoding: "utf8", env: { ...process.env, NODE_PATH: "" } });
     expect(cli.status).toBe(2);

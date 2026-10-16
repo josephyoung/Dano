@@ -3,8 +3,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 function run(command, args, cwd, code = "COMMAND_FAILED", privateLog) {
@@ -70,10 +70,11 @@ export function inventoryArtifacts(directory) {
   return files;
 }
 export function buildRuntimeArtifacts(cwd, base, target, output) {
+  cwd = realpathSync(cwd);
   const plan = planRuntimeArtifacts(cwd, base, target);
   if (!plan.eligible) throw new Error("RUNTIME_INPUTS_CHANGED");
   cleanTarget(cwd, target);
-  output = resolve(output);
+  output = join(realpathSync(dirname(resolve(output))), basename(resolve(output)));
   if (output === cwd || output.startsWith(cwd + sep) || existsSync(output)) throw new Error("NEW_EXTERNAL_OUTPUT_REQUIRED");
   if (existsSync(output + ".tar.gz")) throw new Error("ARCHIVE_EXISTS");
   // Reject an ABI mismatch before spending time on a build or a full test suite.
