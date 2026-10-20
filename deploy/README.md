@@ -320,9 +320,15 @@ rejecting symlinks and foreign owners. Legacy content adoption excludes managed
 upload storage. Managed upload files retain host ownership and worker group
 read/write access (`0660`), including existing private files previously adopted
 by that worker. Repair rejects symlinks, hard links and foreign file owners.
-Anonymous login transfer prepares the target's default and incoming named
-workspaces through the trusted supervisor before copying any files, while the
-existing user mutation barrier is held. This preparation uses the same dynamic
+OAuth login authenticates the User and opens a new chat without transferring
+anonymous messages, files, uploads or preferences. Runtime activity in either
+User context and workspace permissions must not block authentication. Anonymous
+data remains in its own namespace and follows the existing cleanup lifecycle.
+
+The internal ownership-transfer helper prepares the target's default and incoming
+named workspaces through the trusted supervisor before copying any files, while
+the existing user mutation barrier is held. OAuth login does not call this helper.
+This preparation uses the same dynamic
 identity and managed-upload rules without starting a backend or worker. It also
 works when the target has only persisted data and no runtime in this process.
 Preparation failures leave ownership uncommitted; transfer failures continue

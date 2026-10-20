@@ -455,7 +455,6 @@ export async function createOAuthAuthentication(
           redirectUri: redirectUri.href,
           provider: options.provider,
           encryptionKey: options.credentialEncryptionKey,
-          usersRootPath,
           now,
           stateTtlMs,
           sessionIdleTtlMs,
@@ -555,9 +554,6 @@ export async function createOAuthAuthentication(
       const browserBinding =
         guestBinding ?? existingFlowBinding ?? randomOpaqueId();
       const browserBindingHash = digest(browserBinding);
-      const anonymousUser = guestBinding
-        ? await lifecycle.resolveAnonymousUser(req.headers)
-        : null;
       const currentLoginSessionId = readCookie(
         req.headers.cookie,
         LOGIN_COOKIE_NAME,
@@ -586,9 +582,6 @@ export async function createOAuthAuthentication(
               version: 1,
               browserBindingHash,
               returnTo,
-              ...(anonymousUser
-                ? { anonymousUserId: anonymousUser.user.id }
-                : {}),
               ...(replacedLoginSessionId
                 ? { replacedLoginSessionId }
                 : {}),
@@ -636,7 +629,6 @@ interface StoredLoginTransaction {
   readonly version: 1;
   readonly browserBindingHash: string;
   readonly returnTo: string;
-  readonly anonymousUserId?: string;
   readonly replacedLoginSessionId?: string;
   readonly createdAt: number;
 }
@@ -681,7 +673,6 @@ async function handleCallback(
     redirectUri: string;
     provider: OAuthProviderAdapter;
     encryptionKey: OAuthAuthenticationOptions["credentialEncryptionKey"];
-    usersRootPath: string;
     now: () => number;
     stateTtlMs: number;
     sessionIdleTtlMs: number;
@@ -783,17 +774,8 @@ async function handleCallback(
       }
     });
     try {
-      if (consumed.transaction.anonymousUserId) {
-        stage = "anonymous_transfer";
-        await options.lifecycle.transferAnonymousUser(
-          req.headers,
-          consumed.transaction.anonymousUserId,
-          {
-            user,
-            folderPath: await ensureUserFolder(options.usersRootPath, user.id),
-          },
-        );
-      }
+      // Authentication must not wait for runtime activity or move guest data.
+      // The authenticated browser starts a new chat in its own User context.
       stage = "session_rotation";
       const replacedLoginSessionId =
         consumed.transaction.replacedLoginSessionId;
@@ -993,8 +975,6 @@ function parseLoginTransaction(serialized: string): StoredLoginTransaction {
     value.version !== 1 ||
     typeof value.browserBindingHash !== "string" ||
     typeof value.returnTo !== "string" ||
-    (value.anonymousUserId !== undefined &&
-      typeof value.anonymousUserId !== "string") ||
     (value.replacedLoginSessionId !== undefined &&
       (typeof value.replacedLoginSessionId !== "string" ||
         !OPAQUE_ID_PATTERN.test(value.replacedLoginSessionId))) ||
