@@ -1288,7 +1288,7 @@ describe("OAuth authentication over HTTP", () => {
     expect(cookieFrom(callback, "dano_login")).toMatch(/^dano_login=/);
   });
 
-  it("prepares a cold target during the OAuth callback before committing an anonymous upload", async () => {
+  it("authenticates without preparing a cold workspace or transferring an anonymous upload", async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dano-cold-oauth-target-"))); runtimeRoots.push(root);
     const targetId = oauthUserId("cold-target");
     const workspace = path.join(root, "users", targetId, "workspaces", "default");
@@ -1309,127 +1309,49 @@ describe("OAuth authentication over HTTP", () => {
     const state = new URL(started.headers.get("location")!).searchParams.get("state")!;
     const callback = await fetch(`${origin}/api/auth/callback?code=fixture&state=${state}`, { headers: { Cookie: cookie }, redirect: "manual" });
     const login = cookieFrom(callback, "dano_login");
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(fs.readFileSync(path.join(workspace, "uploads", path.basename(uploaded.path)), "utf8")).toBe("synthetic cold upload");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(workspace, "uploads", path.basename(uploaded.path)))).toBe(false);
+    expect(fs.readFileSync(uploaded.path, "utf8")).toBe("synthetic cold upload");
     expect(fs.readFileSync(path.join(workspace, "uploads", "existing.txt"), "utf8")).toBe("preserved");
     const current = await fetch(`${origin}/api/auth/current`, { headers: { Cookie: login } });
     expect(await current.json()).toMatchObject({ status: "authenticated" });
   });
 
-  it("atomically transfers only the callback-bound Anonymous User data before login", async () => {
-    let now = 1_000;
-    const provider = successfulProvider("transfer-owner", "transfer-token");
-    const { origin } = await startOAuthServer(provider, undefined, {}, {
-      idleTtlMs: 1_000,
-      intervalMs: 10,
-      now: () => now,
-    });
+  it("keeps anonymous files and preferences separate from the authenticated User", async () => {
+    const { origin } = await startOAuthServer(successfulProvider("separate-owner", "fixture-token"));
     const anonymous = await fetch(`${origin}/api/clients`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
     });
-    const anonymousBody = (await anonymous.json()) as {
-      client: { id: string };
-      defaultWorkspacePath: string;
-    };
-    const guestCookie = cookieFrom(anonymous, "dano_guest");
-    fs.writeFileSync(
-      path.join(anonymousBody.defaultWorkspacePath, "guest-note.txt"),
-      "owned by the callback guest",
-      "utf8",
-    );
-    const savedPreference = await fetch(
-      `${origin}/api/clients/${anonymousBody.client.id}/preferences/theme`,
-      {
-        method: "PUT",
-        headers: {
-          Cookie: guestCookie,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ accentColorPreset: "purple" }),
-      },
-    );
-    expect(savedPreference.status).toBe(200);
-
-    const started = await fetch(`${origin}/api/auth/login?returnTo=/chat`, {
-      headers: { Cookie: guestCookie },
-      redirect: "manual",
+    const guest = await anonymous.json() as TestBridgeClient;
+    const cookie = cookieFrom(anonymous, "dano_guest");
+    const note = path.join(guest.defaultWorkspacePath, "guest-note.txt");
+    fs.writeFileSync(note, "guest remains owner", { mode: 0o600 });
+    await fetch(`${origin}/api/clients/${guest.client.id}/preferences/theme`, {
+      method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ accentColorPreset: "purple" }),
     });
-    const state = new URL(started.headers.get("location")!).searchParams.get(
-      "state",
-    )!;
-    const callback = await fetch(
-      `${origin}/api/auth/callback?code=fixture&state=${state}`,
-      { headers: { Cookie: guestCookie }, redirect: "manual" },
-    );
-    const loginCookie = cookieFrom(callback, "dano_login");
-    const authenticated = await fetch(`${origin}/api/clients`, {
-      method: "POST",
-      headers: { Cookie: loginCookie, "Content-Type": "application/json" },
-      body: "{}",
+    const started = await fetch(`${origin}/api/auth/login`, { headers: { Cookie: cookie }, redirect: "manual" });
+    const state = new URL(started.headers.get("location")!).searchParams.get("state")!;
+    const callback = await fetch(`${origin}/api/auth/callback?code=fixture&state=${state}`, {
+      headers: { Cookie: cookie }, redirect: "manual",
     });
-    const authenticatedBody = (await authenticated.json()) as {
-      client: { id: string };
-      defaultWorkspacePath: string;
-    };
-
-    expect(authenticated.status).toBe(201);
-    expect(
-      fs.readFileSync(
-        path.join(authenticatedBody.defaultWorkspacePath, "guest-note.txt"),
-        "utf8",
-      ),
-    ).toBe("owned by the callback guest");
-    const transferredPreference = await fetch(
-      `${origin}/api/clients/${authenticatedBody.client.id}/preferences/theme`,
-      { headers: { Cookie: loginCookie } },
-    );
-    expect(await transferredPreference.json()).toEqual({
-      accentColorPreset: "purple",
+    const login = cookieFrom(callback, "dano_login");
+    expect(callback.headers.get("location")).toBe("/?dano_new_chat=1");
+    const authenticated = await createAuthenticatedClient(origin, login);
+    expect(fs.existsSync(path.join(authenticated.defaultWorkspacePath, "guest-note.txt"))).toBe(false);
+    expect(fs.readFileSync(note, "utf8")).toBe("guest remains owner");
+    const preference = await fetch(`${origin}/api/clients/${authenticated.client.id}/preferences/theme`, {
+      headers: { Cookie: login },
     });
-
-    const staleGuest = await fetch(`${origin}/api/clients`, {
-      method: "POST",
-      headers: { Cookie: guestCookie, "Content-Type": "application/json" },
-      body: "{}",
+    expect(preference.status).toBe(200);
+    expect(await preference.json()).not.toEqual({ accentColorPreset: "purple" });
+    const guestStillUsable = await fetch(`${origin}/api/clients/${guest.client.id}/preferences/theme`, {
+      headers: { Cookie: cookie },
     });
-    const staleGuestBody = (await staleGuest.json()) as {
-      client: { id: string };
-      defaultWorkspacePath: string;
-    };
-    expect(staleGuest.headers.get("set-cookie")).toMatch(/^dano_guest=/);
-    expect(staleGuestBody.defaultWorkspacePath).not.toBe(
-      authenticatedBody.defaultWorkspacePath,
-    );
-    expect(
-      fs.existsSync(path.join(staleGuestBody.defaultWorkspacePath, "guest-note.txt")),
-    ).toBe(false);
-    await fetch(
-      `${origin}/api/clients/${authenticatedBody.client.id}/disconnect`,
-      { method: "POST", headers: { Cookie: loginCookie }, body: "{}" },
-    );
-    const replacementGuestCookie = cookieFrom(staleGuest, "dano_guest");
-    await fetch(`${origin}/api/clients/${staleGuestBody.client.id}/disconnect`, {
-      method: "POST",
-      headers: { Cookie: replacementGuestCookie },
-      body: "{}",
-    });
-    now = 2_001;
-    await vi.waitFor(
-      () =>
-        expect(fs.existsSync(staleGuestBody.defaultWorkspacePath)).toBe(false),
-      { timeout: 2_000, interval: 10 },
-    );
-    expect(
-      fs.readFileSync(
-        path.join(authenticatedBody.defaultWorkspacePath, "guest-note.txt"),
-        "utf8",
-      ),
-    ).toBe("owned by the callback guest");
+    expect(guestStillUsable.status).toBe(200);
   });
 
-  it("rolls back a failed Anonymous User transfer and keeps the guest usable", async () => {
+  it("logs in despite an unavailable anonymous upload and keeps existing sessions usable", async () => {
     const diagnostic = vi.spyOn(console, "warn").mockImplementation(() => {});
     const externalUserId = "rollback-owner";
     const revoked: string[] = [];
@@ -1477,20 +1399,15 @@ describe("OAuth authentication over HTTP", () => {
       { headers: { Cookie: guestCookie }, redirect: "manual" },
     );
 
-    const failure = await fetch(`${origin}/api/auth/current`, {
-      headers: { Cookie: cookieFrom(callback, "dano_auth_error") },
+    const current = await fetch(`${origin}/api/auth/current`, {
+      headers: { Cookie: cookieFrom(callback, "dano_login") },
     });
-    expect(await failure.json()).toMatchObject({ loginError: { code: "user_data_transfer_failed" } });
-    expect(callback.headers.get("set-cookie")).toMatch(
-      /^dano_auth_error=[A-Za-z0-9_-]{43};/,
-    );
+    expect(await current.json()).toMatchObject({ status: "authenticated" });
     expect(revoked).toEqual([]);
-    expect(diagnostic).toHaveBeenCalledWith("OAuth login failed", expect.objectContaining({
-      stage: "anonymous_transfer",
-    }));
+    expect(diagnostic).not.toHaveBeenCalled();
     expect(
       fs.readdirSync(path.join(runtimeRootPath, "auth", "login-sessions")),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       await (
         await fetch(`${origin}/api/auth/current`, {
@@ -1662,7 +1579,7 @@ describe("OAuth authentication over HTTP", () => {
     ).toMatchObject({ status: "authenticated" });
   });
 
-  it("merges guest sessions without replacing an authenticated User's existing data", async () => {
+  it("does not merge anonymous sessions or uploads into an existing authenticated User", async () => {
     const provider = successfulProvider("merge-owner", "merge-token");
     const { origin, runtimeRootPath } = await startOAuthServer(provider);
     const existingLoginCookie = await completeLogin(origin, "existing-login");
@@ -1794,25 +1711,14 @@ describe("OAuth authentication over HTTP", () => {
         "utf8",
       ),
     ).toBe("authenticated value");
-    expect(
-      fs.readFileSync(
-        path.join(
-          existingClient.defaultWorkspacePath,
-          "shared.anonymous-1.txt",
-        ),
-        "utf8",
-      ),
-    ).toBe("guest value");
-    expect(
-      fs.readFileSync(
-        path.join(existingClient.defaultWorkspacePath, "binary.bin"),
-      ),
-    ).toEqual(binaryValue);
-    const mergedPreference = await fetch(
+    expect(fs.existsSync(path.join(existingClient.defaultWorkspacePath, "shared.anonymous-1.txt"))).toBe(false);
+    expect(fs.existsSync(path.join(existingClient.defaultWorkspacePath, "binary.bin"))).toBe(false);
+    expect(fs.readFileSync(path.join(guestClient.defaultWorkspacePath, "binary.bin"))).toEqual(binaryValue);
+    const preservedPreference = await fetch(
       `${origin}/api/clients/${existingClient.client.id}/preferences/theme`,
       { headers: { Cookie: existingLoginCookie } },
     );
-    expect(await mergedPreference.json()).toEqual({
+    expect(await preservedPreference.json()).toEqual({
       accentColorPreset: "blue",
     });
     expect(
@@ -1828,7 +1734,7 @@ describe("OAuth authentication over HTTP", () => {
       existingClient,
       existingLoginCookie,
       {
-        id: "merged-sessions",
+        id: "preserved-sessions",
         type: "list_sessions",
         workspacePath: existingClient.defaultWorkspacePath,
       },
@@ -1836,7 +1742,7 @@ describe("OAuth authentication over HTTP", () => {
     const sessionPaths = (
       sessions.payload as { data?: { sessions?: Array<{ path: string }> } }
     ).data?.sessions?.map(session => session.path) ?? [];
-    expect(sessionPaths).toHaveLength(2);
+    expect(sessionPaths).toHaveLength(1);
     expect(
       sessionPaths.map(sessionPath =>
         (JSON.parse(fs.readFileSync(sessionPath, "utf8")) as { id: string }).id,
@@ -1844,7 +1750,6 @@ describe("OAuth authentication over HTTP", () => {
     ).toEqual(
       expect.arrayContaining([
         existingSession?.sessionId,
-        guestSession?.sessionId,
       ]),
     );
     expect(
@@ -1866,17 +1771,15 @@ describe("OAuth authentication over HTTP", () => {
           upload: { id: string; ownerUserId: string; path: string };
         },
       );
-    const transferredUpload = uploadRecords.find(
+    const retainedUpload = uploadRecords.find(
       record => record.upload.id === guestUpload.id,
     )?.upload;
-    expect(transferredUpload).toMatchObject({
+    expect(retainedUpload).toMatchObject({
       id: guestUpload.id,
-      ownerUserId: expect.stringMatching(/^oauth_/),
+      ownerUserId: expect.not.stringMatching(/^oauth_/),
     });
-    expect(transferredUpload?.path.startsWith(existingClient.defaultWorkspacePath)).toBe(
-      true,
-    );
-    expect(fs.readFileSync(transferredUpload!.path, "utf8")).toBe(
+    expect(retainedUpload?.path).toBe(guestUpload.path);
+    expect(fs.readFileSync(retainedUpload!.path, "utf8")).toBe(
       "guest upload keeps its resource id",
     );
   });
