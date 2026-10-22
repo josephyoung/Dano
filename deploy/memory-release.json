@@ -1,5 +1,5 @@
 {
-  "danoVersion": "1.0.15",
+  "danoVersion": "1.0.16",
   "piOpenVikingVersion": "0.1.21",
   "openVikingVersion": "v0.4.20",
   "openVikingImage": "ghcr.io/volcengine/openviking:v0.4.20@sha256:b9827753d035f4157b5b318865907fd18f738924ad6398c86feb1182f209825b",
@@ -17,7 +17,8 @@
     "modelFile": "bge-small-zh-v1.5-f16.gguf",
     "modelName": "bge-small-zh-v1.5-f16",
     "modelSha256": "ab9b81d9cd329c712eee379cf0068eabe6a5e2a01d0def61535eba9384085e2c",
-    "dimension": 512
+    "dimension": 512,
+    "maxInputTokens": 100
   },
   "reranker": {
     "imageVersion": "b11118",
