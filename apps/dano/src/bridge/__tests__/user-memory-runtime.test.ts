@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withUserMemory, type UserMemoryRuntime, type UserMemoryServices } from "../user-memory-runtime.js";
 import type { ProtectedSessionTools } from "../protected-session-tools.js";
-import { FileStateStore, DeliveryScheduler, CollectionSessionRegistry, CollectionLifecycle, CollectionScheduler, MemoryDelivery } from "@josephyoung/pi-openviking/host";
+import { FileStateStore, DeliveryScheduler, CollectionSessionRegistry, CollectionLifecycle, CollectionScheduler, MemoryDelivery, MemoryGovernanceBarrier, MemoryGovernanceScheduler } from "@josephyoung/pi-openviking/host";
 import { LazyMemoryClient } from "../lazy-memory-client.js";
 import { oauthUserId } from "../oauth-user-id.js";
 
@@ -51,6 +52,110 @@ function bind(profile: ProtectedSessionTools, worker: Awaited<ReturnType<Protect
   profile.createMemoryExtension!(worker.workspace, worker)(pi);
   return { handlers, tools };
 }
+
+const recallContext = { model: { provider: "fixture", api: "openai-completions", id: "fixture-model" } };
+
+it("exposes owner-bound explicit recall and filters results using the configured score and token budget", async () => {
+  const h = await harness();
+  const profile = await h.start();
+  const seenOwners: string[] = [];
+  const recall = vi.spyOn(LazyMemoryClient.prototype, "recall").mockImplementation(async function (this: LazyMemoryClient) {
+    seenOwners.push(this.owner.userId);
+    return [{ uri: "memory/valid", text: "资料申请：用途=季度复盘", score: 0.9 },
+      { uri: "memory/weak", text: "irrelevant", score: 0.1 },
+      { uri: "memory/large", text: "x".repeat(2000), score: 0.9 }];
+  });
+  const tool = bind(profile, h.worker).tools.get("memory_recall");
+  const response = await tool.execute("recall", { query: "  资料申请 用途  ", userId: "bob" }, undefined, undefined, recallContext);
+  expect(recall).toHaveBeenCalledWith("资料申请 用途", 5, expect.any(AbortSignal));
+  expect(seenOwners).toEqual(["alice"]);
+  expect(response.details).toMatchObject({ status: "ok", memories: [{ source: "memory/valid", text: "资料申请：用途=季度复盘" }] });
+  expect(JSON.parse(response.content[0].text)).toEqual(response.details);
+  expect(JSON.stringify(response)).not.toContain("irrelevant");
+});
+
+it("keeps paused recall offline and discards results when authorization changes during retrieval", async () => {
+  const h = await harness();
+  const profile = await h.start();
+  const recall = vi.spyOn(LazyMemoryClient.prototype, "recall").mockResolvedValue([]);
+  const tool = bind(profile, h.worker).tools.get("memory_recall");
+  await profile.memory!.setEnabled(false);
+  const blocked = await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext);
+  expect(blocked.details.status).toBe("blocked");
+  expect(recall).not.toHaveBeenCalled();
+  await profile.memory!.setEnabled(true);
+  recall.mockImplementation(async () => {
+    await profile.memory!.setEnabled(false);
+    return [{ uri: "memory/stale", text: "private late result", score: 1 }];
+  });
+  const late = await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext);
+  expect(late.details.status).toBe("blocked");
+  expect(JSON.stringify(late)).not.toContain("private late result");
+});
+
+it("bounds stalled recall and sanitizes service errors without blocking ordinary tools", async () => {
+  const h = await harness();
+  const profile = await h.start();
+  const recall = vi.spyOn(LazyMemoryClient.prototype, "recall").mockImplementation(() => new Promise(() => {}));
+  const tool = bind(profile, h.worker).tools.get("memory_recall");
+  const timedOut = await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext);
+  expect(timedOut.details).toEqual({ status: "blocked", errorCode: "MEMORY_RECALL_UNAVAILABLE" });
+  recall.mockRejectedValue(new Error("private credentials and service URL"));
+  const failed = await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext);
+  expect(failed.details).toEqual(timedOut.details);
+  expect(await profile.resolveWorker(h.workspace)).toBe(h.worker);
+});
+
+it("blocks explicit recall during governance and retirement without reading remote memory", async () => {
+  vi.spyOn(MemoryGovernanceScheduler.prototype, "start").mockImplementation(() => {});
+  const h = await harness();
+  const profile = await h.start();
+  const store = new FileStateStore({ owner: { accountId: "account", userId: "alice" }, directory: join(h.profile.memoryStateDirectory!, "memory"), policyVersion: "v1" });
+  const recall = vi.spyOn(LazyMemoryClient.prototype, "recall").mockResolvedValue([]);
+  const tool = bind(profile, h.worker).tools.get("memory_recall");
+  await new MemoryGovernanceBarrier(store).begin({ kind: "clear", scope: null });
+  expect((await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext)).details.status).toBe("blocked");
+  await store.transact(state => {
+    for (const job of Object.values(state.governance!.jobs)) job.phase = "complete";
+    state.authorization.enabled = false;
+    state.authorization.automaticCollection = false;
+    state.retirement = { id: randomUUID(), phase: "requested", requestedAt: new Date().toISOString() };
+  });
+  expect((await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext)).details.status).toBe("blocked");
+  expect(recall).not.toHaveBeenCalled();
+});
+
+it("does not retrieve on cancellation or shutdown and distinguishes no matches from failure", async () => {
+  const h = await harness();
+  const profile = await h.start();
+  const recall = vi.spyOn(LazyMemoryClient.prototype, "recall").mockResolvedValue([]);
+  const bound = bind(profile, h.worker);
+  const tool = bound.tools.get("memory_recall");
+  const empty = await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext);
+  expect(empty.details).toMatchObject({ status: "ok", memories: [] });
+  recall.mockClear();
+  const cancelled = await tool.execute("recall", { query: "资料申请" }, AbortSignal.abort(), undefined, recallContext);
+  expect(cancelled.details.status).toBe("blocked");
+  bound.handlers.get("session_shutdown")!({});
+  const stopped = await tool.execute("recall", { query: "资料申请" }, undefined, undefined, recallContext);
+  expect(stopped.details.status).toBe("blocked");
+  expect(recall).not.toHaveBeenCalled();
+});
+
+it("saves submitted form data even when it is not a substring of the latest user message", async () => {
+  const h = await harness();
+  vi.spyOn(DeliveryScheduler.prototype, "start").mockImplementation(() => {});
+  vi.spyOn(DeliveryScheduler.prototype, "wake").mockImplementation(() => {});
+  const profile = await h.start();
+  const session = SessionManager.inMemory();
+  session.appendMessage({ role: "user", content: "帮我申请资料", timestamp: Date.now() });
+  const content = "资料申请技能；历史表单填写记录；purpose=季度复盘；category=report；编号=云汀201";
+  const response = await bind(profile, h.worker).tools.get("memory_save").execute("save", { content }, undefined, undefined, { sessionManager: session });
+  expect(response.details).toMatchObject({ status: "queued", remembered: false });
+  const state = await new FileStateStore({ owner: { accountId: "account", userId: "alice" }, directory: join(h.profile.memoryStateDirectory!, "memory"), policyVersion: "v1" }).read();
+  expect(Object.values(state.operations)).toHaveLength(1);
+  expect(Object.values(state.operations)[0]!.payload).toBe(content);
+});
 
 it("ignores late settlement from an invalidated pi context without losing another session's provenance", async () => {
   const h = await harness();

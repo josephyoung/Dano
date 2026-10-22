@@ -33,6 +33,7 @@ const guide = fs.readFileSync(
 );
 
 const requiredCapabilities = [
+  "default.memory-prefill",
   "file.single", "file.grouped", "file.no-default", "file.optional-empty", "file.path-result",
   "call.single",
   "call.grouped",
@@ -252,7 +253,7 @@ describe("backend Skill-generator ask_user_question guide", () => {
       const exampleId = key.slice(0, 3);
       const expected = block<AskUserQuestionCardRequest>(blocks, `${exampleId}:card`);
       expect(
-        normalizeAskUserQuestionCardRequest(request, { requireDefault: true }),
+        normalizeAskUserQuestionCardRequest(request),
         exampleId,
       ).toEqual(expected);
     }
