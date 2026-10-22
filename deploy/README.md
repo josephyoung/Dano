@@ -26,6 +26,23 @@ For an opt-in deployment, provision these distinct resources before Compose:
   `embedding.dense`. The fixed candidate uses `embedding.dense.provider` =
   `openai`, `api_base` = `http://embedding:8080/v1`, the manifest's model name
   and dimension, and `encoding_format` = `float`.
+  Set `embedding.max_input_tokens` to the manifest's `embedding.maxInputTokens`.
+  The pinned BGE service accepts a physical batch of 512 tokens; OpenViking's
+  default estimate of 4096 can produce HTTP 500 even for ordinary form records.
+  The conservative input budget covers mixed identifiers and Chinese text using
+  OpenViking's native input guard. It bounds vectorization text, not stored memory
+  content, and does not change the model, vector dimension or existing index.
+  Install the release's `deploy/openviking-memory/form_records.yaml` as
+  `memory-templates/form_records.yaml` under this private config directory (0700
+  directory, 0600 file), and set `memory.custom_templates_dir` to
+  `/etc/openviking/memory-templates`. This uses OpenViking's native additional
+  user-memory schema and leaves built-in types intact. Preserve any pre-existing
+  custom templates; reconcile their configuration before changing the directory.
+  The form type preserves submitted trial/temporary answers as historical data
+  rather than inferring permanent preferences or actual OA execution. Updates
+  merge only supplied fields within the same skill/action; explicit clearing is
+  retained. The LLM still performs extraction and merging; validate actual ready
+  receipts and fresh-session defaults, not just schema loading.
   Do not put this config, its key, or model credentials in source, image,
   Compose environment, or a command line.
 - A read-only model asset directory `DANO_OPENVIKING_MODELS_DIR` for the
@@ -41,6 +58,12 @@ For an opt-in deployment, provision these distinct resources before Compose:
   different paths. The private Dano `memory-service.json` must name
   `http://openviking:1933` as its origin and retain the management-key and
   encryption-key versions across restart and recovery.
+  Configure a bounded delivery window long enough for real extraction: with
+  `pollIntervalMs=500`, `initialBackoffMs=1000`, `maxBackoffMs=5000`, use
+  `scheduler.maxAttemptsPerPhase=60` (approximately five minutes). Five attempts
+  exhausted in about twenty seconds during acceptance, before a successful
+  37-second extraction finished. The limit remains finite; exhausted requests
+  are not successful saves.
   For this candidate its private `reranker` object must set `url` to
   `http://reranker:8080/v1/rerank`, `model` to the manifest model name,
   `minimumLogit` to `0`, `timeoutMs` to `900`, `maxInputBytes` to `16384`,

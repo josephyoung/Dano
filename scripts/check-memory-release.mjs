@@ -57,7 +57,8 @@ try {
   "embedding image platform matrix is incomplete");
   assert(/^[A-Za-z0-9._-]+\.gguf$/u.test(release.embedding.modelFile) &&
     /^[a-f0-9]{64}$/u.test(release.embedding.modelSha256) &&
-    Number.isSafeInteger(release.embedding.dimension) && release.embedding.dimension > 0,
+    Number.isSafeInteger(release.embedding.dimension) && release.embedding.dimension > 0 &&
+    Number.isSafeInteger(release.embedding.maxInputTokens) && release.embedding.maxInputTokens >= 100,
   "embedding model manifest is incomplete");
   assert(release.reranker?.image === release.embedding.image &&
     JSON.stringify(release.reranker.platformDigests) === JSON.stringify(release.embedding.platformDigests) &&
@@ -102,8 +103,17 @@ try {
       config.embedding.dense.model === release.embedding.modelName &&
       config.embedding.dense.dimension === release.embedding.dimension &&
       config.embedding.dense.api_base === "http://embedding:8080/v1" &&
-      config.embedding.dense.encoding_format === "float",
+      config.embedding.dense.encoding_format === "float" &&
+      config.embedding.max_input_tokens === release.embedding.maxInputTokens,
     "OpenViking embedding service config differs from memory release");
+    assert(config.memory?.custom_templates_dir === "/etc/openviking/memory-templates",
+      "OpenViking form memory templates are not configured");
+    const templates = join(canonicalConfigDirectory, "memory-templates");
+    await privatePath(templates, true);
+    const formSchema = join(templates, "form_records.yaml");
+    await privatePath(formSchema, false);
+    assert(await sha256(formSchema) === await sha256(join(root, "deploy/openviking-memory/form_records.yaml")),
+      "OpenViking form memory schema differs from the release");
     const modelRoot = await realpath(modelsDirectory);
     const actual = await realpath(join(modelRoot, release.embedding.modelFile));
     assert(actual.startsWith(`${modelRoot}${sep}`) && (await lstat(actual)).isFile(),
