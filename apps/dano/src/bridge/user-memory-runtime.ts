@@ -20,6 +20,7 @@ import { MemoryTaskFacts, type ProviderTaskFactInput } from "./memory-task-facts
 import { memoryWriterClassifier } from "./memory-writer-classifier.js";
 import { MemoryRecoveryJournal, RecoveryStateStore } from "./memory-recovery-journal.js";
 import { registerMemoryRecall } from "./memory-recall-tool.js";
+import { registerMemoryAcceptanceTrace } from "./memory-acceptance-trace.js";
 import type { GovernanceStateStore } from "@josephyoung/pi-openviking/host";
 
 type SchedulerPolicy = Omit<ConstructorParameters<typeof DeliveryScheduler>[0], "store" | "delivery">;
@@ -183,6 +184,7 @@ export class UserMemoryRuntime implements UserMemoryControls {
       memory(pi);
       registerMemoryRecall(pi, { client: this.#client, stateStore: this.#store, policy: this.#options.policy,
         scope: this.#client.scope, assertToolIsolation: async () => { this.#assertOpen(); await worker.assertIsolated(); } });
+      registerMemoryAcceptanceTrace(pi, this.#stateDirectory);
     }) satisfies ReturnType<typeof createOpenVikingExtension>;
   }
 
