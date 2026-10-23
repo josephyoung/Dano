@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -7,12 +7,12 @@ import { registerMemoryAcceptanceTrace } from "../memory-acceptance-trace.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
-async function fixture() {
+async function fixture(useFile = false) {
   const directory = await mkdtemp(join(tmpdir(), "memory-trace-")); directories.push(directory);
   const handlers = new Map<string, (event: any, ctx: any) => Promise<unknown>>();
   const records: unknown[] = [];
   registerMemoryAcceptanceTrace({ on: (name: string, handler: any) => handlers.set(name, handler) } as unknown as ExtensionAPI,
-    directory, record => records.push(record));
+    directory, useFile ? undefined : record => records.push(record));
   const ctx = (sessionId: string) => ({ sessionManager: { getSessionId: () => sessionId } });
   const arm = (extra = {}) => writeFile(join(directory, "acceptance-trace.json"), JSON.stringify({
     runId: "trace-test", sessionId: "target-session", expiresAt: new Date(Date.now() + 60_000).toISOString(), ...extra,
@@ -37,6 +37,24 @@ it("records actual payload inclusion and explicit calls only for the armed sessi
     expect.objectContaining({ event: "tool_call", toolName: "memory_recall", toolCallId: "call-test" }),
   ]));
   expect(JSON.stringify(f.records)).not.toMatch(/private|secret query/);
+});
+
+it("writes only the exact session private file without creating files for other sessions", async () => {
+  const f = await fixture(true); await f.arm();
+  const event = { toolName: "memory_recall", toolCallId: "call-test", input: { query: "private query" } };
+  await f.handlers.get("tool_call")!(event, f.ctx("other-session"));
+  expect(await readdir(f.directory)).toEqual(["acceptance-trace.json"]);
+  await f.handlers.get("tool_call")!(event, f.ctx("target-session"));
+  const path = join(f.directory, "acceptance-trace.trace-test.target-session.jsonl");
+  const raw = await readFile(path, "utf8");
+  expect(JSON.parse(raw)).toMatchObject({ sessionId: "target-session", event: "tool_call" });
+  expect(raw).not.toContain("private query");
+  expect((await stat(path)).mode & 0o777).toBe(0o600);
+  await rm(path);
+  const target = join(f.directory, "untouched"); await writeFile(target, "untouched", { mode: 0o600 });
+  await symlink(target, path);
+  await f.handlers.get("tool_call")!(event, f.ctx("target-session"));
+  expect(await readFile(target, "utf8")).toBe("untouched");
 });
 
 it("rejects public or linked controls and stops immediately when removed", async () => {

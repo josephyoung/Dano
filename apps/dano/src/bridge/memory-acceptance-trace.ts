@@ -11,7 +11,7 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 /** Host-only, short-lived opt-in for one exact session. Never exports payloads,
  * queries, memory text, URIs, headers, or answers. Removing the control stops it. */
 export function registerMemoryAcceptanceTrace(pi: ExtensionAPI, stateDirectory: string,
-  emit: (record: RecordData) => void = record => console.info("[memory-acceptance] " + JSON.stringify(record))): void {
+  emit?: (record: RecordData) => void): void {
   let sequence = 0;
   let request = 0;
   let activeKey = "";
@@ -28,7 +28,7 @@ export function registerMemoryAcceptanceTrace(pi: ExtensionAPI, stateDirectory: 
       if (bytes.length > 2048) return;
       const value = JSON.parse(bytes.toString("utf8")) as Control;
       if (!value || typeof value.runId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(value.runId)
-        || typeof value.sessionId !== "string" || value.sessionId !== ctx.sessionManager.getSessionId()
+        || typeof value.sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(value.sessionId) || value.sessionId !== ctx.sessionManager.getSessionId()
         || typeof value.expiresAt !== "string") return;
       const remaining = Date.parse(value.expiresAt) - Date.now();
       if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 60 * 60 * 1000) return;
@@ -40,10 +40,22 @@ export function registerMemoryAcceptanceTrace(pi: ExtensionAPI, stateDirectory: 
     } catch { return; }
     finally { await file?.close().catch(() => {}); }
   }
-  function record(c: Control, data: RecordData) {
+  async function record(c: Control, data: RecordData) {
     if (emitted++ >= 200) return;
-    try { emit({ runId: c.runId, sessionId: c.sessionId, sequence: ++sequence,
-      timestamp: new Date().toISOString(), request, ...data }); } catch { /* Diagnostics cannot break chat. */ }
+    const entry = { runId: c.runId, sessionId: c.sessionId, sequence: ++sequence,
+      timestamp: new Date().toISOString(), request, ...data };
+    let file;
+    try {
+      if (emit) { emit(entry); return; }
+      const name = `acceptance-trace.${c.runId}.${c.sessionId}.jsonl`;
+      file = await open(join(stateDirectory, name), constants.O_WRONLY | constants.O_APPEND
+        | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.uid !== process.getuid?.() || stat.nlink !== 1 || (stat.mode & 0o077)
+        || stat.size > 128 * 1024) return;
+      await file.write(JSON.stringify(entry) + "\n");
+    } catch { /* Diagnostics cannot break chat. */ }
+    finally { await file?.close().catch(() => {}); }
   }
   pi.on("context_with_system", async (event, ctx) => {
     const c = await control(ctx); if (!c) { memoryDigests = []; contextObserved = false; return; }
@@ -51,7 +63,7 @@ export function registerMemoryAcceptanceTrace(pi: ExtensionAPI, stateDirectory: 
       && message.customType === "openviking-reference-data" && typeof message.content === "string"
       ? [digest(message.content)] : []);
     contextObserved = true;
-    record(c, { event: "context", automaticMemoryMessages: memoryDigests.length });
+    await record(c, { event: "context", automaticMemoryMessages: memoryDigests.length });
   });
   pi.on("before_provider_request", async (event, ctx) => {
     const c = await control(ctx); if (!c) return;
@@ -70,18 +82,18 @@ export function registerMemoryAcceptanceTrace(pi: ExtensionAPI, stateDirectory: 
         seen.add(value); pending.push(...Object.values(value));
       }
     }
-    record(c, { event: "provider_request", contextObserved, automaticMemoryMessages: memoryDigests.length,
+    await record(c, { event: "provider_request", contextObserved, automaticMemoryMessages: memoryDigests.length,
       payloadMatchedMemoryMessages: memoryDigests.filter(hash => found.has(hash)).length,
       inspectionComplete: pending.length === 0 && bytes <= 4 * 1024 * 1024 });
   });
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "memory_recall" && event.toolName !== "ask_user_question") return;
     const c = await control(ctx); if (!c) return;
-    record(c, { event: "tool_call", toolName: event.toolName, toolCallId: event.toolCallId });
+    await record(c, { event: "tool_call", toolName: event.toolName, toolCallId: event.toolCallId });
   });
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName !== "memory_recall" && event.toolName !== "ask_user_question") return;
     const c = await control(ctx); if (!c) return;
-    record(c, { event: "tool_result", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError });
+    await record(c, { event: "tool_result", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError });
   });
 }
