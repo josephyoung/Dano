@@ -16,7 +16,9 @@ directory. The worker cannot access this directory. It is absent by default.
 The control must be a private regular file, owned by the app UID, with one hard
 link. Use the session ID returned by the newly created browser session, never a
 scan of unrelated session files. Only that exact session emits
-`[memory-acceptance]` JSON records. Remove the control after the run; expiration
+`acceptance-trace.<runId>.<sessionId>.jsonl` records in that private directory.
+No records go to shared application logs. The output file is private, owner-checked,
+single-linked, opened without following symlinks and bounded to about 128 KiB. Remove the control after the run; expiration
 also stops recording. At most 200 events are emitted by each registered session
 extension for a control revision. Missing or invalid control disables tracing.
 
