@@ -1154,11 +1154,24 @@
       margin: 0 auto max(10px, env(safe-area-inset-bottom));
     }
 
-    .composer-dock { gap: 8px; padding: 10px 14px; border-radius: 24px; }
-    .composer-dock.multiline { padding: 14px 14px 12px; }
+    .composer-dock,
+    .composer-dock.multiline {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+      gap: 8px;
+      padding: 12px 14px;
+      border-radius: 24px;
+    }
 
-    .prompt-input { font-size: 16px; }
-    .composer-dock.multiline .prompt-input { padding: 0; }
-    .composer-dock:not(.multiline) .prompt-input { padding: 0; }
+    .composer-dock .composer-toolbar,
+    .composer-dock:not(.multiline) .composer-toolbar {
+      display: flex;
+    }
+
+    .prompt-input { width: 100%; font-size: 16px; }
+    .prompt-input:placeholder-shown {
+      max-height: calc(var(--composer-input-line-height) * 2);
+    }
   }
 </style>
