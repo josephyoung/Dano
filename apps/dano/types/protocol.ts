@@ -1052,7 +1052,7 @@ export interface RpcResponseMap {
     PiRpcResponseData<"get_available_models">,
     "models"
   > & { models: RpcModel[] };
-  set_thinking_level: PiRpcResponseData<"set_thinking_level">;
+  set_thinking_level: { level: RpcThinkingLevel };
   cycle_thinking_level:
     | (Omit<
         NonNullable<PiRpcResponseData<"cycle_thinking_level">>,

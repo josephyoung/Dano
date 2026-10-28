@@ -26,7 +26,7 @@ import {
   mergeSlashCommandOptions,
   slashCommandOptionsFromRpc,
 } from "../utils/slashCommands";
-import { getNextThinkingLevel } from "../utils/thinkingLevels";
+
 import {
   applyWorkspaceMentionCompletion,
   getWorkspaceMentionContext,
@@ -636,8 +636,8 @@ export function createComposerBarState(
   // ---- thinking / compaction toggles ----
 
   function handleCycleThinkingLevel() {
-    if (isDisabled) return;
-    callbacks.onSelectThinkingLevel(getNextThinkingLevel(props.thinkingLevel));
+    if (isDisabled || props.thinkingLevel === null) return;
+    callbacks.onSelectThinkingLevel(props.thinkingLevel === "off" ? "medium" : "off");
   }
 
   function handleAutoCompactionToggle() {

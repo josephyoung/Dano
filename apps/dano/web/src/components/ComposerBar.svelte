@@ -1,4 +1,7 @@
 <script lang="ts">
+  import * as Select from "./ui/select";
+  import Brain from "@lucide/svelte/icons/brain";
+  import Zap from "@lucide/svelte/icons/zap";
   import { tick } from "svelte";
   import type {
     BridgeQuickActionConfig,
@@ -24,6 +27,14 @@
   import WorkspaceMentionPalette from "./WorkspaceMentionPalette.svelte";
   import { shouldComposerBeMultiline } from "./composerLayout";
   import { createComposerBarState } from "./composerBarState.svelte";
+
+  let thinkingChangePending = $state(false);
+  async function selectThinkingLevel(level: RpcThinkingLevel) {
+    if (thinkingChangePending || thinkingLevel === level) return;
+    thinkingChangePending = true;
+    try { await onSelectThinkingLevel(level); }
+    finally { thinkingChangePending = false; }
+  }
 
   const COMPOSER_LAYOUT_ANIMATION_MS = 180;
   const productName = getRuntimeProductName();
@@ -55,7 +66,7 @@
     onAbort = (() => {}) as () => void,
     onCancelRevision = (() => {}) as () => void,
     onSelectModel = ((_: RpcModelInfo) => {}) as (model: RpcModelInfo) => void,
-    onSelectThinkingLevel = ((_: RpcThinkingLevel) => {}) as (level: RpcThinkingLevel) => void,
+    onSelectThinkingLevel = ((_: RpcThinkingLevel) => {}) as (level: RpcThinkingLevel) => void | Promise<void>,
     onToggleAutoCompaction = ((_: boolean) => {}) as (enabled: boolean) => void,
     gitBranch = null as string | null,
     gitRepoState = null as RpcGitRepoState | null,
@@ -122,7 +133,7 @@
       get onAbort() { return onAbort; },
       get onCancelRevision() { return onCancelRevision; },
       get onSelectModel() { return onSelectModel; },
-      get onSelectThinkingLevel() { return onSelectThinkingLevel; },
+      get onSelectThinkingLevel() { return selectThinkingLevel; },
       get onToggleAutoCompaction() { return onToggleAutoCompaction; },
     },
     {
@@ -530,6 +541,20 @@
         </div>
 
         <div class="composer-actions-right">
+          <Select.Root type="single" value={thinkingLevel === null ? "" : thinkingLevel === "off" ? "quick" : "deep"}
+            disabled={composer.isDisabled || thinkingLevel === null || thinkingChangePending}
+            onValueChange={(value) => { if (value) void selectThinkingLevel(value === "quick" ? "off" : thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : "medium"); }}>
+            <Select.Trigger aria-label={t("composer.thinking.mode")}>
+              {#if thinkingLevel && thinkingLevel !== "off"}<Brain />{:else}<Zap />{/if}
+              {thinkingLevel === null ? t("composer.thinking.loading") : t(thinkingLevel === "off" ? "composer.thinking.quick" : "composer.thinking.deep")}
+            </Select.Trigger>
+            <Select.Content side="top" align="end" sideOffset={12}>
+              <Select.Group>
+                <Select.Item value="deep" label={t("composer.thinking.deep")}><Brain /><span class="thinking-option-copy"><span>{t("composer.thinking.deep")}</span><small>{t("composer.thinking.deepDescription")}</small></span></Select.Item>
+                <Select.Item value="quick" label={t("composer.thinking.quick")}><Zap /><span class="thinking-option-copy"><span>{t("composer.thinking.quick")}</span><small>{t("composer.thinking.quickDescription")}</small></span></Select.Item>
+              </Select.Group>
+            </Select.Content>
+          </Select.Root>
           <button
             class="send-btn composer-send-button"
             class:stop={composer.showStopButton}
@@ -930,6 +955,10 @@
   }
 
   .composer-actions-left,
+  .thinking-option-copy { display: flex; flex-direction: column; gap: 3px; }
+  .thinking-option-copy small { color: var(--text-muted); font-size: 12px; }
+  .composer-actions-right :global([data-slot="select-trigger"]) { border: none; box-shadow: none; border-radius: 999px; padding: 0 6px; gap: 5px; color: var(--text-muted); background: transparent; }
+  .composer-actions-right :global([data-slot="select-trigger"]:hover) { background: var(--surface-hover); }
   .composer-actions-right {
     display: flex;
     align-items: center;
@@ -941,6 +970,10 @@
     order: 0;
   }
 
+  .thinking-option-copy { display: flex; flex-direction: column; gap: 3px; }
+  .thinking-option-copy small { color: var(--text-muted); font-size: 12px; }
+  .composer-actions-right :global([data-slot="select-trigger"]) { border: none; box-shadow: none; border-radius: 999px; padding: 0 6px; gap: 5px; color: var(--text-muted); background: transparent; }
+  .composer-actions-right :global([data-slot="select-trigger"]:hover) { background: var(--surface-hover); }
   .composer-actions-right {
     order: 2;
     margin-left: auto;

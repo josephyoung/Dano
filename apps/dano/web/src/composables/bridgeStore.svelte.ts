@@ -2349,15 +2349,26 @@ export async function compactSession(customInstructions?: string) {
   }
 }
 
+let thinkingChangePending = false;
 export async function setThinkingLevel(level: RpcThinkingLevel) {
-  const resp = await sendCommand({ type: "set_thinking_level", level });
-  if (resp.success) {
-    _currentThinkingLevel = normalizeThinkingLevel(level);
-    updatePendingTranscriptConfigEvent({
-      thinkingLevel: _currentThinkingLevel,
-    });
+  if (thinkingChangePending) return;
+  thinkingChangePending = true;
+  const sessionPath = getDisplayedSessionPath();
+  try {
+    const resp = await sendCommand({ type: "set_thinking_level", level });
+    if (sessionPath !== getDisplayedSessionPath()) return resp;
+    if (!resp.success) throw new Error(resp.error);
+    if (resp.command !== "set_thinking_level") throw new Error("Unexpected response");
+    const effectiveLevel = normalizeThinkingLevel(resp.data?.level);
+    if (effectiveLevel === null) throw new Error("Invalid thinking state");
+    _currentThinkingLevel = effectiveLevel;
+    updatePendingTranscriptConfigEvent({ thinkingLevel: effectiveLevel });
+    return resp;
+  } catch {
+    pushNotification(t("composer.thinking.failed"), "error");
+  } finally {
+    thinkingChangePending = false;
   }
-  return resp;
 }
 
 export async function setAutoCompactionEnabled(enabled: boolean) {

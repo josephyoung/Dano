@@ -7103,17 +7103,24 @@ export class BridgeRpcAdapter {
        * ------------------------------------------------------------------ */
 
       case "set_thinking_level": {
+        let effectiveLevel: RpcThinkingLevel;
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
           session.setThinkingLevel(command.level);
+          effectiveLevel = normalizeThinkingLevel(session.thinkingLevel);
         } else {
           this.context.actions.setThinkingLevel(command.level);
+          effectiveLevel = normalizeThinkingLevel(this.context.state.getThinkingLevel());
+        }
+        if ((effectiveLevel === "off") !== (command.level === "off")) {
+          return { id: correlationId, type: "response", command: "set_thinking_level", success: false, error: "thinking_mode_unavailable" };
         }
         return {
           id: correlationId,
           type: "response",
           command: "set_thinking_level",
           success: true,
+          data: { level: effectiveLevel },
         };
       }
 
