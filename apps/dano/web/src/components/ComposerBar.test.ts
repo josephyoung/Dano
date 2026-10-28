@@ -2,7 +2,7 @@
 
 import { mount, tick, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ComposerBar from "./ComposerBar.svelte";
 
 const bridgeClient = vi.hoisted(() => ({ id: null as string | null }));
@@ -18,6 +18,8 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+beforeEach(() => { document.body.classList.add("app-shell"); });
 
 describe("ComposerBar prompt submission", () => {
   afterEach(() => {
@@ -580,4 +582,53 @@ describe("ComposerBar prompt submission", () => {
     }
   });
 
+});
+
+describe("ComposerBar thinking mode", () => {
+  it("projects the server level and toggles only off/medium without submitting the draft", async () => {
+    const target = document.createElement('div'); document.body.append(target);
+    const onSelectThinkingLevel = vi.fn(); const onSubmit = vi.fn();
+    const component = mount(ComposerBar, {target, props: {connectionStatus: 'connected', thinkingLevel: 'off', onSelectThinkingLevel, onSubmit}});
+    try {
+      await tick();
+      expect(target.textContent).toContain('快速回答');
+      const input = target.querySelector('textarea')!;
+      input.value = '保留草稿'; input.dispatchEvent(new Event('input', {bubbles:true}));
+      input.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',shiftKey:true,bubbles:true}));
+      expect(onSelectThinkingLevel).toHaveBeenCalledWith('medium');
+      expect(input.value).toBe('保留草稿'); expect(onSubmit).not.toHaveBeenCalled();
+    } finally {await unmount(component); target.remove();}
+  });
+});
+
+it.each(['minimal', 'low', 'medium', 'high', 'xhigh'] as const)('shows %s as deep thinking and switches it off with the keyboard', async level => {
+  const target = document.createElement('div'); document.body.append(target);
+  const onSelectThinkingLevel = vi.fn();
+  const component = mount(ComposerBar, {target, props:{connectionStatus:'connected',thinkingLevel:level,onSelectThinkingLevel}});
+  try {
+    await tick(); expect(target.textContent).toContain('深度思考');
+    target.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true}));
+    expect(onSelectThinkingLevel).toHaveBeenCalledWith('off');
+  } finally {await unmount(component);target.remove();}
+});
+
+it('disables mode selection while disconnected or unknown', async () => {
+  const target = document.createElement('div'); document.body.append(target);
+  const component = mount(ComposerBar,{target,props:{connectionStatus:'disconnected',thinkingLevel:null}});
+  try {await tick();expect(target.querySelector<HTMLButtonElement>('[aria-label="回答模式"]')!.disabled).toBe(true);}
+  finally {await unmount(component);target.remove();}
+});
+
+it('restores the authoritative selection when a mode request does not change the level', async () => {
+  const target = document.createElement('div');document.body.append(target);
+  const onSelectThinkingLevel = vi.fn(async () => {});
+  const component = mount(ComposerBar,{target,props:{connectionStatus:'connected',thinkingLevel:'off',onSelectThinkingLevel}});
+  try {
+    await tick();target.querySelector<HTMLButtonElement>('[aria-label="回答模式"]')!.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));await tick();
+    await vi.waitFor(() => expect(document.querySelector('[role="option"]')).not.toBeNull());
+    Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(option => option.textContent?.includes("深度思考"))!.dispatchEvent(new PointerEvent("pointerup", {bubbles:true,pointerType:"mouse"}));await tick();await tick();
+    expect(onSelectThinkingLevel).toHaveBeenCalledWith('medium');
+    target.querySelector<HTMLButtonElement>('[aria-label="回答模式"]')!.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));await tick();
+    expect(document.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain('快速回答');
+  } finally {await unmount(component);target.remove();}
 });

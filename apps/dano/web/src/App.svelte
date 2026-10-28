@@ -1016,7 +1016,7 @@
     }).catch(() => {});
   }
 
-  function handleThinkingLevelSelect(level: RpcThinkingLevel) {
+  async function handleThinkingLevelSelect(level: RpcThinkingLevel) {
     if (displayedCurrentThinkingLevel === level) return;
     if (activeDebugSessionPath) {
       updateDebugSession(activeDebugSessionPath, session =>
@@ -1024,7 +1024,7 @@
       );
       return;
     }
-    bridge.setThinkingLevel(level).catch(() => {});
+    await bridge.setThinkingLevel(level);
   }
 
   function handleAutoCompactionToggle(enabled: boolean) {
