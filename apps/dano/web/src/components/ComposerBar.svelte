@@ -29,11 +29,17 @@
   import { createComposerBarState } from "./composerBarState.svelte";
 
   let thinkingChangePending = $state(false);
+  let selectedThinkingMode = $state("");
+  $effect(() => { selectedThinkingMode = thinkingLevel === null ? "" : thinkingLevel === "off" ? "quick" : "deep"; });
   async function selectThinkingLevel(level: RpcThinkingLevel) {
     if (thinkingChangePending || thinkingLevel === level) return;
     thinkingChangePending = true;
     try { await onSelectThinkingLevel(level); }
-    finally { thinkingChangePending = false; }
+    finally {
+      await tick();
+      selectedThinkingMode = thinkingLevel === null ? "" : thinkingLevel === "off" ? "quick" : "deep";
+      thinkingChangePending = false;
+    }
   }
 
   const COMPOSER_LAYOUT_ANIMATION_MS = 180;
@@ -541,7 +547,7 @@
         </div>
 
         <div class="composer-actions-right">
-          <Select.Root type="single" value={thinkingLevel === null ? "" : thinkingLevel === "off" ? "quick" : "deep"}
+          <Select.Root type="single" bind:value={selectedThinkingMode}
             disabled={composer.isDisabled || thinkingLevel === null || thinkingChangePending}
             onValueChange={(value) => { if (value) void selectThinkingLevel(value === "quick" ? "off" : thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : "medium"); }}>
             <Select.Trigger aria-label={t("composer.thinking.mode")}>
@@ -955,10 +961,6 @@
   }
 
   .composer-actions-left,
-  .thinking-option-copy { display: flex; flex-direction: column; gap: 3px; }
-  .thinking-option-copy small { color: var(--text-muted); font-size: 12px; }
-  .composer-actions-right :global([data-slot="select-trigger"]) { border: none; box-shadow: none; border-radius: 999px; padding: 0 6px; gap: 5px; color: var(--text-muted); background: transparent; }
-  .composer-actions-right :global([data-slot="select-trigger"]:hover) { background: var(--surface-hover); }
   .composer-actions-right {
     display: flex;
     align-items: center;

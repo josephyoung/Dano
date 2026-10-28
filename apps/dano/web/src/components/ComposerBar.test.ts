@@ -618,3 +618,17 @@ it('disables mode selection while disconnected or unknown', async () => {
   try {await tick();expect(target.querySelector<HTMLButtonElement>('[aria-label="回答模式"]')!.disabled).toBe(true);}
   finally {await unmount(component);target.remove();}
 });
+
+it('restores the authoritative selection when a mode request does not change the level', async () => {
+  const target = document.createElement('div');document.body.append(target);
+  const onSelectThinkingLevel = vi.fn(async () => {});
+  const component = mount(ComposerBar,{target,props:{connectionStatus:'connected',thinkingLevel:'off',onSelectThinkingLevel}});
+  try {
+    await tick();target.querySelector<HTMLButtonElement>('[aria-label="回答模式"]')!.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));await tick();
+    await vi.waitFor(() => expect(document.querySelector('[role="option"]')).not.toBeNull());
+    Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(option => option.textContent?.includes("深度思考"))!.dispatchEvent(new PointerEvent("pointerup", {bubbles:true,pointerType:"mouse"}));await tick();await tick();
+    expect(onSelectThinkingLevel).toHaveBeenCalledWith('medium');
+    target.querySelector<HTMLButtonElement>('[aria-label="回答模式"]')!.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));await tick();
+    expect(document.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain('快速回答');
+  } finally {await unmount(component);target.remove();}
+});

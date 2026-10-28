@@ -2366,6 +2366,9 @@ export async function setThinkingLevel(level: RpcThinkingLevel) {
     return resp;
   } catch {
     pushNotification(t("composer.thinking.failed"), "error");
+    if (sessionPath === getDisplayedSessionPath()) {
+      await sendCommand({ type: "get_state" }).catch(() => {});
+    }
   } finally {
     thinkingChangePending = false;
   }
