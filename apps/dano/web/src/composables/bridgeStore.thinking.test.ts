@@ -88,7 +88,7 @@ describe("bridge thinking mode", () => {
     const bridge = await connectBridge();
     const events = eventSources[0]!;
     const store = await import("./bridgeStore.svelte");
-    const state = (file: string) => store.applyNewSessionResponse({type:"response",command:"new_session",success:true,data:{sessionPath:file,sessionId:file,thinkingLevel:"off",transcript:{sessionPath:file,messages:[],hasOlder:false,hasNewer:false}}});
+    const state = (file: string) => store.applyNewSessionResponse({type:"response",command:"new_session",success:true,data:{cancelled:false,treeEntries:[],sessionName:"",sessionPath:file,sessionId:file,thinkingLevel:"off",transcript:{sessionPath:file,messages:[],hasOlder:false,hasNewer:false}}});
     state("/session-a");
     let command: {id: string; type: string} | undefined;
     vi.mocked(fetch).mockImplementation(async (_input, init) => {command = JSON.parse(String(init?.body)).payload;return new Response(null,{status:202});});
