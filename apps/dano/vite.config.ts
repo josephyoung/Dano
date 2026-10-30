@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import { publicConfigPlugin } from "./public-config.js";
 
 function readDebugFlag(value: string | undefined): boolean {
   if (typeof value !== "string") return false;
@@ -39,7 +40,7 @@ export default defineConfig({
   define: {
     __PI_WEB_DEV_DEBUG__: JSON.stringify(devDebugModeEnabled),
   },
-  plugins: [dropPierreDiffThemes(), tailwindcss(), svelte()],
+  plugins: [publicConfigPlugin(), dropPierreDiffThemes(), tailwindcss(), svelte()],
   resolve: {
     alias: [
       {

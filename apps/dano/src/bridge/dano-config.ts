@@ -6,6 +6,8 @@ import type { BridgeQuickActionConfig } from "./types.js";
 const DANO_CONFIG_FILE_NAME = "dano.config.json";
 
 export interface DanoConfig {
+  /** Server-only. Deliberately absent from the browser projection. */
+  openVikingSettings?: Record<string, unknown>;
   productName?: string;
   fieldAssist?: {
     maxRetries?: number;
@@ -30,7 +32,7 @@ export const DANO_DEFAULT_CONFIG = {
   slashCommandsAndMentionsEnabled: false,
   transcriptProcessSummaryEnabled: false,
   quickActions: [],
-} satisfies Required<Omit<DanoConfig, "productName">>;
+} satisfies Required<Omit<DanoConfig, "productName" | "openVikingSettings">>;
 
 export interface LoadDanoConfigOptions {
   cwd?: string;
@@ -128,6 +130,7 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
   const quickActions = readQuickActions(record.quickActions);
 
   return {
+    ...(record.openVikingSettings === undefined ? {} : { openVikingSettings: readOpenVikingSettings(record.openVikingSettings) }),
     ...(productName ? { productName } : {}),
     ...(fieldAssist ? { fieldAssist } : {}),
     ...(askUserQuestion ? { askUserQuestion } : {}),
@@ -139,6 +142,11 @@ function normalizeDanoConfig(raw: unknown): DanoConfig {
       : {}),
     ...(quickActions ? { quickActions } : {}),
   };
+}
+
+function readOpenVikingSettings(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_OPENVIKING_SETTINGS");
+  return value as Record<string, unknown>;
 }
 
 function findNearestDanoConfig(startDir: string): string | undefined {

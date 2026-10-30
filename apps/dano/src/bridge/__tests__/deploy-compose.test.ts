@@ -1188,7 +1188,7 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
   });
 
   it("initializes enabled memory from the candidate image before Compose startup", () => {
-    const { logLines } = runRelease({ env: { DANO_MEMORY_CONFIG_DIR: "/private/memory-config" } });
+    const { logLines } = runRelease({ env: { DANO_MEMORY_CONFIG_DIR: "/private/memory-config", DANO_OPENVIKING_CONFIG_DIR: "/private/ov-config" } });
     const calls = logLines.filter(line => line.startsWith("[")).map(line => JSON.parse(line) as string[]);
     const init = calls.findIndex(args => args.includes("./deploy/init-memory-service.mjs"));
     expect(init).toBeGreaterThan(0);
@@ -1196,6 +1196,9 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
       "--mount", "type=bind,source=/private/memory-config,target=/etc/dano-memory",
       "--entrypoint", "node", "dano-app:abc123", "./deploy/init-memory-service.mjs", "/etc/dano-memory"]);
     expect(init).toBeLessThan(calls.findIndex(args => args.includes("--validate-config")));
+    const projection = calls.findIndex(args => args.includes("./deploy/memory-models.mjs") && args.includes("check"));
+    expect(projection).toBeGreaterThan(init);
+    expect(projection).toBeLessThan(calls.findIndex(args => args.includes("up")));
   });
 
   it("builds releases from a temporary checkout and cleans it up", () => {

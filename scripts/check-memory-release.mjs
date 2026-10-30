@@ -35,6 +35,7 @@ try {
   assert(process.argv.slice(2).every(arg => arg === "--deployment"), "unknown option");
   const release = await json(join(root, "deploy/memory-release.json"));
   const product = await json(join(root, "package.json"));
+  const settings = (await json(process.env.DANO_CONFIG_PATH || join(root, "dano.config.json"))).openVikingSettings;
   const app = await json(join(root, "apps/dano/package.json"));
   const lock = parseYaml(await readFile(join(root, "pnpm-lock.yaml"), "utf8"));
   assert(product.version === release.danoVersion, "Dano product version differs from memory release");
@@ -56,15 +57,12 @@ try {
     Object.values(release.embedding.platformDigests).every(value => /^sha256:[a-f0-9]{64}$/u.test(value)),
   "embedding image platform matrix is incomplete");
   assert(/^[A-Za-z0-9._-]+\.gguf$/u.test(release.embedding.modelFile) &&
-    /^[a-f0-9]{64}$/u.test(release.embedding.modelSha256) &&
-    Number.isSafeInteger(release.embedding.dimension) && release.embedding.dimension > 0 &&
-    Number.isSafeInteger(release.embedding.maxInputTokens) && release.embedding.maxInputTokens >= 100,
+    /^[a-f0-9]{64}$/u.test(release.embedding.modelSha256),
   "embedding model manifest is incomplete");
   assert(release.reranker?.image === release.embedding.image &&
     JSON.stringify(release.reranker.platformDigests) === JSON.stringify(release.embedding.platformDigests) &&
     /^[A-Za-z0-9._-]+\.gguf$/u.test(release.reranker.modelFile) &&
-    /^[a-f0-9]{64}$/u.test(release.reranker.modelSha256) &&
-    typeof release.reranker.modelName === "string" && release.reranker.modelName.length > 0,
+    /^[a-f0-9]{64}$/u.test(release.reranker.modelSha256),
   "reranker manifest is incomplete");
 
   if (deployment) {
@@ -72,11 +70,11 @@ try {
       "deployment OpenViking image differs from memory release");
     assert(process.env.DANO_EMBEDDING_IMAGE === release.embedding.image &&
       process.env.DANO_EMBEDDING_MODEL_FILE === release.embedding.modelFile &&
-      process.env.DANO_EMBEDDING_MODEL_NAME === release.embedding.modelName,
+      process.env.DANO_EMBEDDING_MODEL_NAME === settings.embedding.model,
     "deployment embedding image or model differs from memory release");
     assert(process.env.DANO_RERANKER_IMAGE === release.reranker.image &&
       process.env.DANO_RERANKER_MODEL_FILE === release.reranker.modelFile &&
-      process.env.DANO_RERANKER_MODEL_NAME === release.reranker.modelName,
+      process.env.DANO_RERANKER_MODEL_NAME === settings.reranker.model,
     "deployment reranker image or model differs from memory release");
     const configDirectory = process.env.DANO_OPENVIKING_CONFIG_DIR;
     const modelsDirectory = process.env.DANO_OPENVIKING_MODELS_DIR;
@@ -100,11 +98,11 @@ try {
       typeof config.vlm?.api_key === "string" && config.vlm.api_key.length > 0,
     "OpenViking extraction model config is incomplete");
     assert(config.embedding?.dense?.provider === "openai" &&
-      config.embedding.dense.model === release.embedding.modelName &&
-      config.embedding.dense.dimension === release.embedding.dimension &&
-      config.embedding.dense.api_base === "http://embedding:8080/v1" &&
+      config.embedding.dense.model === settings.embedding.model &&
+      config.embedding.dense.dimension === settings.embedding.dimension &&
+      config.embedding.dense.api_base === settings.embedding.apiBase &&
       config.embedding.dense.encoding_format === "float" &&
-      config.embedding.max_input_tokens === release.embedding.maxInputTokens,
+      config.embedding.max_input_tokens === settings.embedding.maxInputTokens,
     "OpenViking embedding service config differs from memory release");
     assert(config.memory?.custom_templates_dir === "/etc/openviking/memory-templates",
       "OpenViking form memory templates are not configured");

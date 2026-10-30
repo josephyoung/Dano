@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadMemoryManagementConfig } from "../dist/server/bridge/effective-memory-config.js";
 import assert from "node:assert/strict";
 import { createHash, createHmac, hkdfSync, randomUUID, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
@@ -132,7 +133,7 @@ async function sealLiveSnapshotUnlocked(configDirectory, dataRoot, recoveryRoot,
   assert.deepEqual(await recoveryOwners(recoveryRoot), expectedOwners, "RECOVERY_OWNER_SET_MISMATCH");
   assert.deepEqual(states.map(item => item.owner).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     expectedOwners, "RECOVERY_OWNER_SET_MISMATCH");
-  const config = JSON.parse((await privateFile(join(configDirectory, "memory", "memory-service.json"), 65536)).toString("utf8"));
+  const config = await loadMemoryManagementConfig(join(configDirectory, "memory"));
   assert.ok(validId(config.accountId), "INVALID_CONFIG");
   const encryptionKey = Buffer.from(config.encryptionKey, "hex");
   const credentials = new MemoryCredentialStore({ directory: join(dataRoot, "host-state", "memory-service", "credentials"),
@@ -303,7 +304,7 @@ async function migrateLegacyRecoveryUnlocked(configDirectory, dataRoot, sourceRo
   const [states, owners] = await Promise.all([ownerStates(dataRoot), recoveryOwners(sourceRoot)]);
   assert.deepEqual(owners, states.map(item => item.owner)
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))), "RECOVERY_OWNER_SET_MISMATCH");
-  const config = JSON.parse((await privateFile(join(configDirectory, "memory", "memory-service.json"), 65536)).toString("utf8"));
+  const config = await loadMemoryManagementConfig(join(configDirectory, "memory"));
   assert.ok(validId(config.accountId), "INVALID_CONFIG");
   const credentials = new MemoryCredentialStore({ directory: join(dataRoot, "host-state", "memory-service", "credentials"),
     encryptionKey: Buffer.from(config.encryptionKey, "hex"), keyVersion: config.encryptionKeyVersion });
@@ -737,7 +738,7 @@ async function prepare(configDirectory, dataRoot, recoveryRoot, checkpointFile) 
   assert.deepEqual(remoteOwners, expectedOwners, "RECOVERY_OWNER_SET_MISMATCH");
   assert.deepEqual(states.map(item => item.owner).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     expectedOwners, "RECOVERY_OWNER_SET_MISMATCH");
-  const config = JSON.parse((await privateFile(join(configDirectory, "memory", "memory-service.json"), 65536)).toString("utf8"));
+  const config = await loadMemoryManagementConfig(join(configDirectory, "memory"));
   assert.ok(validId(config.accountId), "INVALID_CONFIG");
   const credentials = new MemoryCredentialStore({ directory: join(dataRoot, "host-state", "memory-service", "credentials"),
     encryptionKey: Buffer.from(config.encryptionKey, "hex"), keyVersion: config.encryptionKeyVersion });

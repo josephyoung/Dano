@@ -4474,6 +4474,18 @@ describe("BridgeRpcAdapter", () => {
       expect(response.payload.success).toBe(true);
     });
 
+    it("rejects an incompatible memory tokenizer before changing the session model", async () => {
+      context.validateMemoryModel = vi.fn(async () => { throw new Error("MEMORY_TOKENIZER_UNAVAILABLE"); });
+      ws.trigger("message", Buffer.from(JSON.stringify({ type: "command", payload: {
+        id: "memory-model-check", type: "set_model", provider: "openai", modelId: "gpt-4",
+      } })));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(context.validateMemoryModel).toHaveBeenCalled();
+      expect(context.actions.setModel).not.toHaveBeenCalled();
+      const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+      expect(JSON.parse(calls[calls.length - 1][0] as string).payload).toMatchObject({ success: false });
+    });
+
     it("should handle set_model command with invalid model", async () => {
       const command: RpcCommand = {
         id: "cmd-1",

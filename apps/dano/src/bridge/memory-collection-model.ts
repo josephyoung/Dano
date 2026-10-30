@@ -38,6 +38,7 @@ export function memoryCollectionModel(configuration: MemoryCollectionHostConfig,
         const result = await models.completeSimple(model, { systemPrompt,
           messages: [{ role: "user", content: data, timestamp: Date.now() }] }, {
           signal, maxTokens: configuration.model.maxTokens, temperature: configuration.model.temperature,
+          reasoning: configuration.model.reasoning,
           ...(configuration.model.thinking === undefined ? {} : {
             onPayload: (payload: unknown) => {
               if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("INVALID_MODEL_PAYLOAD");

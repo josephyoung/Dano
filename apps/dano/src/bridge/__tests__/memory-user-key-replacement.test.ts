@@ -23,9 +23,9 @@ async function fixture() {
     await mkdir(path, { mode: 0o700 });
   }
   const encryptionKey = randomBytes(32);
-  await writeFile(join(memoryRoot, "memory-service.json"), JSON.stringify({
-    accountId: "company", baseUrl: "http://localhost:19433", encryptionKey: encryptionKey.toString("hex"),
-    encryptionKeyVersion: "test-v1", requestTimeoutMs: 1000,
+  await writeFile(join(memoryRoot, "memory-secrets.json"), JSON.stringify({
+    accountId: "company", managementKey: "synthetic-management", encryptionKey: encryptionKey.toString("hex"),
+    encryptionKeyVersion: "test-v1",
   }), { mode: 0o600 });
   const store = new MemoryCredentialStore({ directory: credentialsRoot, encryptionKey, keyVersion: "test-v1" });
   const owner = { accountId: "company", userId: "alice" };
@@ -83,11 +83,11 @@ it("requires positive proof that the saved key lost USER access", async () => {
 
 it("rejects exposed config before contacting the service or changing a credential", async () => {
   const f = await fixture();
-  await chmod(join(f.memoryRoot, "memory-service.json"), 0o644);
+  await chmod(join(f.memoryRoot, "memory-secrets.json"), 0o644);
   const fetcher = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   await expect(replaceMemoryUserKey(f.configRoot, f.dataRoot, f.owner.userId, "new-user-key"))
-    .rejects.toThrow("UNPROTECTED_RECOVERY_PATH");
+    .rejects.toThrow("secrets:INVALID_MEMORY_SECRETS");
   expect(fetcher).not.toHaveBeenCalled();
   expect(await f.store.read(f.owner)).toBe("old-user-key");
 });

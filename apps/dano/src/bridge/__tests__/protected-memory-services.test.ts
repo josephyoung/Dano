@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { parseMemoryHostConfig } from "../memory-host-config.js";
 import { createProtectedMemoryServices } from "../protected-memory-services.js";
 
 const roots: string[] = [];
@@ -37,7 +38,7 @@ async function fixture() {
 it("constructs private owner/credential services and a real model tokenizer without contacting the network", async () => {
   const f = await fixture(); await f.save();
   const network = vi.fn(() => { throw new Error("UNEXPECTED_NETWORK"); }); vi.stubGlobal("fetch", network);
-  const service = (await createProtectedMemoryServices(f.directory, f.stateDirectory))!; services.push(service);
+  const service = (await createProtectedMemoryServices(parseMemoryHostConfig(f.config), f.stateDirectory))!; services.push(service);
   const owner = await service.services.owners.get({ user: { id: "alice", username: "Alice" }, folderPath: join(f.root, "alice") });
   expect(await service.services.credentials.read(owner)).toBeUndefined();
   await service.services.credentials.write(owner, "SYNTHETIC_USER_KEY");
@@ -52,16 +53,15 @@ it("constructs private owner/credential services and a real model tokenizer with
 });
 it("keeps missing configuration unconfigured but refuses invalid configuration and shared state", async () => {
   const f = await fixture();
-  expect(await createProtectedMemoryServices(f.directory, f.stateDirectory)).toBeUndefined();
+  expect(await createProtectedMemoryServices(undefined, f.stateDirectory)).toBeUndefined();
   await f.save(); await chmod(f.stateParent, 0o755);
-  await expect(createProtectedMemoryServices(f.directory, f.stateDirectory)).rejects.toThrow("UNPROTECTED_MEMORY_SERVICE_STATE");
+  await expect(createProtectedMemoryServices(parseMemoryHostConfig(f.config), f.stateDirectory)).rejects.toThrow("UNPROTECTED_MEMORY_SERVICE_STATE");
   await chmod(f.stateParent, 0o700);
-  await writeFile(join(f.directory, "memory-service.json"), '{"managementKey":"SYNTHETIC_MANAGEMENT_KEY"}');
-  await expect(createProtectedMemoryServices(f.directory, f.stateDirectory)).rejects.toThrow("INVALID_MEMORY_HOST_CONFIG");
+
 });
 it("fails initialization when configured tokenizer assets do not match", async () => {
   const f = await fixture(); f.config.tokenizers[0]!.tokenizer.sha256 = "0".repeat(64); await f.save();
-  await expect(createProtectedMemoryServices(f.directory, f.stateDirectory)).rejects.toThrow("MEMORY_TOKENIZER_UNAVAILABLE");
+  await expect(createProtectedMemoryServices(parseMemoryHostConfig(f.config), f.stateDirectory)).rejects.toThrow("MEMORY_TOKENIZER_UNAVAILABLE");
 });
 
 it("wires configured collection lazily and requires a trusted deployment model factory", async () => {
@@ -75,9 +75,9 @@ it("wires configured collection lazily and requires a trusted deployment model f
     scheduler: { pollIntervalMs: 10, mergeWindowMs: 20, maxWaitMs: 50, workTimeoutMs: 2000,
       leaseMs: 5000, initialBackoffMs: 50, maxBackoffMs: 100, maxAttempts: 2, maxRequestsPerBatch: 5 } } });
   await f.save();
-  await expect(createProtectedMemoryServices(f.directory, f.stateDirectory)).rejects.toThrow("MEMORY_COLLECTION_MODEL_REQUIRED");
+  await expect(createProtectedMemoryServices(parseMemoryHostConfig(f.config), f.stateDirectory)).rejects.toThrow("MEMORY_COLLECTION_MODEL_REQUIRED");
   const factory = vi.fn(async () => { throw new Error("PRIVATE_PROVIDER_DETAIL"); });
-  const service = (await createProtectedMemoryServices(f.directory, f.stateDirectory, factory))!;
+  const service = (await createProtectedMemoryServices(parseMemoryHostConfig(f.config), f.stateDirectory, factory))!;
   services.push(service);
   expect(service.services.collection?.policyVersion).toBe("collection-v1");
   expect(service.services.collection?.taskFacts?.config.contracts[0]?.id).toBe("report");

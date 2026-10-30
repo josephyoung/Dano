@@ -243,6 +243,25 @@ try {
     ],
     { cwd: deployDir },
   );
+  if (memoryDirectory?.trim()) {
+    const ovDirectory = process.env.DANO_OPENVIKING_CONFIG_DIR || savedRuntimeEnv.get("DANO_OPENVIKING_CONFIG_DIR");
+    if (!ovDirectory || !isAbsolute(ovDirectory) || ovDirectory.includes(",") || deployDir.includes(",")) {
+      throw new Error("Invalid OpenViking projection directory");
+    }
+    // One privileged, non-interactive helper uses the existing provider secrets.
+    // Validate every input and tokenizer before replacing either projection.
+    // Running OpenViking keeps its startup snapshot until the later recreation.
+    for (const mode of ["sync", "check"]) {
+      run(composeBin, [...composeArgs, "-f", "docker-compose.yml", "-f",
+        "docker-compose.exposure.yml", ...productNameArgs(), "--env-file", ".env",
+        "run", "--rm", "--no-deps", "--user", "0:0",
+        "--mount", `type=bind,source=${ovDirectory},target=/run/dano-ov`,
+        "--mount", `type=bind,source=${deployDir},target=/run/dano-deploy`,
+        "-e", "PI_CODING_AGENT_DIR=/opt/dano/runtime-data/.pi/agent", "--entrypoint", "node", "app",
+        "./deploy/memory-models.mjs", mode, "/etc/dano-memory", "/run/dano-ov/ov.conf", "/run/dano-deploy/.env"], { cwd: deployDir });
+    }
+  }
+
   // Execute real guarded tools and owner-bound file attacks before replacement.
   // The gate creates only disposable /tmp fixtures inside this one-off container.
   run(composeBin, [...composeArgs, "-f", "docker-compose.yml", "-f",
@@ -312,6 +331,7 @@ try {
       "up",
       "-d",
       "--no-build",
+      ...(memoryDirectory?.trim() ? ["--force-recreate", "--always-recreate-deps"] : []),
       "app",
       "nginx",
     ],

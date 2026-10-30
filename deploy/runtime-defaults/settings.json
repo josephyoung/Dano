@@ -1,7 +1,7 @@
 {
   "defaultProvider": "xiaomi-token-plan-cn",
   "defaultModel": "mimo-v2.6-flash",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "off",
   "defaultProjectTrust": "always",
   "compaction": {
     "enabled": true

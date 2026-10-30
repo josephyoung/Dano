@@ -1,0 +1,24 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installMemoryTokenizers } from "../../../../../deploy/install-memory-tokenizers.mjs";
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+it("verifies release-owned assets once and refuses mismatches without replacing existing files", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tokenizer-install-"))); roots.push(root);
+  const bytes = Buffer.from('{"synthetic":"asset"}');
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const catalog = [{ repository: "official/model", revision: "a".repeat(40), "tokenizer.json": sha, "tokenizer_config.json": sha }];
+  const download = vi.fn(async (_url: string) => bytes);
+  await installMemoryTokenizers(root, catalog, download);
+  expect(download).toHaveBeenCalledTimes(2);
+  expect(download.mock.calls[0]?.[0]).toBe(`https://huggingface.co/official/model/resolve/${catalog[0]!.revision}/tokenizer.json`);
+  await installMemoryTokenizers(root, catalog, download);
+  expect(download).toHaveBeenCalledTimes(2);
+  const path = join(root, "tokenizers", catalog[0]!.revision, "tokenizer.json");
+  await writeFile(path, "corrupt");
+  await expect(installMemoryTokenizers(root, catalog, download)).rejects.toThrow("MEMORY_TOKENIZER_HASH_MISMATCH");
+  expect(await readFile(path, "utf8")).toBe("corrupt");
+});

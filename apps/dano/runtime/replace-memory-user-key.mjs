@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadMemoryManagementConfig } from "../dist/server/bridge/effective-memory-config.js";
 import assert from "node:assert/strict";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -53,7 +54,7 @@ export async function replaceMemoryUserKey(configRoot, dataRoot, userId, newKey)
   await Promise.all([trustedDirectory(configRoot), trustedDirectory(dataRoot),
     privateDirectory(memoryRoot), privateDirectory(hostRoot),
     privateDirectory(serviceRoot), privateDirectory(credentialsRoot)]);
-  const config = JSON.parse((await privateFile(join(memoryRoot, "memory-service.json"), 65536)).toString("utf8"));
+  const config = await loadMemoryManagementConfig(memoryRoot);
   const url = new URL(config.baseUrl);
   assert.ok(validId(config.accountId) && /^[a-f0-9]{64}$/.test(config.encryptionKey)
     && typeof config.encryptionKeyVersion === "string" && config.encryptionKeyVersion
