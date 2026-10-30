@@ -1201,6 +1201,8 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
     expect(init).toBeLessThan(calls.findIndex(args => args.includes("--validate-config")));
     const projection = calls.findIndex(args => args.includes("./deploy/memory-models.mjs") && args.includes("check"));
     expect(projection).toBeGreaterThan(init);
+    expect(calls[projection]).toContain("--volume");
+    expect(calls[projection]).not.toContain("--mount");
     expect(projection).toBeLessThan(calls.findIndex(args => args.includes("up")));
   });
 

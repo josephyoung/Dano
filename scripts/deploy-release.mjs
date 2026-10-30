@@ -335,8 +335,8 @@ try {
       run(composeBin, [...composeArgs, "-f", "docker-compose.yml", "-f",
         "docker-compose.exposure.yml", ...productNameArgs(), "--env-file", ".env",
         "run", "--rm", "--no-deps", "--user", "0:0",
-        "--mount", `type=bind,source=${ovDirectory},target=/run/dano-ov`,
-        "--mount", `type=bind,source=${deployDir},target=/run/dano-deploy`,
+        "--volume", `${ovDirectory}:/run/dano-ov`,
+        "--volume", `${deployDir}:/run/dano-deploy`,
         "--entrypoint", "node", "app",
         "./deploy/memory-models.mjs", mode, "/etc/dano-memory", "/run/dano-ov/ov.conf", "/run/dano-deploy/.env"], { cwd: deployDir });
     }
