@@ -333,5 +333,6 @@ export async function createDanoBackend(
     sessionRegistry,
   );
   backend.context.captureMemoryInput = options.protectedTools?.captureMemoryInput;
+  backend.context.validateMemoryModel = options.protectedTools?.validateMemoryModel;
   return backend;
 }

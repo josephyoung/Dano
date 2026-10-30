@@ -24,75 +24,29 @@ does not define a permanent upper version limit. The 0.4.20 → 0.5.2.1 review
 and reproducible old-volume probe are recorded in
 [`issue533-openviking-upgrade.md`](../docs/research/issue533-openviking-upgrade.md).
 
-The repository-owned initial configuration is
-[`memory-service.defaults.json`](memory-service.defaults.json). Its `policy`
-contains the default save/recall budgets; edit that file to change defaults for
-new deployments. Runtime parsing still requires a complete explicit configuration.
-Existing installations retain their settings and credentials byte for byte.
-
 ### Initialize private memory configuration
 
-Before enabling the memory Compose overlay, provision the private configuration
-directory with mode 0700, owned by the configured Dano host UID/GID. For a new
-installation, place a mode-0600 `memory-service.inputs.json` in that directory,
-owned by the same UID. This is temporary bootstrap input, not another runtime
-configuration. Supply these deployment-specific fields:
+Memory functional configuration is maintained only in
+`dano.config.json.openVikingSettings`. Background memory LLM tasks reuse the
+Agent Config Directory's Pi global defaults and existing provider credentials.
+The private `memory-secrets.json` contains only the existing account/management
+and encryption material; it is not another functional or model configuration.
 
-```json
-{
-  "accountId": "<existing OpenViking account ID>",
-  "managementKey": "<OpenViking management credential>",
-  "encryptionKey": "<64 hexadecimal characters>",
-  "encryptionKeyVersion": "<credential key version>",
-  "memoryModel": {
-    "tokenizer": { "path": "<absolute in-container asset path>", "sha256": "<verified SHA-256>" },
-    "config": { "path": "<absolute in-container config path>", "sha256": "<verified SHA-256>" },
-    "extraction": { "apiBase": "<provider base URL>", "apiKey": "<provider credential>" }
-  }
-}
-```
+Follow [configuration, explicit transition and restart procedure](../docs/research/memory-host-configuration.md)
+when enabling memory or replacing the former `memory-service.json`. Preserve
+existing policies and all user/identity/authorization/encryption state. Prepare
+verified tokenizer assets with `deploy/install-memory-tokenizers.mjs`; no manual
+model binding, path or hash is required. For first installation,
+`deploy/init-memory-service.mjs` atomically publishes only missing secret material
+from temporary private inputs. Existing files are preserved.
 
-The template's null values require real private inputs; placeholders are not
-usable credentials. Provision verified tokenizer assets and matching model
-credentials before startup. Keep credentials out of source, image layers, argv
-and output. Explicit nested overrides may be supplied for a new installation;
-unknown fields fail validation. Bootstrap input is ignored when the runtime
-configuration already exists. Retain existing encryption material on restore;
-initialization never generates or rotates keys.
-
-Run the candidate image's helper as the configured host UID/GID with this
-configuration directory mounted **read-write** at `/etc/dano-memory`:
-
-```sh
-node deploy/init-memory-service.mjs /etc/dano-memory
-```
-
-`deploy:release` runs this helper automatically when `DANO_MEMORY_CONFIG_DIR`
-is enabled, before Compose starts. Custom server deployment paths must run the
-same helper under the deployment lock. The helper prints only
-`MEMORY_CONFIG_INITIALIZED` or `MEMORY_CONFIG_PRESERVED`; invalid existing files
-or incomplete inputs fail without replacing the existing configuration. New
-files are validated and published atomically without overwriting a concurrent
-initializer. If publication was interrupted, the helper removes only a matching
-initializer temporary hardlink after verifying it names the same private inode;
-unrelated hardlinks remain an error. Configuration bytes are preserved.
-After successful initialization, remove only the temporary inputs
-file you provisioned; keep `memory-service.json` as the sole runtime source.
-The normal service mount remains read-only.
-
-The new default recall deadline is 10 seconds. The CPU timing evidence below
-includes slower cold requests: use an explicit initialization override when that
-host needs a longer deadline. The result-count limit is an upper bound, not a
-promise of ten memories: relevance, token budget and the separately maintained
-reranker candidate limit still apply. This change preserves the existing
-reranker policy; evaluate that policy separately before changing it.
-
-Memory models are configured only in the version-2 `memory-service.json`.
-Set `memoryModel.id` once; selection, extraction and tokenizer identity derive
-from it. Embedding/reranker settings live in the same file. Run the built
-`deploy/memory-models.mjs sync` and `check` before Compose to project OpenViking
-and environment outputs; never edit those generated model values independently.
-See [the unified schema](../docs/research/memory-host-configuration.md#unified-model-configuration-version-2).
+The candidate `deploy/memory-models.mjs sync` and independent `check` use the
+same resolver and tokenizer workers as startup. `deploy:release` runs them
+before replacing running containers. OpenViking/Compose model values are
+protected generated projections, not operator inputs. Configuration changes
+require projection plus restart/recreation; there is no hot reload. Runtime
+Defaults initialize missing global settings only; the new thinking default is
+`off`, and existing host settings require an explicit update.
 
 For an opt-in deployment, provision these distinct resources before Compose:
 
@@ -132,7 +86,7 @@ For an opt-in deployment, provision these distinct resources before Compose:
 - An external named `DANO_OPENVIKING_DATA_VOLUME` for OpenViking's
   `/app/.openviking`, separate from the protected Dano config/data volumes.
   Keep the Dano source checkout, deploy-control files and runtime state in
-  different paths. The private Dano `memory-service.json` must name
+  different paths. The authoritative `openVikingSettings` must name
   `http://openviking:1933` as its origin and retain the management-key and
   encryption-key versions across restart and recovery.
   Configure a bounded delivery window long enough for real extraction: with
@@ -507,7 +461,7 @@ Do not restore it to an older snapshot when restoring OpenViking or host state.
 
 Enable memory with the existing optional `deploy/compose/memory.yml` service overlay.
 Set `DANO_MEMORY_CONFIG_DIR` to a host directory containing the private
-`memory-service.json` and tokenizer assets (owned by container host UID/GID, directory
+`memory-secrets.json` and generated tokenizer assets (owned by container host UID/GID, directory
 0700 and files 0600). It mounts read-only at `/etc/dano-memory`. Configure the existing
 OpenViking/model/recovery volumes documented above. This overlay adds the backend
 services and private memory configuration; it does not replace the app image, command,

@@ -1,231 +1,151 @@
-# Private memory service configuration
+# Memory configuration
 
-`readMemoryHostConfig(privateConfigDirectory)` reads only `memory-service.json`
-from a canonical, host-owned directory with no group/other permissions. The
-file must be a host-owned, single-link regular file with no group/other
-permissions, at most 1 MiB. Symlinks, shared permissions, invalid JSON and
-invalid settings produce a generic error without configuration values.
-Only a missing file in an otherwise valid private directory means unconfigured.
+Issue #539 consolidates configuration by responsibility. These are the only
+operator inputs; generated projections are not configuration entry points.
 
-Keep this configuration directory separate from the runtime data, identity
-registry, user workspaces and session roots. In particular, do not pre-populate
-a new supervisor's host-state root with configuration: fresh worker identity
-initialization checks that associated data roots are empty. The configuration
-path belongs in an administrator launch profile, not in model parameters.
+| Input | Authority |
+| --- | --- |
+| Agent Config Directory `settings.json` | Pi `defaultProvider`, `defaultModel`, `defaultThinkingLevel` |
+| `dano.config.json.openVikingSettings` | Memory enablement, service endpoints, budgets, timeouts, collection policy, generation limits, embedding and reranker parameters |
+| Existing Pi provider credentials / deployment Secrets | Provider authentication, resolved by Pi `ModelRuntime.getAuth` |
+| Private `memory-secrets.json` | Existing OpenViking account/management credential and Dano encryption key/version only |
 
-The version-1 schema requires all of the following. Secrets have no defaults. Runtime parsing requires explicit policy settings;
-new deployments materialize them from the repository-owned
-[`memory-service.defaults.json`](../../deploy/memory-service.defaults.json) via
-[the initialization helper](../../deploy/README.md#initialize-private-memory-configuration).
-Existing files are preserved. For version-1 parsing, the tokenizer queue is the sole compatibility
-default for private configs created before Dano 0.2.42:
+There is no `memoryModel`, memory API key or configurable tokenizer binding.
+`memory-service.defaults.json` and the old private functional configuration
+reader have been removed. `MemoryHostConfig` is an internal validated resolved
+object; its versioned parser is not a file-based operator interface.
+`memory-release.json` locks deployable artifacts/digests, not functional defaults.
+Its tokenizer counterpart is release-owned provenance in
+`apps/dano/src/bridge/tokenizer-catalog.json`, not an administrator-maintained
+copy of the selected model.
 
-- OpenViking origin, account ID and management key.
-- A 32-byte credential encryption key encoded as 64 hexadecimal characters,
-  plus its key version. Retain the key/version when restoring encrypted USER
-  credentials; do not regenerate them on each startup.
-- Request deadline, maximum displayed content bytes and policy version.
-- Save payload limit, recall timeout, token budget, result count and score threshold.
-- Scheduler polling, backoff, retry and per-tick operation limits.
-- Tokenizer asset/input limits, startup deadline, and one or more explicit
-  model bindings to local tokenizer/config paths and SHA-256 hashes. The
-  `maxQueuedRequests` bound per model defaults to 8 only when omitted by an
-  older private config; an explicit value must be positive. Set the queue bound
-  at least as high as the expected
-  simultaneous recalls minus one. Requests still obey their individual recall
-  deadlines; a full queue omits recall without blocking ordinary chat.
+## Resolution and activation
 
-Unknown fields, duplicate model bindings, malformed keys, unsafe asset paths,
-nonpositive limits and inverted retry bounds are rejected. Tokenizer functions,
-environment overrides and arbitrary module paths cannot be provided in JSON.
-The parsing result contains secrets and must remain confined to the trusted
-HTTP host; never serialize it into argv, worker RPC, browser state or logs.
+The protected host resolves the Agent Config Directory using the server's
+normal options parser, initializes only missing Runtime Defaults, and reads
+**that directory's global settings file directly**. It never consults a User's
+Runtime Workspace, `.pi/settings.json`, session selection or thinking override
+for background collection/extraction. The resulting model configuration is a
+startup snapshot. Existing settings are never overwritten by the new `off`
+Runtime Default. `off` means disabled thinking, not guaranteed zero latency.
 
-The protected supervisor also projects its approved Skill roots and Provider
-Python module directory into each worker's Heimdall policy as read-only paths.
-These resources must resolve inside the root-owned installation tree already
-verified by the supervisor. The HTTP host's RPC cannot add paths. Discovery of
-a Skill alone is insufficient: its instructions and scripts must remain
-readable in the worker and mounted read-only for Shell execution. Other
-installation paths are not granted access by this projection.
+The same resolver validates the model, provider API key, supported adapter,
+functional settings and exact tokenizer binding in deployment and startup.
+Only compatible OpenAI completion adapters with API-key authentication are
+currently projected into OpenViking. Unsupported models, header-only/OAuth
+adapters, unknown fields, duplicate model/key inputs and missing credentials
+fail activation. No fallback model/tokenizer or implicit memory disablement
+repairs an invalid enabled configuration. Safe errors identify a phase and code,
+for example `credentials:MEMORY_PROVIDER_API_KEY_REQUIRED`.
 
-## Current scope
+The release-owned tokenizer catalog pins official publisher repositories,
+revisions and SHA-256 values. `install-memory-tokenizers.mjs` prepares the assets
+explicitly, reuses verified files, and refuses corrupt assets. Startup performs
+no downloads. The initial catalog covers MiMo V2.6 Flash on official Xiaomi
+origins and DeepSeek V4.1 Flash (`deepseek-flash`) on its official origin:
 
-The private reader and parser have automated coverage for normal reads,
-configuration absence, corrupt input, permission violations, symlinks and hard
-links. Runtime service construction and protected-host startup wiring use
-the published and pinned extension `0.1.13`. The supervisor's optional
-`memoryConfigDirectory` supplies only a private path; the non-root host reads
-the configuration, constructs owner/credential/provisioning services and starts
-the explicitly configured tokenizer workers. It composes these services with
-authenticated user runtimes; anonymous users receive no memory extension.
-The user runtime now drains the active delivery tick after settling its network
-client before releasing the worker. There is no local drain timeout that could
-be mistaken for completed persistence. Supervisor-level forced termination must
-still be treated as crash recovery, not a successful drain.
-Startup initializes untouched authenticated accounts with memory enabled, without
-creating remote identities. Existing pause/collection settings remain unchanged.
-This does not establish production deployment or completed #465 acceptance.
+- [Xiaomi tokenizer source](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL/tree/f657ba2f7d24c9adc5730675baaa2d34de878a49)
+- [DeepSeek tokenizer source](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/tree/314113f8a7dadb388215396ba5fbee2c610a04d6)
 
-## Optional automatic collection
+Other models and proxy aliases require verified catalog support before use.
+The actual receiving chat model is passed to token counting; it is never
+replaced by the background default. The browser's model-switch command checks
+compatibility before mutating the selected model. Restored sessions also retain
+strict exact-model counting; there is no cross-model budget fallback.
 
-Add `collection` only when the protected deployment has a configured selector
-model. Omitting it preserves explicit memory without enabling collection.
-Untouched authenticated accounts default to memory on and, when configured,
-collection on in one durable transaction; there is no consent prompt. The browser exposes memory management only;
-manual enable/pause and collection controls are temporarily hidden. Trusted-host
-lifecycle controls remain available.
-Existing explicit pause or collection opt-out is preserved across restart and
-upgrade. Changing `collection.policyVersion` binds active collection to the new
-policy before schedulers start and stops old unsent automatic work. A paused
-collector binds the new policy on resume, using a fresh source boundary. Keep
-that version tied to the reviewed selection policy and trusted task-fact adapters.
+## Explicit transition from the former private configuration
 
-Example collection block (budgets are explicit administrator choices):
+Do this under the deployment lock, before the candidate release preflight.
+Do not change running containers until all checks pass. Keep rollback copies
+on the host with restricted permissions. Never print private JSON or use shell
+arguments containing credentials.
 
-```json
-{
-  "collection": {
-    "policyVersion": "collection-v1",
-    "lifecycleTimeoutMs": 5000,
-    "model": {
-      "provider": "xiaomi-token-plan-cn",
-      "id": "mimo-v2.6-flash",
-      "maxTokens": 2048,
-      "temperature": 0,
-      "thinking": "disabled"
-    },
-    "selector": { "maxInputBytes": 16384, "maxFacts": 5, "timeoutMs": 45000 },
-    "scheduler": {
-      "pollIntervalMs": 500, "mergeWindowMs": 1000, "maxWaitMs": 5000,
-      "workTimeoutMs": 50000, "leaseMs": 110000,
-      "initialBackoffMs": 1000, "maxBackoffMs": 5000,
-      "maxAttempts": 3, "maxRequestsPerBatch": 10
-    }
-  }
-}
+1. Transfer the old non-secret policy, scheduler, collection, embedding,
+   reranker and tokenizer resource limits into the **single** target
+   `dano.config.json.openVikingSettings`. Preserve existing values rather than
+   replacing them with new defaults. Set `enabled: true` for an enabled service.
+   Move `memoryModel.generation.maxTokens` and `.temperature` into `generation`;
+   omit the old generation thinking field and all model/tokenizer overrides.
+   A former version-1 `collection.model` must likewise be removed after its
+   non-model limits have been retained. Review this non-secret diff.
+2. Explicitly configure Pi's existing global `defaultProvider`, `defaultModel`
+   and `defaultThinkingLevel`. These are now the only LLM choices. Preserve
+   host-managed settings unless their update is part of the release scope.
+3. Keep provider keys in the existing Pi/deployment Secret source. Confirm the
+   chosen provider resolves its credential without transferring the old
+   extraction key into either JSON configuration.
+4. With `umask 077`, extract only `accountId`, `managementKey`, `encryptionKey`,
+   `encryptionKeyVersion` from the old private file into `memory-secrets.json`.
+   Preserve values exactly, including account and encryption version. Use the
+   existing host UID/GID, directory mode 0700 and file mode 0600. For a new
+   installation, the same four fields in temporary `memory-secrets.inputs.json`
+   can be published atomically by `init-memory-service.mjs`. No functional
+   defaults or LLM credentials are read from this bootstrap input.
+5. Run the candidate image's asset installer with the private directory mounted
+   read-write, then its model projection `sync` and independent `check`. These
+   commands use the same effective settings, credential resolver and real
+   tokenizer workers as startup. Ordinary runtime mounts remain read-only.
+6. Keep the old file only as a protected rollback archive, outside the active
+   configuration directory. It is never a runtime fallback. Preserve owner
+   mappings, authorizations, encrypted user credentials, memory/recovery volumes
+   and all encryption material. This change does not migrate or delete them.
+
+For example, the secret-only extraction can be performed locally on the target
+host without emitting any credential to the terminal:
+
+```sh
+umask 077
+jq '{accountId,managementKey,encryptionKey,encryptionKeyVersion}' \
+  /etc/dano-memory/memory-service.json > /etc/dano-memory/memory-secrets.inputs.json
+node deploy/init-memory-service.mjs /etc/dano-memory
+node deploy/install-memory-tokenizers.mjs /etc/dano-memory
 ```
 
-The protected host lazily uses the same deployment `getAgentDir()` model/auth
-configuration as protected chat, after normal Dano startup has resolved it.
-Per-user resources, model parameters and browser requests cannot replace these
-paths. Model catalog network refresh is disabled for this selector initialization.
-The selection call contains one quoted-data message, the extension's fixed
-selection prompt, and no tools. Only text from a completed response is returned;
-partial, error or tool-call responses fail with fixed error codes. Optional
-`thinking` only changes that provider request field; arbitrary payload overrides
-cannot replace messages, model identity, limits or tool declarations.
+The initializer validates inputs and publishes only a missing secret file. It
+preserves existing bytes/inodes and refuses unsafe paths. Remove only the
+bootstrap file created for this operation after successful publication.
 
-Input screening includes the configured management/encryption secrets, the
-currently resolved model API key or credential-bearing auth headers, and the
-current owner's stored USER key. The owner runtime verifies worker isolation
-before screening and inference. No remote identity is provisioned merely for
-screening. Runtime stop cancels/settles collection before delivery and worker
-teardown. Model/provider errors never become browser-visible configuration.
+## Projections and restarts
 
-### Confirmed provider task facts
+Run from `/app` in the candidate image, with the real global Agent Config
+Directory mounted at `PI_CODING_AGENT_DIR` and existing provider Secret environment
+injected. Mount the private memory directory at `/etc/dano-memory`, the
+OpenViking control directory and deploy control directory for these helpers:
 
-`collection.taskFacts` opts specific provider response contracts into collection.
-Keep this configuration in the protected memory file, never a Skill or user
-workspace. Without an approved contract, provider results remain excluded.
-Add or change a contract only with a new `collection.policyVersion`, so existing
-active collection is rebound before the new collector starts, without
-reenabling a user-disabled collector.
-
-The following is a **synthetic contract**, not a shipped OA route. Replace it
-only after verifying the provider's actual response semantics:
-
-```json
-{
-  "taskFacts": {
-    "maxResponseBytes": 65536,
-    "maxFactBytes": 4096,
-    "contracts": [{
-      "id": "confirmed-report",
-      "method": "POST",
-      "path": "/reports/submit",
-      "success": { "path": ["code"], "equals": 0 },
-      "actorPath": ["data", "owner"],
-      "fields": [{ "label": "report", "path": ["data", "reference"], "type": "string" }]
-    }]
-  }
-}
+```sh
+node deploy/memory-models.mjs preflight /etc/dano-memory
+node deploy/memory-models.mjs sync /etc/dano-memory /etc/openviking/ov.conf /deploy/.env
+node deploy/memory-models.mjs check /etc/dano-memory /etc/openviking/ov.conf /deploy/.env
 ```
 
-Contracts match an exact method and pathname; query strings are not projected.
-Ambiguous/encoded routes, duplicate routes, executable adapters and arbitrary
-object fields are rejected. Field paths are arrays of own-property names;
-selected values must match `string`, finite `number`, or `boolean`. Missing,
-wrong-type and oversized results produce no candidate. HTTP 2xx is necessary
-but insufficient: the configured success field must also match exactly.
+`sync` validates all inputs and tokenizer workers before writing either output;
+`check` refuses stale/mixed outputs. Only allowlisted model variables in `.env`
+are projected, preserving other credentials. The OpenViking API key is an
+unavoidable protected generated copy for its downstream client: the mode-0600
+`ov.conf` is generated before activation, mounted read-only by OpenViking,
+replaced on the next explicit sync, and never copied into source/image/logs.
+OpenViking VLM thinking is projected through its
+[documented request-body settings](https://github.com/volcengine/OpenViking/blob/v0.5.2.1/docs/en/guides/01-configuration.md).
 
-`actorPath` identifies the immutable OA/OAuth subject of the business result's
-owner. It must map to the authenticated Dano user through the same canonical
-subject mapping used at login. It is not a username, credential or request-body
-assertion. Results for other people are excluded even when the caller is allowed
-to view them. Do not configure a result contract without a verifiable actor.
+`deploy:release` invokes secret initialization, then projection `sync`/`check`
+before container replacement. A memory-enabled release recreates app and its
+model-service dependencies so file changes cannot leave OpenViking on the prior
+startup snapshot. Prepare tokenizer assets before release; failures leave the
+running service intact. Mounted settings/auth changes require explicit projection
+and service recreation. Compose environment changes require recreation, not only
+`restart`. Product JSON baked into the image requires a rebuild; an explicitly
+mounted replacement needs recreation only. There is no configuration hot reload.
 
-Both direct `provider_request` and provider HTTP calls intercepted during
-Python/bash execution use the initiating login's trusted send evidence. The
-host projects allowlisted fields from the actual response; it never extracts
-facts from bash stdout. A domain-separated HMAC receipt binds the minimal
-projection to the memory owner, tool name/call, policy, grant revision and epoch.
-Only these receipts are persisted with the original pi tool result. The
-collector verifies them again after restart/fork and after permission changes;
-forged worker metadata, failed tool results and stale receipts are excluded.
-Raw response bodies and credentials are not copied into a collection receipt.
-The extension's existing secret screening still runs before any selected task
-fact is sent to the selection model. Ordinary business requests remain usable
-when optional memory is unconfigured, revoked, timed out or unavailable.
+## Browser exposure and acceptance
 
-## Unified model configuration (version 2)
+Vite loads an explicit virtual module containing only the product-name fallback.
+The raw JSON never enters the browser module graph and its dev URL is blocked.
+The server runtime-config projection separately allowlists browser fields.
 
-New deployments use `memory-service.json` as the only editable memory-model
-configuration. Set `memoryModel.id` once. Its provider/API identity binds the
-local tokenizer and the selection model; the OpenViking extraction model is
-projected from the same ID. Do not add `tokenizers`, `collection.model`, or an
-extraction model override to version 2: the parser rejects them. Version 1
-remains readable for rollback, but is not the current deployment format.
-
-Replace the old `tokenizers` block and `collection.model` with:
-
-```json
-{
-  "version": 2,
-  "memoryModel": {
-    "provider": "xiaomi-token-plan-cn",
-    "api": "openai-completions",
-    "id": "mimo-v2.6-flash",
-    "tokenizer": {"path": "/etc/dano-memory/tokenizers/mimo-v2.6-flash/tokenizer.json", "sha256": "<verified-sha256>"},
-    "config": {"path": "/etc/dano-memory/tokenizers/mimo-v2.6-flash/tokenizer_config.json", "sha256": "<verified-sha256>"},
-    "generation": {"maxTokens": 2048, "temperature": 0, "thinking": "disabled"},
-    "extraction": {"provider": "openai", "apiBase": "<provider-api-base>", "apiKey": "<private-credential>"}
-  },
-  "embedding": {
-    "model": "bge-small-zh-v1.5-f16", "modelFile": "bge-small-zh-v1.5-f16.gguf",
-    "apiBase": "http://embedding:8080/v1", "dimension": 512, "maxInputTokens": 100
-  }
-}
-```
-
-Retain the policy, credentials, schedulers and tokenizer limits. Keep the existing
-`reranker` settings in this file and add its `modelFile` alongside `model`.
-Embedding and reranker are separate model types; neither inherits the Flash ID.
-Their Compose aliases/files and OpenViking's embedding configuration are generated
-from this same file. The release manifest pins tested assets, not a second runtime
-setting. When changing the LLM, supply its verified tokenizer assets in the same
-object; never relabel old assets as a new tokenizer.
-
-From a built image with the private config/control paths mounted, run
-`node deploy/memory-models.mjs sync CONFIG_DIR OV_CONFIG_PATH DEPLOY_ENV_PATH`,
-then repeat with `check` before Compose. The command preserves unrelated settings,
-credentials, ownership and private permissions. It prints only fixed status codes.
-`ov.conf` model fields and `.env` model variables are generated outputs; do not
-edit them independently. A failed or interrupted sync must not pass the check.
-The command does not start services or modify runtime memory/session contents.
-
-The projector edits only canonical single-line `KEY=value` env entries and
-preserves their unrelated bytes. It rejects multiline values, alternate colon
-assignments and whitespace-around-key syntax before any write rather than risking
-credential corruption. Convert such a deploy-control file deliberately before
-using this helper; an error must not be bypassed by blindly rewriting it.
+Automated verification covers resolution, private inputs, duplicate-source
+rejection, global/session boundaries, startup snapshots, asset integrity,
+projection and pre-switch validation. Real-browser release acceptance must
+additionally demonstrate cross-session recall and collection/save reaching
+`ready` after a configuration switch, plus plain text, image interpretation and
+`bash ls`. Unit tests/builds do not prove those live outcomes. No production
+configuration or user memory is changed by this implementation alone.

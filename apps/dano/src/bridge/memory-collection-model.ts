@@ -7,7 +7,7 @@ export type MemoryCollectionModelRuntime = Pick<ModelRuntime, "getModel" | "getA
 /** The caller supplies deployment model configuration, never a user's workspace.
  * No model/auth lookup occurs until a separately authorized selection is needed. */
 export function memoryCollectionModel(configuration: MemoryCollectionHostConfig,
-  runtime: () => Promise<MemoryCollectionModelRuntime>, hostSecrets: readonly string[]): UserMemoryCollectionOptions["selector"] {
+  runtime: () => Promise<MemoryCollectionModelRuntime>, hostSecrets: readonly string[], apiKeySnapshot?: string): UserMemoryCollectionOptions["selector"] {
   async function binding(signal?: AbortSignal) {
     signal?.throwIfAborted();
     const models = await runtime();
@@ -20,6 +20,7 @@ export function memoryCollectionModel(configuration: MemoryCollectionHostConfig,
     async sensitiveValues(signal) {
       try {
         const { models, model } = await binding(signal);
+        if (apiKeySnapshot) return [...hostSecrets, apiKeySnapshot].filter(value => value.length > 0);
         const auth = await models.getAuth(model, { signal });
         signal?.throwIfAborted();
         const secrets = [...hostSecrets];
@@ -38,6 +39,8 @@ export function memoryCollectionModel(configuration: MemoryCollectionHostConfig,
         const result = await models.completeSimple(model, { systemPrompt,
           messages: [{ role: "user", content: data, timestamp: Date.now() }] }, {
           signal, maxTokens: configuration.model.maxTokens, temperature: configuration.model.temperature,
+          ...(apiKeySnapshot ? { apiKey: apiKeySnapshot } : {}),
+          reasoning: configuration.model.reasoning,
           ...(configuration.model.thinking === undefined ? {} : {
             onPayload: (payload: unknown) => {
               if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("INVALID_MODEL_PAYLOAD");

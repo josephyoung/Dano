@@ -1,6 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
-import { readMemoryHostConfig } from "./memory-host-config.js";
+import type { MemoryHostConfig } from "./memory-host-config.js";
 import { MemoryOwnerRegistry } from "./memory-owner-registry.js";
 import { MemoryCredentialStore } from "./memory-credential-store.js";
 import { MemoryProvisioner } from "./memory-provisioner.js";
@@ -9,13 +9,13 @@ import { ensureSafeDirectory } from "./safe-directory.js";
 import type { UserMemoryServices } from "./user-memory-runtime.js";
 import { memoryCollectionModel, type MemoryCollectionModelRuntime } from "./memory-collection-model.js";
 import { MemoryReranker } from "./memory-reranker.js";
+import { MemoryConfigurationError } from "./effective-memory-config.js";
 
 /** Only the protected HTTP host constructs these services. No remote connection
  * is made at startup; authenticated users still need explicit memory consent. */
-export async function createProtectedMemoryServices(configurationDirectory: string, stateDirectory: string,
+export async function createProtectedMemoryServices(config: MemoryHostConfig | undefined, stateDirectory: string,
   modelRuntime?: () => Promise<MemoryCollectionModelRuntime>, recoveryDirectory?: string):
 Promise<{ services: UserMemoryServices; close(): Promise<void> } | undefined> {
-  const config = await readMemoryHostConfig(configurationDirectory);
   if (!config) return undefined;
   if (config.collection && !modelRuntime) throw new Error("MEMORY_COLLECTION_MODEL_REQUIRED");
   const invalid = () => new Error("UNPROTECTED_MEMORY_SERVICE_STATE");
@@ -26,7 +26,8 @@ Promise<{ services: UserMemoryServices; close(): Promise<void> } | undefined> {
   await ensureSafeDirectory(stateDirectory, { unsafeDirectoryError: invalid });
   const state = await lstat(stateDirectory);
   if (await realpath(stateDirectory) !== stateDirectory || state.uid !== process.getuid?.() || (state.mode & 0o077)) throw invalid();
-  const tokenizers = await MemoryTokenizers.create(config.tokenizers, config.tokenizerLimits);
+  const tokenizers = await MemoryTokenizers.create(config.tokenizers, config.tokenizerLimits)
+    .catch(() => { throw new MemoryConfigurationError("tokenizer", "MEMORY_TOKENIZER_UNAVAILABLE"); });
   try {
     const services: UserMemoryServices = {
       owners: new MemoryOwnerRegistry({ directory: join(stateDirectory, "owners"), accountId: config.accountId }),
@@ -36,11 +37,12 @@ Promise<{ services: UserMemoryServices; close(): Promise<void> } | undefined> {
         managementKey: config.managementKey, timeoutMs: config.requestTimeoutMs }),
       baseUrl: config.baseUrl, requestTimeoutMs: config.requestTimeoutMs, maxContentBytes: config.maxContentBytes,
       policyVersion: config.policyVersion, policy: { ...config.policy, countTokens: tokenizers.countTokens },
+      validateModel: async model => { await tokenizers.countTokens("", { model, signal: AbortSignal.timeout(config.tokenizerLimits.startupTimeoutMs) }); },
       ...(config.reranker ? { reranker: new MemoryReranker(config.reranker) } : {}),
       scheduler: config.scheduler,
       ...(recoveryDirectory ? { recoveryDirectory } : {}),
       ...(config.collection ? { collection: { ...config.collection,
-        selector: memoryCollectionModel(config.collection, modelRuntime!, [config.managementKey, config.encryptionKey]),
+        selector: memoryCollectionModel(config.collection, modelRuntime!, [config.managementKey, config.encryptionKey], config.deployment?.extraction.api_key),
         taskFacts: config.collection.taskFacts ? { config: config.collection.taskFacts,
           key: Buffer.from(config.encryptionKey, "hex") } : undefined,
       } } : {}),

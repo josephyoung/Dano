@@ -1,12 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
+import { publicConfigPlugin } from "./apps/dano/public-config.js";
 
 const typesRoot = fileURLToPath(new URL("./apps/dano/types/", import.meta.url));
 const webSrcRoot = fileURLToPath(new URL("./apps/dano/web/src/", import.meta.url));
 
 export default defineConfig({
-  plugins: [svelte({
+  plugins: [publicConfigPlugin(), svelte({
     dynamicCompileOptions: () => ({ generate: "client" }),
   })],
   ssr: {

@@ -7,18 +7,27 @@ import { randomUUID } from "node:crypto";
 
 try {
   const [mode, configDirectory, ovPath, envPath] = process.argv.slice(2);
-  if (!["check", "sync"].includes(mode) || !configDirectory || !ovPath || !envPath || process.argv.length !== 6) throw Error();
+  if (!configDirectory || (mode === "preflight" ? process.argv.length !== 4
+    : !["check", "sync"].includes(mode) || !ovPath || !envPath || process.argv.length !== 6)) throw Error();
   const built = resolve("dist/server/bridge");
-  const { parseMemoryHostConfig } = await import(pathToFileURL(join(built, "memory-host-config.js")).href);
+  const { loadEffectiveMemoryConfig, createGlobalMemoryModelRuntime } = await import(pathToFileURL(join(built, "effective-memory-config.js")).href);
+  const { MemoryTokenizers } = await import(pathToFileURL(join(built, "memory-tokenizer.js")).href);
+  const { parseDanoServerOptions } = await import(pathToFileURL(resolve("dist/server/main.js")).href);
+  const agentDirectory = parseDanoServerOptions([]).agentConfigDir;
   const { projectMemoryModels } = await import(pathToFileURL(join(built, "memory-model-projection.js")).href);
-  const inputs = await Promise.all([ovPath, envPath, join(configDirectory, "memory-service.json")].map(async path => {
+  const runtime = await createGlobalMemoryModelRuntime(agentDirectory);
+  const config = await loadEffectiveMemoryConfig(configDirectory, agentDirectory, runtime);
+  if (!config) throw Error("MEMORY_DISABLED");
+  const tokenizers = await MemoryTokenizers.create(config.tokenizers, config.tokenizerLimits);
+  await tokenizers.close();
+  if (mode === "preflight") { console.log("MEMORY_CONFIG_VALID"); process.exit(0); }
+  const inputs = await Promise.all([ovPath, envPath].map(async path => {
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077)
       || (process.getuid?.() !== 0 && stat.uid !== process.getuid?.())
       || await realpath(path) !== resolve(path)) throw Error();
     return { path, stat, text: await readFile(path, "utf8") };
   }));
-  const config = parseMemoryHostConfig(JSON.parse(inputs[2].text));
   const ov = JSON.parse(inputs[0].text);
   const projected = projectMemoryModels(config, ov, inputs[1].text);
   const contents = [JSON.stringify(projected.openViking, null, 2) + "\n", projected.env];
@@ -37,4 +46,8 @@ try {
     }
   }
   console.log(mode === "check" ? "MEMORY_MODELS_MATCH" : "MEMORY_MODELS_PROJECTED");
-} catch { console.error("MEMORY_MODEL_PROJECTION_FAILED"); process.exitCode = 1; }
+} catch (error) {
+  const { MemoryConfigurationError } = await import("../dist/server/bridge/effective-memory-config.js");
+  console.error(error instanceof MemoryConfigurationError ? error.message : "MEMORY_MODEL_PROJECTION_FAILED");
+  process.exitCode = 1;
+}

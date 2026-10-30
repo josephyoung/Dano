@@ -1,10 +1,5 @@
-import { chmod, link, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { parseMemoryHostConfig, readMemoryHostConfig } from "../memory-host-config.js";
-const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+import { expect, it } from "vitest";
+import { parseMemoryHostConfig } from "../memory-host-config.js";
 function config() {
   return { version: 1, baseUrl: "https://memory.example.test/", accountId: "account", managementKey: "SYNTHETIC_PRIVATE_KEY",
     encryptionKey: "ab".repeat(32), encryptionKeyVersion: "v1", requestTimeoutMs: 1000,
@@ -16,7 +11,6 @@ function config() {
       tokenizer: { path: "/installed/tokenizer.json", sha256: "a".repeat(64) },
       config: { path: "/installed/tokenizer_config.json", sha256: "b".repeat(64) } }] };
 }
-async function directory() { const root = await realpath(await mkdtemp(join(tmpdir(), "dano-memory-config-"))); roots.push(root); return root; }
 it("normalizes the service origin and requires explicit policies and model bindings", () => {
   const input = config(), result = parseMemoryHostConfig(input);
   expect(result).toEqual({ ...input, baseUrl: "https://memory.example.test" });
@@ -42,27 +36,6 @@ it("starts from a private config written before tokenizer queuing was introduced
   const parsed = parseMemoryHostConfig({ ...old, tokenizerLimits: previousLimits });
   expect(parsed.tokenizerLimits).toEqual({ ...previousLimits, maxQueuedRequests });
 });
-it("loads private configuration and treats only a missing file as unconfigured", async () => {
-  const root = await directory();
-  expect(await readMemoryHostConfig(root)).toBeUndefined();
-  await writeFile(join(root, "memory-service.json"), JSON.stringify(config()), { mode: 0o600 });
-  expect(await readMemoryHostConfig(root)).toEqual(parseMemoryHostConfig(config()));
-  await writeFile(join(root, "memory-service.json"), "{SYNTHETIC_PRIVATE_KEY");
-  await expect(readMemoryHostConfig(root)).rejects.toThrow("INVALID_MEMORY_HOST_CONFIG");
-});
-it("rejects shared directory/file permissions, symlinks and hard-linked secret files", async () => {
-  const root = await directory(), file = join(root, "memory-service.json"), source = join(root, "secret.json");
-  await writeFile(source, JSON.stringify(config()), { mode: 0o600 });
-  await symlink(source, file);
-  await expect(readMemoryHostConfig(root)).rejects.toThrow("INVALID_MEMORY_HOST_CONFIG");
-  await rm(file); await link(source, file);
-  await expect(readMemoryHostConfig(root)).rejects.toThrow("INVALID_MEMORY_HOST_CONFIG");
-  await rm(file); await writeFile(file, JSON.stringify(config()), { mode: 0o644 });
-  await expect(readMemoryHostConfig(root)).rejects.toThrow("INVALID_MEMORY_HOST_CONFIG");
-  await chmod(file, 0o600); await chmod(root, 0o755);
-  await expect(readMemoryHostConfig(root)).rejects.toThrow("INVALID_MEMORY_HOST_CONFIG");
-});
-
 it("accepts explicit bounded collection configuration and rejects model/tool payload overrides", () => {
   const collection = { policyVersion: "collection-v1", lifecycleTimeoutMs: 1000,
     model: { provider: "fixture", id: "selector", maxTokens: 512, temperature: 0, thinking: "disabled" },

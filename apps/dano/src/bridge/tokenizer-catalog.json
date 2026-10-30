@@ -1,0 +1,29 @@
+[
+  {
+    "repository": "XiaomiMiMo/MiMo-V2.6-Flash-RL",
+    "revision": "f657ba2f7d24c9adc5730675baaa2d34de878a49",
+    "models": [
+      "mimo-v2.6-flash"
+    ],
+    "origins": [
+      "https://api.xiaomimimo.com",
+      "https://token-plan-cn.xiaomimimo.com",
+      "https://token-plan-sgp.xiaomimimo.com",
+      "https://token-plan-ams.xiaomimimo.com"
+    ],
+    "tokenizer.json": "ff15eb925890d6b71b5160de4b846fbd13178438ab463b38ecc953e8cd1dcb3e",
+    "tokenizer_config.json": "413a7845f52943ccf4de0e5c838414507d16c44dbf573da9e20bc8902b384d06"
+  },
+  {
+    "repository": "deepseek-ai/DeepSeek-V4.1-Flash",
+    "revision": "314113f8a7dadb388215396ba5fbee2c610a04d6",
+    "models": [
+      "deepseek-flash"
+    ],
+    "origins": [
+      "https://api.deepseek.com"
+    ],
+    "tokenizer.json": "c90dfa01249db1be4245780a052ede752e1361c612ac6d08e2bdada7d599476b",
+    "tokenizer_config.json": "6ac8c8dc065ed118161d02dd532749ae3f52c243deac27872134fae2f50d8547"
+  }
+]

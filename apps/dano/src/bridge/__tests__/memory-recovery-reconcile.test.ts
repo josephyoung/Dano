@@ -39,8 +39,8 @@ async function fixture() {
     encryptionKey, keyVersion: "v1",
   });
   await credentialStore.write(owner, "synthetic-user-key");
-  await writeFile(join(config, "memory", "memory-service.json"), JSON.stringify({ accountId: "account",
-    baseUrl: "http://localhost:1", requestTimeoutMs: 3000, encryptionKey: encryptionKey.toString("hex"),
+  await writeFile(join(config, "memory", "memory-secrets.json"), JSON.stringify({ accountId: "account",
+    managementKey: "synthetic-management", encryptionKey: encryptionKey.toString("hex"),
     encryptionKeyVersion: "v1" }), { mode: 0o600 });
   return { root, data, recovery, config, owner, store, journal, credentialStore,
     checkpointFile: join(root, "checkpoint.json") };

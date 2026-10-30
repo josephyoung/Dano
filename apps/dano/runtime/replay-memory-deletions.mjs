@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadMemoryManagementConfig } from "./dist/server/bridge/effective-memory-config.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -20,7 +21,7 @@ try {
   await Promise.all([trustedDirectory(configDirectory), trustedDirectory(dataDirectory),
     privateDirectory(join(configDirectory, "memory")), privateDirectory(dirname(ledgerFile))]);
   const ledger = JSON.parse((await privateFile(ledgerFile, 16 * 1024 * 1024)).toString("utf8"));
-  const config = JSON.parse((await privateFile(join(configDirectory, "memory", "memory-service.json"), 65536)).toString("utf8"));
+  const config = await loadMemoryManagementConfig(join(configDirectory, "memory"));
   assert.ok(typeof config.accountId === "string"
     && /^[A-Za-z0-9_-]{1,128}$/.test(config.accountId), "INVALID_CONFIG");
   const entries = ledger.version === 1 ? [ledger] : ledger.version === 2 ? ledger.owners : undefined;

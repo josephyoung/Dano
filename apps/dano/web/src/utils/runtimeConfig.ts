@@ -1,5 +1,5 @@
 import type { BridgeQuickActionConfig } from "@dano/types/protocol";
-import danoConfig from "../../../../../dano.config.json";
+import danoConfig from "virtual:dano-public-config";
 import { normalizeLocale, type Locale } from "../i18n/locales";
 import { translate } from "../i18n/translate";
 

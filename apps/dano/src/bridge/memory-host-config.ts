@@ -1,22 +1,21 @@
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { UserMemoryServices } from "./user-memory-runtime.js";
 import { DEFAULT_MAX_QUEUED_REQUESTS, type MemoryTokenizerBinding, type MemoryTokenizerLimits } from "./memory-tokenizer.js";
 import type { UserMemoryCollectionOptions } from "./user-memory-collection.js";
 import type { MemoryRerankerConfig } from "./memory-reranker.js";
 import { parseMemoryTaskFactConfig, type MemoryTaskFactConfig } from "./memory-task-facts.js";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 
 export interface MemoryCollectionHostConfig {
   policyVersion: string;
   lifecycleTimeoutMs: number;
-  model: { provider: string; id: string; maxTokens: number; temperature: number; thinking?: "enabled" | "disabled" };
+  model: { provider: string; id: string; maxTokens: number; temperature: number; thinking?: "enabled" | "disabled"; reasoning?: ThinkingLevel };
   selector: Pick<UserMemoryCollectionOptions["selector"], "maxInputBytes" | "maxFacts" | "timeoutMs">;
   scheduler: Omit<UserMemoryCollectionOptions["scheduler"], "onError">;
   taskFacts?: MemoryTaskFactConfig;
 }
 
-/** Host-private file contents. Never put this object in argv, RPC, logs or browser state. */
+/** Resolved host-only configuration. Never put this object in argv, RPC, logs or browser state. */
 export interface MemoryHostConfig {
   version: 1;
   baseUrl: string;
@@ -34,6 +33,9 @@ export interface MemoryHostConfig {
   tokenizers: MemoryTokenizerBinding[];
   collection?: MemoryCollectionHostConfig;
   deployment?: {
+    thinking?: "enabled" | "disabled";
+    reasoning?: string;
+    generation?: { maxTokens: number; temperature: number };
     extraction: { provider: string; model: string; api_base: string; api_key: string };
     embedding: { model: string; modelFile: string; apiBase: string; dimension: number; maxInputTokens: number };
     rerankerModelFile: string;
@@ -187,23 +189,4 @@ function parseUnifiedMemoryHostConfig(input: unknown): MemoryHostConfig {
       apiBase: apiBase(embedding.apiBase), dimension: positive(embedding.dimension), maxInputTokens: positive(embedding.maxInputTokens) },
     rerankerModelFile: modelFile(rerankerFile),
   } };
-}
-
-/** Separate host-owned 0700 configuration directory, outside state and tool workspaces. */
-export async function readMemoryHostConfig(privateConfigDirectory: string): Promise<MemoryHostConfig | undefined> {
-  try {
-    if (!isAbsolute(privateConfigDirectory) || await realpath(privateConfigDirectory) !== privateConfigDirectory) throw invalid();
-    const directory = await lstat(privateConfigDirectory);
-    if (!directory.isDirectory() || directory.uid !== process.getuid?.() || (directory.mode & 0o077)) throw invalid();
-    let file;
-    try { file = await open(join(privateConfigDirectory, "memory-service.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
-    try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.uid !== directory.uid || stat.nlink !== 1 || (stat.mode & 0o077) || stat.size > 1024 * 1024) throw invalid();
-      const bytes = await file.readFile();
-      if (bytes.length > 1024 * 1024) throw invalid();
-      return parseMemoryHostConfig(JSON.parse(bytes.toString("utf8")));
-    } finally { await file.close(); }
-  } catch { throw invalid(); }
 }

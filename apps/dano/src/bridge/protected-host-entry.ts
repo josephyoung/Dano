@@ -6,8 +6,8 @@ import { WorkerSupervisorClient } from "./worker-supervisor-client.js";
 import { createProtectedMemoryServices } from "./protected-memory-services.js";
 import { withUserMemory } from "./user-memory-runtime.js";
 import { startManagedSearch } from "./managed-search.js";
-import { ModelRuntime, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
+import { createGlobalMemoryModelRuntime, loadEffectiveMemoryConfig, MemoryConfigurationError } from "./effective-memory-config.js";
+import { loadDanoConfig } from "./dano-config.js";
 
 /** Spawned by the root supervisor after setpriv drops all host capabilities. */
 export async function runProtectedHost(): Promise<number> {
@@ -31,17 +31,21 @@ export async function runProtectedHost(): Promise<number> {
   let search: Awaited<ReturnType<typeof startManagedSearch>> | undefined;
   let searchFailed = false;
   try {
-    let collectionModels: Promise<ModelRuntime> | undefined;
-    if (profile.memory) memory = await createProtectedMemoryServices(profile.memory.configurationDirectory, profile.memory.stateDirectory,
-      () => {
-        // Resolve lazily, after runDanoMain has selected the deployment agent
-        // directory. Never use a per-user resource directory for credentials.
-        stopped.signal.throwIfAborted();
-        collectionModels ??= ModelRuntime.create({ authPath: join(getAgentDir(), "auth.json"),
-          modelsPath: join(getAgentDir(), "models.json"), refreshOnCreate: false, allowModelNetwork: false,
-          signal: stopped.signal }).catch(error => { collectionModels = undefined; throw error; });
-        return collectionModels;
-      }, profile.memory.recoveryDirectory);
+    // Resolve the same global directory as main, before constructing memory.
+    // No SettingsManager/project overlay is involved in background tasks.
+    const { parseDanoServerOptions, initializeDanoAgentSettings } = await import("../main.js");
+    const options = parseDanoServerOptions(process.argv.slice(3));
+    process.env.PI_CODING_AGENT_DIR = options.agentConfigDir;
+    await initializeDanoAgentSettings(options.agentConfigDir, options.cwd, options.productName);
+    if (loadDanoConfig().openVikingSettings?.enabled === true && !profile.memory) {
+      throw new MemoryConfigurationError("secrets", "MEMORY_SECRET_DIRECTORY_REQUIRED");
+    }
+    if (profile.memory) {
+      const models = await createGlobalMemoryModelRuntime(options.agentConfigDir, stopped.signal);
+      const config = await loadEffectiveMemoryConfig(profile.memory.configurationDirectory, options.agentConfigDir, models);
+      memory = await createProtectedMemoryServices(config, profile.memory.stateDirectory,
+        async () => models, profile.memory.recoveryDirectory);
+    }
     search = await startManagedSearch({ signal: stopped.signal,
       host: process.env.OPEN_WEBSEARCH_HOST, port: process.env.OPEN_WEBSEARCH_PORT,
       onFailure: () => { searchFailed = true; stopped.abort(new Error("SEARCH_DAEMON_EXITED")); } });
@@ -66,8 +70,8 @@ export async function runProtectedHost(): Promise<number> {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  runProtectedHost().then(code => { process.exitCode = code; }, () => {
-    console.error("[dano] Protected host startup or shutdown failed.");
+  runProtectedHost().then(code => { process.exitCode = code; }, error => {
+    console.error(error instanceof MemoryConfigurationError ? `[dano] ${error.message}` : "[dano] Protected host startup or shutdown failed.");
     process.exitCode = 1;
     if (process.connected) process.disconnect?.();
   });

@@ -93,20 +93,43 @@ if (withMemory) {
   options.memoryRecoveryDirectory = join(root, 'memory-recovery');
   await mkdir(options.memoryRecoveryDirectory, { mode: 0o700 });
   await chown(options.memoryRecoveryDirectory, hostUid, hostGid);
-  const asset = async (name, value) => {
-    const path = join(root, name), bytes = JSON.stringify(value); await writeFile(path, bytes, { mode: 0o644 });
-    return { path, sha256: createHash('sha256').update(bytes).digest('hex') };
-  };
-  const config = realService ? JSON.parse(await readFile(process.env.DANO_FIXTURE_MEMORY_CONFIG, 'utf8')) : { version: 1, baseUrl: 'http://127.0.0.1:1', accountId: 'fixture', managementKey: 'SYNTHETIC_MANAGEMENT_KEY',
-    encryptionKey: 'ab'.repeat(32), encryptionKeyVersion: 'v1', requestTimeoutMs: 100, maxContentBytes: 16384, policyVersion: 'v1',
-    policy: { maxPayloadBytes: 4096, recallTimeoutMs: 1000, recallTokenBudget: 1500, recallLimit: 5, minimumScore: 0.5 },
-    scheduler: { pollIntervalMs: 1000, initialBackoffMs: 1000, maxBackoffMs: 5000, maxAttemptsPerPhase: 5, maxOperationsPerTick: 4 },
-    tokenizerLimits: { maxAssetBytes: 65536, maxInputBytes: 8192, startupTimeoutMs: 5000, maxQueuedRequests: 8 },
-    tokenizers: [{ model: { provider: 'fixture', api: 'openai-completions', id: 'fixture' },
-      tokenizer: await asset('tokenizer.json', { version: '1.0', added_tokens: [], normalizer: null,
-        pre_tokenizer: { type: 'Whitespace' }, post_processor: null, decoder: null,
-        model: { type: 'WordLevel', vocab: { '[UNK]': 0, hello: 1 }, unk_token: '[UNK]' } }),
-      config: await asset('tokenizer_config.json', { tokenizer_class: 'PreTrainedTokenizerFast', unk_token: '[UNK]' }) }] };
+  // Fixtures exercise the production configuration contract too. No private
+  // model/tokenizer overrides are accepted by the protected host.
+  const product = JSON.parse(await readFile(process.env.DANO_FIXTURE_PRODUCT_CONFIG || '/app/dano.config.json', 'utf8'));
+  const functional = structuredClone(product.openVikingSettings);
+  functional.enabled = true;
+  const secrets = realService ? JSON.parse(await readFile(process.env.DANO_FIXTURE_MEMORY_CONFIG, 'utf8')) : {
+    accountId: 'fixture', managementKey: 'SYNTHETIC_MANAGEMENT_KEY', encryptionKey: 'ab'.repeat(32), encryptionKeyVersion: 'v1' };
+  const { parseMemorySecrets, memoryTokenizerCatalog } = await import(pathToFileURL(join(serverDir, 'bridge/effective-memory-config.js')).href);
+  parseMemorySecrets(secrets);
+  if (!realService) {
+    functional.baseUrl = 'http://127.0.0.1:1'; functional.requestTimeoutMs = 100;
+    delete functional.collection;
+  }
+  const config = { ...functional, ...secrets };
+  const agentDir = environment.PI_CODING_AGENT_DIR || join(root, 'host-agent');
+  await mkdir(agentDir, { recursive: true, mode: 0o700 }); await chown(agentDir, hostUid, hostGid);
+  environment.PI_CODING_AGENT_DIR = agentDir;
+  const defaults = JSON.parse(await readFile('/app/deploy/runtime-defaults/settings.json', 'utf8'));
+  if (realModel) { defaults.defaultProvider = realModel.provider; defaults.defaultModel = realModel.modelId; }
+  const settingsPath = join(agentDir, 'settings.json');
+  await writeFile(settingsPath, JSON.stringify(defaults), { mode: 0o600 }); await chown(settingsPath, hostUid, hostGid);
+  if (!realService) {
+    const authPath = join(agentDir, 'auth.json');
+    await writeFile(authPath, JSON.stringify({ [defaults.defaultProvider]: { type: 'api_key', key: 'SYNTHETIC_FIXTURE_KEY' } }), { mode: 0o600 });
+    await chown(authPath, hostUid, hostGid);
+  }
+  // Explicit fixture preparation uses official catalog assets; an optional
+  // cache contains revision/name files and is still hash-verified by installer.
+  const { installMemoryTokenizers } = await import('/app/deploy/install-memory-tokenizers.mjs');
+  await chown(options.memoryConfigDirectory, 0, 0);
+  const cache = process.env.DANO_FIXTURE_TOKENIZER_CACHE;
+  await installMemoryTokenizers(options.memoryConfigDirectory, memoryTokenizerCatalog,
+    cache ? async url => { const parts = new URL(url).pathname.split('/'); return readFile(join(cache, parts.at(-2), parts.at(-1))); } : undefined);
+  const ownAssets = async path => { await chown(path, hostUid, hostGid); for (const entry of await readdir(path, { withFileTypes: true })) {
+    const child = join(path, entry.name); if (entry.isDirectory()) await ownAssets(child); else await chown(child, hostUid, hostGid);
+  } };
+  await ownAssets(join(options.memoryConfigDirectory, 'tokenizers')); await chown(options.memoryConfigDirectory, hostUid, hostGid);
   if (realMemoryService) {
     assert(process.env.DANO_FIXTURE_MEMORY_BASE_URL && process.env.DANO_FIXTURE_MEMORY_ACCOUNT_ID
       && process.env.DANO_FIXTURE_MEMORY_MANAGEMENT_KEY, 'Set real memory service connection');
@@ -115,10 +138,14 @@ if (withMemory) {
     config.managementKey = process.env.DANO_FIXTURE_MEMORY_MANAGEMENT_KEY;
     config.requestTimeoutMs = 5000;
   }
-  const path = join(options.memoryConfigDirectory, 'memory-service.json');
+  functional.baseUrl = config.baseUrl; functional.requestTimeoutMs = config.requestTimeoutMs;
+  secrets.accountId = config.accountId; secrets.managementKey = config.managementKey;
+  product.openVikingSettings = functional;
+  await writeFile(environment.DANO_CONFIG_PATH, JSON.stringify(product), { mode: 0o644 });
+  const path = join(options.memoryConfigDirectory, 'memory-secrets.json');
   collectionConfigured = Boolean(config.collection);
   memoryAccountId = config.accountId;
-  await writeFile(path, JSON.stringify(config), { mode: 0o600 }); await chown(path, hostUid, hostGid);
+  await writeFile(path, JSON.stringify(secrets), { mode: 0o600 }); await chown(path, hostUid, hostGid);
   if (realMemoryService) {
     const response = await fetch(`${config.baseUrl}/api/v1/admin/accounts`, {
       method: 'POST', headers: { 'X-API-Key': config.managementKey, 'Content-Type': 'application/json' },

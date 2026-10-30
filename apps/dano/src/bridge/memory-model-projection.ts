@@ -11,7 +11,22 @@ export function projectMemoryModels(config: MemoryHostConfig, openViking: Record
     return value as Record<string, unknown>;
   };
   const embedding = block(openViking.embedding);
-  const ov = { ...openViking, vlm: { ...block(openViking.vlm), ...models.extraction },
+  const vlm: Record<string, unknown> = { ...block(openViking.vlm), ...models.extraction };
+  // Remove alternate model routes from the generated projection: Pi's global
+  // model is the sole authority, including when thinking is disabled.
+  if (models.thinking) {
+    delete vlm.credentials; delete vlm.backup;
+    delete vlm.extra_headers; delete vlm.api_version;
+    vlm.thinking = models.thinking === "enabled";
+    vlm.extra_request_body = { thinking: { type: models.thinking },
+      ...(models.reasoning ? { reasoning_effort: models.reasoning } : {}) };
+    delete vlm.reasoning_effort;
+  }
+  if (models.generation) {
+    vlm.max_tokens = models.generation.maxTokens;
+    vlm.temperature = models.generation.temperature;
+  }
+  const ov = { ...openViking, vlm,
     embedding: { ...embedding, max_input_tokens: models.embedding.maxInputTokens,
       dense: { ...block(embedding.dense), provider: "openai", model: models.embedding.model,
         api_base: models.embedding.apiBase, dimension: models.embedding.dimension, encoding_format: "float" } } };

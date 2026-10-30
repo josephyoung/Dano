@@ -22,9 +22,11 @@ import { MemoryRecoveryJournal, RecoveryStateStore } from "./memory-recovery-jou
 import { registerMemoryRecall } from "./memory-recall-tool.js";
 import { registerMemoryAcceptanceTrace } from "./memory-acceptance-trace.js";
 import type { GovernanceStateStore } from "@josephyoung/pi-openviking/host";
+import type { MemoryModelIdentity } from "./memory-tokenizer.js";
 
 type SchedulerPolicy = Omit<ConstructorParameters<typeof DeliveryScheduler>[0], "store" | "delivery">;
 export interface UserMemoryServices {
+  validateModel?(model: MemoryModelIdentity): Promise<void>;
   owners: Pick<MemoryOwnerRegistry, "get" | "remove">;
   credentials: Pick<MemoryCredentialStore, "read" | "write" | "remove">;
   provisioner: Pick<MemoryProvisioner, "provision" | "verifyUserKey">;
@@ -403,6 +405,7 @@ export function withUserMemory(
       const bound = runtime;
       let disposing: Promise<void> | undefined;
       return { ...profile, memory: bound,
+        validateMemoryModel: options.validateModel,
         captureMemoryInput: bound.captureInput.bind(bound),
         captureTaskFact: bound.captureTaskFact.bind(bound),
         createMemoryExtension: (_workspace, sessionWorker) => bound.extension(sessionWorker),

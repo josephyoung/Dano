@@ -224,6 +224,7 @@ type PiModelSelectEventLike = {
  * abstracting over the live Pi session.
  */
 export interface BridgeRpcAdapterContext {
+  validateMemoryModel?: (model: import("./memory-tokenizer.js").MemoryModelIdentity) => Promise<void>;
   events: BridgeSessionEvents;
   state: BridgeSessionState;
   actions: BridgeSessionActions;
@@ -7056,6 +7057,7 @@ export class BridgeRpcAdapter {
             error: `Model not found: ${command.provider}/${command.modelId}`,
           };
         }
+        await this.context.validateMemoryModel?.(model);
         if (this.sessionRuntime.hasDetachedSelection()) {
           const session = await this.sessionRuntime.ensureDetachedSession();
           await session.setModel(
