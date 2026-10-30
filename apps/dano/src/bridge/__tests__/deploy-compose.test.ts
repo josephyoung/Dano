@@ -1188,7 +1188,10 @@ writeFileSync(process.env.DANO_COMMAND_LOG, JSON.stringify(process.argv.slice(2)
   });
 
   it("initializes enabled memory from the candidate image before Compose startup", () => {
-    const { logLines } = runRelease({ env: { DANO_MEMORY_CONFIG_DIR: "/private/memory-config", DANO_OPENVIKING_CONFIG_DIR: "/private/ov-config" } });
+    const projectionDir = mkdtempSync(join(tmpdir(), "dano-memory-projection-"));
+    tempDirs.push(projectionDir);
+    writeFileSync(join(projectionDir, "ov.conf"), "{}", { mode: 0o600 });
+    const { logLines } = runRelease({ env: { DANO_MEMORY_CONFIG_DIR: "/private/memory-config", DANO_OPENVIKING_CONFIG_DIR: projectionDir } });
     const calls = logLines.filter(line => line.startsWith("[")).map(line => JSON.parse(line) as string[]);
     const init = calls.findIndex(args => args.includes("./deploy/init-memory-service.mjs"));
     expect(init).toBeGreaterThan(0);

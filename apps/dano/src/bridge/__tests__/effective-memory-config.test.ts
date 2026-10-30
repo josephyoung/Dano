@@ -13,7 +13,7 @@ const secrets = { accountId: "account", managementKey: "synthetic-management", e
 const globalSettings = { defaultProvider: "xiaomi", defaultModel: "mimo-v2.6-flash", defaultThinkingLevel: "off" };
 function fixture() {
   const models = [
-    { provider: "xiaomi", id: "mimo-v2.6-flash", api: "openai-completions", baseUrl: "https://api.xiaomimimo.com/v1", reasoning: true },
+    { provider: "xiaomi", id: "mimo-v2.6-flash", api: "openai-completions", baseUrl: "https://api.xiaomimimo.com/v1", reasoning: true, thinkingLevelMap: { off: "off", minimal: null, low: null, medium: null, high: "high", xhigh: null, max: null }, compat: { supportsReasoningEffort: false } },
     { provider: "deepseek", id: "deepseek-flash", api: "openai-completions", baseUrl: "https://api.deepseek.com", reasoning: true },
   ];
   const auth = vi.fn(async () => ({ auth: { apiKey: "synthetic-provider-key" } }));
@@ -38,6 +38,15 @@ it("derives collection/extraction/auth from global defaults and keeps a separate
   expect(switched.deployment?.extraction.api_base).toBe("https://api.deepseek.com");
   expect(f.auth).toHaveBeenLastCalledWith(f.models[1]);
   expect(config.collection?.model.id).toBe("mimo-v2.6-flash");
+});
+it("rejects unsupported model thinking levels and follows the provider-native effort contract", async () => {
+  const f = fixture();
+  await expect(resolveMemoryConfig({ ...globalSettings, defaultThinkingLevel: "medium" }, f.options, secrets, f.runtime, "/assets"))
+    .rejects.toThrow("model:UNSUPPORTED_MEMORY_THINKING");
+  const high = await resolveMemoryConfig({ ...globalSettings, defaultThinkingLevel: "high" }, f.options, secrets, f.runtime, "/assets");
+  expect(high.collection?.model.reasoning).toBe("high");
+  expect(projectMemoryModels(high, {}, "").openViking.vlm).toMatchObject({ extra_request_body: { thinking: { type: "enabled" } } });
+  expect((projectMemoryModels(high, {}, "").openViking.vlm as any).extra_request_body).not.toHaveProperty("reasoning_effort");
 });
 it("rejects duplicate model/key/tokenizer configuration instead of accepting a second authority", async () => {
   const f = fixture();

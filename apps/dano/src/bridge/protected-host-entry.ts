@@ -6,10 +6,8 @@ import { WorkerSupervisorClient } from "./worker-supervisor-client.js";
 import { createProtectedMemoryServices } from "./protected-memory-services.js";
 import { withUserMemory } from "./user-memory-runtime.js";
 import { startManagedSearch } from "./managed-search.js";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { loadEffectiveMemoryConfig, MemoryConfigurationError } from "./effective-memory-config.js";
+import { createGlobalMemoryModelRuntime, loadEffectiveMemoryConfig, MemoryConfigurationError } from "./effective-memory-config.js";
 import { loadDanoConfig } from "./dano-config.js";
-import { join } from "node:path";
 
 /** Spawned by the root supervisor after setpriv drops all host capabilities. */
 export async function runProtectedHost(): Promise<number> {
@@ -43,9 +41,7 @@ export async function runProtectedHost(): Promise<number> {
       throw new MemoryConfigurationError("secrets", "MEMORY_SECRET_DIRECTORY_REQUIRED");
     }
     if (profile.memory) {
-      const models = await ModelRuntime.create({ authPath: join(options.agentConfigDir, "auth.json"),
-        modelsPath: join(options.agentConfigDir, "models.json"), refreshOnCreate: false, allowModelNetwork: false,
-        signal: stopped.signal });
+      const models = await createGlobalMemoryModelRuntime(options.agentConfigDir, stopped.signal);
       const config = await loadEffectiveMemoryConfig(profile.memory.configurationDirectory, options.agentConfigDir, models);
       memory = await createProtectedMemoryServices(config, profile.memory.stateDirectory,
         async () => models, profile.memory.recoveryDirectory);

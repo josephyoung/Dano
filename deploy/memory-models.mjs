@@ -12,8 +12,8 @@ try {
   const built = resolve("dist/server/bridge");
   const { loadEffectiveMemoryConfig, createGlobalMemoryModelRuntime } = await import(pathToFileURL(join(built, "effective-memory-config.js")).href);
   const { MemoryTokenizers } = await import(pathToFileURL(join(built, "memory-tokenizer.js")).href);
-  const agentDirectory = process.env.PI_CODING_AGENT_DIR;
-  if (!agentDirectory) throw Error("GLOBAL_AGENT_DIRECTORY_REQUIRED");
+  const { parseDanoServerOptions } = await import(pathToFileURL(resolve("dist/server/main.js")).href);
+  const agentDirectory = parseDanoServerOptions([]).agentConfigDir;
   const { projectMemoryModels } = await import(pathToFileURL(join(built, "memory-model-projection.js")).href);
   const runtime = await createGlobalMemoryModelRuntime(agentDirectory);
   const config = await loadEffectiveMemoryConfig(configDirectory, agentDirectory, runtime);

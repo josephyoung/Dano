@@ -51,3 +51,13 @@ for (const reason of ["length", "toolUse", "error"]) it(`rejects an incomplete m
   const f = fixture(); f.runtime.completeSimple.mockResolvedValue({ stopReason: reason, content: [{ type: "text", text: "untrusted partial JSON" }] });
   await expect(f.selector.complete({ systemPrompt: "s", data: "d", signal: new AbortController().signal })).rejects.toThrow("SELECTION_FAILED");
 });
+
+it("keeps collection authentication and redaction on the resolved startup snapshot", async () => {
+  const f = fixture();
+  const selector = memoryCollectionModel(configuration, f.create, ["host-secret"], "startup-provider-key");
+  f.runtime.getAuth.mockResolvedValue({ auth: { apiKey: "changed-without-restart" } });
+  expect(await selector.sensitiveValues!()).toEqual(["host-secret", "startup-provider-key"]);
+  await selector.complete({ systemPrompt: "s", data: "d", signal: new AbortController().signal });
+  expect(f.runtime.getAuth).not.toHaveBeenCalled();
+  expect(f.runtime.completeSimple.mock.calls[0]![2]).toMatchObject({ apiKey: "startup-provider-key" });
+});

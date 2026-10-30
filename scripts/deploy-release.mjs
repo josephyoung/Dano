@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  chownSync,
+  statSync,
+  renameSync,
+  writeFileSync,
+  unlinkSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -54,6 +59,7 @@ const aptMirror = process.env.DANO_APT_MIRROR;
 
 let buildDir;
 let unlock;
+let restoreMemoryProjections;
 const productNameOverlay = join(deployDir, "docker-compose.product-name.json");
 const memoryArgs = () => {
   const values = existsSync(envPath) ? readEnvValues(readFileSync(envPath, "utf8")) : new Map();
@@ -244,22 +250,10 @@ try {
     { cwd: deployDir },
   );
   if (memoryDirectory?.trim()) {
-    const ovDirectory = process.env.DANO_OPENVIKING_CONFIG_DIR || savedRuntimeEnv.get("DANO_OPENVIKING_CONFIG_DIR");
-    if (!ovDirectory || !isAbsolute(ovDirectory) || ovDirectory.includes(",") || deployDir.includes(",")) {
-      throw new Error("Invalid OpenViking projection directory");
-    }
-    // One privileged, non-interactive helper uses the existing provider secrets.
-    // Validate every input and tokenizer before replacing either projection.
-    // Running OpenViking keeps its startup snapshot until the later recreation.
-    for (const mode of ["sync", "check"]) {
-      run(composeBin, [...composeArgs, "-f", "docker-compose.yml", "-f",
-        "docker-compose.exposure.yml", ...productNameArgs(), "--env-file", ".env",
-        "run", "--rm", "--no-deps", "--user", "0:0",
-        "--mount", `type=bind,source=${ovDirectory},target=/run/dano-ov`,
-        "--mount", `type=bind,source=${deployDir},target=/run/dano-deploy`,
-        "-e", "PI_CODING_AGENT_DIR=/opt/dano/runtime-data/.pi/agent", "--entrypoint", "node", "app",
-        "./deploy/memory-models.mjs", mode, "/etc/dano-memory", "/run/dano-ov/ov.conf", "/run/dano-deploy/.env"], { cwd: deployDir });
-    }
+    run(composeBin, [...composeArgs, "-f", "docker-compose.yml", "-f",
+      "docker-compose.exposure.yml", ...productNameArgs(), "--env-file", ".env",
+      "run", "--rm", "--no-deps", "--user", runtimeOwner, "--entrypoint", "node", "app",
+      "./deploy/memory-models.mjs", "preflight", "/etc/dano-memory"], { cwd: deployDir });
   }
 
   // Execute real guarded tools and owner-bound file attacks before replacement.
@@ -317,6 +311,37 @@ try {
   const finalIdentity = await preflightProductIdentity(buildDir, deployDir, identity.targetSha);
   if (JSON.stringify(finalIdentity) !== JSON.stringify(identity)) throw new Error("PRODUCT_IDENTITY_CHANGED; restart release preflight");
 
+  if (memoryDirectory?.trim()) {
+    const ovDirectory = process.env.DANO_OPENVIKING_CONFIG_DIR || savedRuntimeEnv.get("DANO_OPENVIKING_CONFIG_DIR");
+    if (!ovDirectory || !isAbsolute(ovDirectory) || ovDirectory.includes(",") || deployDir.includes(",")) {
+      throw new Error("Invalid OpenViking projection directory");
+    }
+    const originals = [join(ovDirectory, "ov.conf"), envPath].map(path => ({ path,
+      bytes: readFileSync(path), stat: statSync(path) }));
+    restoreMemoryProjections = () => {
+      for (const original of originals) {
+        const temporary = `${original.path}.${randomUUID()}.rollback`;
+        try {
+          writeFileSync(temporary, original.bytes, { flag: "wx", mode: original.stat.mode & 0o777 });
+          chownSync(temporary, original.stat.uid, original.stat.gid);
+          renameSync(temporary, original.path);
+        } finally { if (existsSync(temporary)) unlinkSync(temporary); }
+      }
+    };
+    // One privileged, non-interactive helper uses the existing provider secrets.
+    // Validate every input and tokenizer before replacing either projection.
+    // Running OpenViking keeps its startup snapshot until the later recreation.
+    for (const mode of ["sync", "check"]) {
+      run(composeBin, [...composeArgs, "-f", "docker-compose.yml", "-f",
+        "docker-compose.exposure.yml", ...productNameArgs(), "--env-file", ".env",
+        "run", "--rm", "--no-deps", "--user", "0:0",
+        "--mount", `type=bind,source=${ovDirectory},target=/run/dano-ov`,
+        "--mount", `type=bind,source=${deployDir},target=/run/dano-deploy`,
+        "--entrypoint", "node", "app",
+        "./deploy/memory-models.mjs", mode, "/etc/dano-memory", "/run/dano-ov/ov.conf", "/run/dano-deploy/.env"], { cwd: deployDir });
+    }
+  }
+
   run(
     composeBin,
     [
@@ -337,6 +362,7 @@ try {
     ],
     { cwd: deployDir },
   );
+  restoreMemoryProjections = undefined;
   run(process.execPath, [join(buildDir, "scripts/smoke-dano-deploy.mjs")], {
     env: {
       ...process.env,
@@ -347,6 +373,7 @@ try {
     },
   });
 } finally {
+  restoreMemoryProjections?.();
   if (buildDir) {
     rmSync(buildDir, { recursive: true, force: true });
     console.log(`[deploy-release] removed ${buildDir}`);

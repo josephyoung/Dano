@@ -2,6 +2,7 @@ import { readFile, lstat, realpath, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, resolve } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels, hasApi, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { parseMemoryHostConfig, type MemoryHostConfig } from "./memory-host-config.js";
 import { loadDanoConfig } from "./dano-config.js";
 import catalog from "./tokenizer-catalog.json" with { type: "json" };
@@ -67,8 +68,9 @@ export async function resolveMemoryConfig(settings: Record<string, unknown>, opt
   }
   const model = runtime.getModel(defaultProvider, defaultModel);
   if (!model) return fail("model", "UNKNOWN_MEMORY_MODEL");
+  if (!hasApi(model, "openai-completions")) return fail("model", "UNSUPPORTED_MEMORY_API");
   const binding = memoryTokenizerBinding(model, assetDirectory);
-  if (defaultThinkingLevel !== "off" && !model.reasoning) return fail("model", "UNSUPPORTED_MEMORY_THINKING");
+  if (!getSupportedThinkingLevels(model).includes(defaultThinkingLevel as ModelThinkingLevel)) return fail("model", "UNSUPPORTED_MEMORY_THINKING");
   let auth;
   try { auth = await runtime.getAuth(model); }
   catch { return fail("credentials", "MEMORY_PROVIDER_AUTH_UNAVAILABLE"); }
@@ -87,7 +89,8 @@ export async function resolveMemoryConfig(settings: Record<string, unknown>, opt
   } catch { return fail("settings", "INVALID_OPENVIKING_SETTINGS"); }
   if (config.collection) config.collection.model.reasoning = defaultThinkingLevel === "off" ? undefined : defaultThinkingLevel as NonNullable<typeof config.collection.model.reasoning>;
   config.deployment!.thinking = defaultThinkingLevel === "off" ? "disabled" : "enabled";
-  config.deployment!.reasoning = defaultThinkingLevel === "off" ? undefined : String(defaultThinkingLevel);
+  config.deployment!.reasoning = defaultThinkingLevel === "off" || model.compat?.supportsReasoningEffort === false
+    ? undefined : model.thinkingLevelMap?.[defaultThinkingLevel as ModelThinkingLevel] ?? String(defaultThinkingLevel);
   config.deployment!.generation = { maxTokens: config.collection?.model.maxTokens ?? Number((generation as Record<string, unknown>).maxTokens),
     temperature: Number((generation as Record<string, unknown>).temperature) };
   // All supported receiving models get their own exact binding. No default-
@@ -113,9 +116,9 @@ export async function loadEffectiveMemoryConfig(directory: string, agentDirector
 
 export { catalog as memoryTokenizerCatalog };
 
-export async function createGlobalMemoryModelRuntime(agentDirectory: string): Promise<ModelRuntime> {
+export async function createGlobalMemoryModelRuntime(agentDirectory: string, signal?: AbortSignal): Promise<ModelRuntime> {
   return ModelRuntime.create({ authPath: join(agentDirectory, "auth.json"), modelsPath: join(agentDirectory, "models.json"),
-    refreshOnCreate: false, allowModelNetwork: false });
+    refreshOnCreate: false, allowModelNetwork: false, signal });
 }
 
 /** Recovery/key maintenance needs service location and existing encryption

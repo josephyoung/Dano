@@ -42,7 +42,7 @@ Promise<{ services: UserMemoryServices; close(): Promise<void> } | undefined> {
       scheduler: config.scheduler,
       ...(recoveryDirectory ? { recoveryDirectory } : {}),
       ...(config.collection ? { collection: { ...config.collection,
-        selector: memoryCollectionModel(config.collection, modelRuntime!, [config.managementKey, config.encryptionKey]),
+        selector: memoryCollectionModel(config.collection, modelRuntime!, [config.managementKey, config.encryptionKey], config.deployment?.extraction.api_key),
         taskFacts: config.collection.taskFacts ? { config: config.collection.taskFacts,
           key: Buffer.from(config.encryptionKey, "hex") } : undefined,
       } } : {}),
