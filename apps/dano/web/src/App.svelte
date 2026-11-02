@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { quickLinks540History } from "./layout/quickLinks540History.prototype";
+  const prototype540History = import.meta.env.DEV && new URLSearchParams(location.search).has("prototype540") && new URLSearchParams(location.search).has("history");
   import type {
     RpcImageContent,
     RpcThinkingLevel,
@@ -384,7 +386,7 @@
     activeDebugSession?.sessionState ?? bridge.sessionState,
   );
   let displayedTranscript = $derived(
-    activeDebugSession?.transcript ?? bridge.transcript,
+    prototype540History ? quickLinks540History : activeDebugSession?.transcript ?? bridge.transcript,
   );
   let displayedTranscriptDeltas = $derived(
     activeDebugSession ? [] : bridge.transcriptDeltas,
@@ -396,7 +398,7 @@
     activeDebugSession ? false : bridge.transcriptHasOlder,
   );
   let displayedTranscriptInitialLoading = $derived(
-    activeDebugSession ? false : bridge.transcriptInitialLoading,
+    prototype540History || activeDebugSession ? false : bridge.transcriptInitialLoading,
   );
   let isEmptyConversation = $derived(
     !displayedTranscriptInitialLoading && displayedTranscript.length === 0,

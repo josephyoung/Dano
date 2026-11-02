@@ -1,4 +1,6 @@
 <script lang="ts">
+  import QuickLinks540Prototype from "../layout/QuickLinks540.prototype.svelte";
+  const prototype540 = import.meta.env.DEV && new URLSearchParams(location.search).has("prototype540");
   import * as Select from "./ui/select";
   import Brain from "@lucide/svelte/icons/brain";
   import Zap from "@lucide/svelte/icons/zap";
@@ -376,6 +378,7 @@
 </script>
 
 <div bind:this={composerRootRef} class="composer-bar" data-center-focus-composer>
+  {#if prototype540}<QuickLinks540Prototype placement="composer" />{/if}
   <div class="composer-inner-wrap">
     {#if composer.showCommandPalette}
       <CommandPalette

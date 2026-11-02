@@ -1,4 +1,6 @@
 <script lang="ts">
+  import QuickLinks540Prototype from "./QuickLinks540.prototype.svelte";
+  const prototype540 = import.meta.env.DEV && new URLSearchParams(location.search).has("prototype540");
   import CircleUserRound from "@lucide/svelte/icons/circle-user-round";
   import LogIn from "@lucide/svelte/icons/log-in";
   import LogOut from "@lucide/svelte/icons/log-out";
@@ -113,6 +115,7 @@
         collisionPadding={10}
         trapFocus={false}
       >
+        {#if prototype540}<QuickLinks540Prototype placement="menu" />{/if}
         <Button class="header-menu-item theme-menu-item" variant="ghost" type="button" onclick={openTheme}>
           <Palette size={16} aria-hidden="true" />
           <span>{t("appHeader.themeColor")}</span>
@@ -181,6 +184,7 @@
     </Button>
   </div>
   <div class="header-trailing">
+    {#if prototype540}<QuickLinks540Prototype placement="header" />{/if}
     {#if showNewSession}
       <Button
         class="new-session-button"
@@ -197,6 +201,7 @@
     {/if}
   </div>
 </header>
+{#if prototype540}<QuickLinks540Prototype placement="switcher" />{/if}
 
 <AlertDialog.Root bind:open={logoutConfirmationOpen}>
   <AlertDialog.Content>
